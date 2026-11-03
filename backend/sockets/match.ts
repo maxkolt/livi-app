@@ -8,6 +8,7 @@ import { createToken, getLiveKitUrl } from '../routes/livekit';
 import * as queueStore from '../utils/queueStore';
 import { getPresenceFriendIds } from '../utils/friendPresenceRecipients';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
+import { beginFriendBusyNotification } from '../utils/friendBusyPresence';
 import { checkRateLimit } from '../utils/rateLimit';
 import UserReportModel, { isUserReportReason } from '../models/UserReport';
 import { measureMatchStage, profileNow, recordMatchStage } from '../utils/matchPerformance';
@@ -92,6 +93,7 @@ function releaseMatchReservation(s: AuthedSocket, reservation: object | undefine
  * как и остальной матчинг (safeGet, matchInProgress): бэкенд работает одним инстансом.
  */
 type HeldPair = {
+  userId: string;
   oldSocket: AuthedSocket;
   partnerSid: string;
   partnerUserId: string;
@@ -137,7 +139,9 @@ const MATCH_CANDIDATE_SCAN_LIMIT = 64; // Не читаем всю очеред�
 /** Столько ждём, пока собеседник с оборвавшимся сокетом вернётся в ту же пару (env — для тестов и тонкой настройки). */
 function reconnectGraceMs(): number {
   const fromEnv = Number(process.env.RANDOM_RECONNECT_GRACE_MS);
-  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 10_000;
+  // A single client Engine.IO attempt is 12s; a 10s grace broke the pair before
+  // even one VPN transport fallback could finish. Match the media recovery budget.
+  return Number.isFinite(fromEnv) && fromEnv > 0 ? fromEnv : 45_000;
 }
 
 // === Вспомогательные =========================================================
@@ -225,20 +229,18 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
 
 // Only unresolved notifications are retained. Late reads cannot restore an older
 // busy flag after Stop or another state change, including a replacement socket.
-const busyNotifications = new Map<string, object>();
-async function markBusy(io: Server, s: AuthedSocket, busy: boolean) {
+async function markBusy(io: Server, s: AuthedSocket, busy: boolean, capturedUserId?: string) {
   s.data = s.data || {};
   s.data.busy = busy;
-  const userId = String(s.data.userId || '');
+  const userId = String(capturedUserId || s.data.userId || '');
   if (userId) {
-    const notification = {};
-    busyNotifications.set(userId, notification);
+    const notification = beginFriendBusyNotification(userId);
     try {
       await measureMatchStage('match.presence', () => emitPresenceUpdateToFriends(io, userId, busy,
-        () => busyNotifications.get(userId) === notification));
+        notification.isCurrent));
       scheduleGlobalFriendPresenceEmit(io, userId);
     } finally {
-      if (busyNotifications.get(userId) === notification) busyNotifications.delete(userId);
+      notification.finish();
     }
   }
 }
@@ -341,7 +343,7 @@ function holdPairForReconnect(io: Server, s: AuthedSocket): boolean {
     heldPairs.delete(userId);
     void releaseHeldPartner(io, held, 'expired');
   }, graceMs);
-  heldPairs.set(userId, { oldSocket: s, partnerSid, partnerUserId, timer });
+  heldPairs.set(userId, { userId, oldSocket: s, partnerSid, partnerUserId, timer });
 
   partner.emit('random:partnerReconnecting', { graceMs });
   logger.info('[Match] socket dropped mid-chat, holding pair for reconnect', {
@@ -356,7 +358,9 @@ function holdPairForReconnect(io: Server, s: AuthedSocket): boolean {
 
 /** Пауза кончилась без возврата: собеседник уходит в поиск, как при обычном обрыве. */
 async function releaseHeldPartner(io: Server, held: HeldPair, reason: 'expired' | 'replaced' | 'restarted') {
-  const userId = String(held.oldSocket.data.userId || '').trim();
+  // index.ts unbinds a disconnected socket before this timer fires. Retain the
+  // identity captured at disconnect, otherwise busy:false is never sent to its friends.
+  const userId = held.userId;
   const partner = safeGet(io, held.partnerSid);
   // Собеседник мог сам нажать «Далее»/«Стоп» за это время — тогда он уже не ждёт.
   const partnerWaiting = !!partner && partner.data.partnerSid === held.oldSocket.id;
@@ -371,7 +375,7 @@ async function releaseHeldPartner(io: Server, held: HeldPair, reason: 'expired' 
   }
   // Presence пропавшего не трогаем, если он уже снова в рандоме с нового сокета.
   if (reason !== 'restarted') {
-    await markBusy(io, held.oldSocket, false);
+    await markBusy(io, held.oldSocket, false, userId);
   }
   logger.info('[Match] held pair released', {
     userId,

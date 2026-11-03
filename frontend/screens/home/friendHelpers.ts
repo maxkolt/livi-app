@@ -87,6 +87,7 @@ export type DirectCallSnapshot = {
 export const mapToFriend = (u: FriendSource): Friend => {
   const rawNick = u.nick || u.name || u.username || '';
   const fullNickname = typeof rawNick === 'string' ? rawNick.trim() : '';
+  const online = !!u.online || !!u.isOnline;
 
   return {
     id: String(u._id ?? u.id ?? ''),
@@ -94,10 +95,10 @@ export const mapToFriend = (u: FriendSource): Friend => {
     avatar: u.avatar || u.image || '',
     avatarVer: typeof u.avatarVer === 'number' ? u.avatarVer : 0,
     avatarThumbB64: u.avatarThumbB64 || '',
-    online: !!u.online || !!u.isOnline,
-    isBusy: !!u.isBusy,
-    isRandomBusy: !!u.isRandomBusy,
-    inCall: !!u.inCall,
+    online,
+    isBusy: online && !!u.isBusy,
+    isRandomBusy: online && !!u.isRandomBusy,
+    inCall: online && !!u.inCall,
   };
 };
 

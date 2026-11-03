@@ -11,7 +11,6 @@ import okhttp3.Dns
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
-import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Response
@@ -75,18 +74,8 @@ object NetPath {
       if (isApiHost(hostname)) listOf(relayAddress) else Dns.SYSTEM.lookup(hostname)
   }
 
-  private fun probeClient(dns: Dns): OkHttpClient =
-    OkHttpClient.Builder()
-      .dns(dns)
-      .protocols(listOf(Protocol.HTTP_1_1))
-      .connectTimeout(PROBE_TIMEOUT_S, TimeUnit.SECONDS)
-      .readTimeout(PROBE_TIMEOUT_S, TimeUnit.SECONDS)
-      .callTimeout(PROBE_TIMEOUT_S, TimeUnit.SECONDS)
-      .retryOnConnectionFailure(false)
-      .build()
-
-  private val directProbe: OkHttpClient by lazy { probeClient(directDns) }
-  private val relayProbe: OkHttpClient by lazy { probeClient(relayDns) }
+  private val directProbe: OkHttpClient by lazy { createNetPathProbeClient(directDns, PROBE_TIMEOUT_S) }
+  private val relayProbe: OkHttpClient by lazy { createNetPathProbeClient(relayDns, PROBE_TIMEOUT_S) }
 
   fun isUsingRelay(): Boolean = useRelay
 

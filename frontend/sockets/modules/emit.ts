@@ -168,6 +168,8 @@ export async function emitAck<T = unknown>(
         transport: (socket)?.io?.engine?.transport?.name ?? null,
         socketId: socket.id ?? null,
       });
+      // The caller may have its own HTTP fallback. No reconnect wait after the last try.
+      if (i === retries) break;
       // если снова ушли в реконнект — подождём и повторим
       if (!socket.connected || shared.reconnecting) {
         try {

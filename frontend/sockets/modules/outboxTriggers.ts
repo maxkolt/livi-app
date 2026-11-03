@@ -1,5 +1,5 @@
 // frontend/sockets/modules/outboxTriggers.ts
-import { AppState } from "react-native";
+import { AppState, DeviceEventEmitter } from "react-native";
 import NetInfo from "@react-native-community/netinfo";
 import { drainEditOutbox, drainMessageOutbox, noteNetworkBack } from "./outbox";
 import { drainReactionOutbox } from "./reactionOutbox";
@@ -18,6 +18,13 @@ export function drainAllOutboxes(): Promise<void> {
 const COLD_START_DRAIN_DELAY_MS = 3000;
 /** Сеть только что вернулась: маршрут ещё прогревается. */
 const NETWORK_BACK_DRAIN_DELAY_MS = 600;
+
+// NetInfo can keep reporting WIFI throughout VPN changes. Native route changes still
+// invalidate an HTTP/ACK attempt that was started on the previous path.
+DeviceEventEmitter.addListener('LiviNetRouteChanged', () => {
+  noteNetworkBack({ restartUpload: true });
+  setTimeout(() => void drainAllOutboxes(), NETWORK_BACK_DRAIN_DELAY_MS);
+});
 
 try {
   let lastReachable: boolean | null = null;

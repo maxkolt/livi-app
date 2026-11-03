@@ -7,6 +7,7 @@ import { getInstallAuthHeaders } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { API_BASE } from "./constants";
 import { emitAck, waitForConnect } from "./emit";
+import { sendWithHttpFallback } from './messageTransport';
 import {
   enqueueEditOutbox,
   enqueueMessageOutbox,
@@ -197,7 +198,7 @@ export function sendMessage(payload: {
   })();
 }
 
-export function markMessagesAsRead(from: string) {
+export function markMessagesAsRead(from: string, options: { httpOnly?: boolean } = {}) {
   const viaSocket = () => emitAck<{ ok: boolean; error?: string }>("messages:mark_read", { from });
 
   const viaHttp = async () => {
@@ -225,6 +226,7 @@ export function markMessagesAsRead(from: string) {
   };
 
   return (async () => {
+    if (options.httpOnly) return viaHttp();
     try {
       return await viaSocket();
     } catch {
@@ -314,10 +316,13 @@ export function fetchMessages(payload: {
   limit?: number;
   before?: string;
 }, options: { httpOnly?: boolean } = {}) {
-  const viaSocket = () =>
-    emitAck<MessagePage>("messages:fetch", payload);
+  const viaSocket = async () => {
+    const page = await emitAck<MessagePage>("messages:fetch", payload, 8000, 0);
+    if (!page?.ok) throw new Error(page?.error || 'message history unavailable');
+    return page;
+  };
 
-  const viaHttp = async (): Promise<MessagePage> => {
+  const viaHttp = async (signal?: AbortSignal): Promise<MessagePage> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
@@ -326,6 +331,9 @@ export function fetchMessages(payload: {
       `&limit=${encodeURIComponent(String(payload.limit ?? 50))}` +
       (payload.before ? `&before=${encodeURIComponent(String(payload.before))}` : "");
     const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    if (signal?.aborted) controller.abort();
+    else signal?.addEventListener('abort', onAbort, { once: true });
     const timeoutId = setTimeout(() => controller.abort(), 20000);
     try {
       const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
@@ -336,6 +344,7 @@ export function fetchMessages(payload: {
       return await res.json();
     } finally {
       clearTimeout(timeoutId);
+      signal?.removeEventListener('abort', onAbort);
     }
   };
 
@@ -344,13 +353,12 @@ export function fetchMessages(payload: {
 
   return (async () => {
     if (options.httpOnly) return await decryptPage(await viaHttp());
-    try {
-      const r = await viaSocket();
-      if (r?.ok === true) return await decryptPage(r);
-      return await decryptPage(await viaHttp());
-    } catch {
-      return await decryptPage(await viaHttp());
-    }
+    const { resp } = await sendWithHttpFallback(
+      socket.connected && !shared.reconnecting ? viaSocket : null,
+      viaHttp,
+      new AbortController().signal,
+    );
+    return decryptPage(resp);
   })();
 }
 

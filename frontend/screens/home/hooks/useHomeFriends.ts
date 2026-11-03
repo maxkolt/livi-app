@@ -201,8 +201,8 @@ export function useHomeFriends({
                 avatarThumbB64: finalAvatarThumbB64,
                 online: mergedOnlineCorr,
                 isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
-                isRandomBusy: !!prevOne?.isRandomBusy,
-                inCall: !!prevOne?.inCall,
+                isRandomBusy: !!f.online && !!f.isBusy && !!prevOne?.isRandomBusy,
+                inCall: !!f.online && !!f.isBusy && !!prevOne?.inCall,
               };
             }
 
@@ -231,8 +231,8 @@ export function useHomeFriends({
               avatarThumbB64: finalAvatarThumbB64,
               online: mergedOnlineMain,
               isBusy: mergeFriendBusyFromFetch(!!f.isBusy, !!prevOne?.isBusy),
-              isRandomBusy: !!prevOne?.isRandomBusy,
-              inCall: !!prevOne?.inCall,
+              isRandomBusy: !!f.online && !!f.isBusy && !!prevOne?.isRandomBusy,
+              inCall: !!f.online && !!f.isBusy && !!prevOne?.inCall,
             };
           });
 
@@ -399,6 +399,18 @@ export function useHomeFriends({
   }, [friendsSurfaceActive, loadFriends, setInitialized]);
 
   /* ===== warm avatar cache когда открыта вкладка друзей === */
+  useEffect(() => {
+    if (!friendsSurfaceActive) return;
+    // A missed busy:false/offline event must not wait for the two-minute profile refresh.
+    const timer = setInterval(() => {
+      if (shouldSkipHomeUiSettle()) return;
+      if (!socket.connected || friendsRef.current.some(friend => friend.isBusy)) {
+        void loadFriends({ includeAvatarThumbs: false });
+      }
+    }, 15_000);
+    return () => clearInterval(timer);
+  }, [friendsSurfaceActive, loadFriends]);
+
   useEffect(() => {
     if (!friendsSurfaceActive || friends.length === 0) return;
     if (shouldSkipHomeUiSettle()) return;

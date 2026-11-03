@@ -4107,7 +4107,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
                   friendLastOnlineTrueAtRef.current.delete(id);
                   setFriends((p) =>
                     p.map((x) =>
-                      String(x.id) === id ? { ...x, online: false, isBusy: false } : x,
+                      String(x.id) === id ? { ...x, online: false, isBusy: false, isRandomBusy: false, inCall: false } : x,
                     ),
                   );
                 }, PRESENCE_OFFLINE_DEBOUNCE_MS);
@@ -4128,9 +4128,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           setFriends((prev) => {
             let changed = false;
             const updated = prev.map((f) => {
-              if (String(f.id) === userId && f.isBusy !== busy) {
+              const nextBusy = busy && !!f.online;
+              if (String(f.id) === userId && (f.isBusy !== nextBusy || (!nextBusy && (f.isRandomBusy || f.inCall)))) {
                 changed = true;
-                return { ...f, isBusy: busy };
+                return { ...f, isBusy: nextBusy,
+                  ...(!nextBusy ? { isRandomBusy: false, inCall: false } : {}),
+                };
               }
               return f;
             });

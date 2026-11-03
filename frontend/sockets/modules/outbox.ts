@@ -6,6 +6,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { emitAck } from "./emit";
 import { postApiJson } from "./apiHttp";
+import { sendWithHttpFallback } from './messageTransport';
 import { noteMessageOutboxPending } from "./outboxBackgroundDrain";
 import { assertOutboxCapacity } from './outboxCapacity';
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
@@ -266,6 +267,7 @@ export function scheduleMessageOutboxDrain(delaySec: number): void {
 let networkRetryStep = 0;
 /** Отмена идущей загрузки файла из очереди (голосовое). */
 let cancelQueuedUpload: (() => void) | null = null;
+const activeSends = new Set<AbortController>();
 
 /**
  * Связь вернулась или сменилась (Wi-Fi ↔ мобильная). Пауза, накопленная без сети,
@@ -274,6 +276,10 @@ let cancelQueuedUpload: (() => void) | null = null;
  */
 export function noteNetworkBack(opts?: { restartUpload?: boolean }): void {
   networkRetryStep = 0;
+  if (opts?.restartUpload) {
+    for (const controller of activeSends) controller.abort();
+    scheduleMessageOutboxDrain(1);
+  }
   if (opts?.restartUpload && cancelQueuedUpload) {
     const cancel = cancelQueuedUpload;
     cancelQueuedUpload = null;
@@ -745,19 +751,28 @@ async function sendOnce(
   payload: Record<string, unknown>,
   useSocket: boolean,
 ): Promise<SendAttempt> {
-  if (useSocket) {
-    try {
-      const resp = await emitAck<MessageMutationResponse>(event, payload, SEND_ACK_TIMEOUT_MS, 0);
-      if (resp?.error !== 'unauthorized') return { kind: 'resp', resp, useSocket: true };
-    } catch {}
-    // Сокет не ответил (VPN держит «connected», а пакеты не ходят) — до конца прохода шлём по HTTP.
-    useSocket = false;
-  }
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  activeSends.add(controller);
   try {
-    const resp = await postApiJson<MessageMutationResponse>(httpPath, payload, SEND_HTTP_TIMEOUT_MS);
-    return { kind: 'resp', resp, useSocket };
+    const { resp, usedHttp } = await sendWithHttpFallback(
+      useSocket ? async (signal) => {
+        if (!(await socketReadyForSend()) || signal.aborted) throw new Error('socket unavailable');
+        return emitAck<MessageMutationResponse>(event, payload, SEND_ACK_TIMEOUT_MS, 0);
+      } : null,
+      (signal) => postApiJson<MessageMutationResponse>(httpPath, payload, SEND_HTTP_TIMEOUT_MS, signal),
+      controller.signal,
+      event === 'message:send' ? 1200 : SEND_ACK_TIMEOUT_MS,
+    );
+    if (usedHttp && useSocket) logger.warn('[outbox] socket bypassed over HTTP', {
+      event, messageId: payload.clientMessageId || payload.messageId,
+      durationMs: Date.now() - startedAt, ok: resp?.ok,
+    });
+    return { kind: 'resp', resp, useSocket: useSocket && !usedHttp };
   } catch {
-    return { kind: 'network', useSocket };
+    return { kind: 'network', useSocket: false };
+  } finally {
+    activeSends.delete(controller);
   }
 }
 
@@ -836,7 +851,7 @@ async function drainMessageOutboxPass(): Promise<'done' | 'partial' | 'stopped'>
 
   // Сохраняем порядок отправки, чтобы история чата после оффлайна выглядела ожидаемо.
   items.sort((a, b) => a.createdAt - b.createdAt);
-  let useSocket = await socketReadyForSend();
+  let useSocket = socket.connected && !shared.reconnecting;
   const blockedPeers = new Set<string>();
   let retryLater = false;
 
@@ -977,7 +992,7 @@ export async function drainEditOutbox(): Promise<void> {
   shared.editOutboxDrainInFlight = (async () => {
     const items = await withEditOutboxLock(() => loadEditOutbox());
     if (!items.length) return;
-    let useSocket = await socketReadyForSend();
+    let useSocket = socket.connected && !shared.reconnecting;
 
     items.sort((a, b) => a.createdAt - b.createdAt);
     // Убираем по id ушедших, а не сохраняем снимок: правку, сделанную во время прохода, не теряем.

@@ -60,6 +60,7 @@ import { RandomChatToast } from './randomChat/RandomChatToast';
 import { useRandomChatFriends } from './randomChat/useRandomChatFriends';
 import { FriendRequestModal } from './randomChat/FriendRequestModal';
 import { ReportPartnerModal, type ReportReason } from './randomChat/ReportPartnerModal';
+import { selectLiveVideoStream } from './randomChat/liveVideoStream';
 
 type RandomChatGlobals = CallAudioGlobals & NavigationPerfGlobals & {
   __randomChatPresenceBusyRef?: CallRef<boolean>;
@@ -577,24 +578,15 @@ const RandomChat: React.FC<Props> = ({ route }) => {
           }
         }
       } else if (stream === null) {
-        // КРИТИЧНО: При явном null проверяем, не идет ли процесс next()
-        // Если идет next(), сохраняем предыдущий стрим чтобы не было черного экрана
-        if (isTransition && prevStreamExists) {
-          // Идет next()/поиск и есть предыдущий стрим — держим его, даже если он уже "ended".
-          // Так RTCView не размонтируется и визуальное мерцание "Вы" сильно уменьшается.
-          localStreamRef.current = prevStream!;
-          // НЕ обновляем state на null, чтобы не было черного экрана
-        } else {
-          // Не идет next() или нет предыдущего стрима - обновляем на null
-          localStreamRef.current = null;
-          setLocalStream(null);
-        }
+        // Explicit detach precedes camera disposal; never resurrect that stream from a ref.
+        localStreamRef.current = null;
+        setLocalStream(null);
       } else if (!stream || !isValidStream(stream)) {
         // Новый стрим невалидный - сохраняем предыдущий в ref если он валидный
-        if (isTransition && prevStreamExists) {
+        if (isTransition && selectLiveVideoStream(prevStream)) {
           localStreamRef.current = prevStream!;
           // НЕ обновляем state, чтобы не было черного экрана
-        } else if (prevStreamValid) {
+        } else if (prevStreamValid && selectLiveVideoStream(prevStream)) {
           localStreamRef.current = prevStream!;
         } else {
           // Предыдущий стрим тоже невалидный - обновляем state
@@ -618,12 +610,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         lastGoodRemoteStreamAtRef.current = Date.now();
         hasEverRemoteVideoRef.current = true;
       } else {
-        // During "Next"/search transitions we intentionally keep the lastGoodRemoteStream mounted
-        // (covered by the loader overlay) to avoid RTCView remount black flickers on Android.
+        lastGoodRemoteStreamRef.current = null;
+        lastGoodRemoteStreamAtRef.current = 0;
         setRemoteStream(null);
         setRemoteMuted(false);
-        remoteCamStateKnownRef.current = false;
-        setRemoteCamEnabled(false);
       }
     });
     
@@ -640,6 +630,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     
     session.on('remoteStreamRemoved', () => {
       remoteStreamRef.current = null;
+      lastGoodRemoteStreamRef.current = null;
       setRemoteStream(null);
       setRemoteMuted(false);
       remoteCamStateKnownRef.current = false;
@@ -647,6 +638,8 @@ const RandomChat: React.FC<Props> = ({ route }) => {
     });
     
     session.on('searching', () => {
+      remoteCamStateKnownRef.current = false;
+      setRemoteCamEnabled(false);
       setLoading(true);
       loadingRef.current = true;
       setIsInactiveState(false);
@@ -720,7 +713,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
   // Network overlay heuristic:
   // If we had remote video before, remote cam is ON, but video is not renderable for a long time,
   // treat it as a network-origin failure and show a full-screen overlay.
-  const remoteStreamForUi = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
+  const remoteStreamForUi = selectLiveVideoStream(remoteStream, remoteStreamRef.current, lastGoodRemoteStreamRef.current);
   const remoteTrackForUi = (remoteStreamForUi)?.getVideoTracks?.()?.[0];
   const remoteVideoRenderableForUi =
     !!remoteTrackForUi &&
@@ -1758,7 +1751,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // не показываем лоадер "поверх" собеседника — даже если видео ещё не пришло/не renderable.
             // 2) Camera off: показываем "Отошел" ОВЕРЛЕЕМ, не ломая видеопоток/RTCView
             // 3) Camera on: "Отошел" исчезает только когда видео реально снова renderable (без лоадера)
-            const streamToRender = remoteStream || remoteStreamRef.current || lastGoodRemoteStreamRef.current;
+            const streamToRender = selectLiveVideoStream(remoteStream, remoteStreamRef.current, lastGoodRemoteStreamRef.current);
             const videoTrack = (streamToRender)?.getVideoTracks?.()?.[0];
             const canRenderVideo =
               !!videoTrack &&
@@ -1772,10 +1765,10 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             const remoteCamKnown = remoteCamStateKnownRef.current;
             const remoteCamExplicitlyOff = remoteCamKnown && remoteCamEnabled === false;
             const showLoader =
-              loading ||
+              !peerReconnecting && (loading ||
               nextInProgress ||
               // До первого видео показываем лоадер только пока нет remoteStream (т.е. нет установленного соединения).
-              (started && !hadVideoBefore && !remoteStream && !remoteCamExplicitlyOff);
+              (started && !hadVideoBefore && !remoteStream && !remoteCamExplicitlyOff));
 
             // Keep last good stream to keep RTCView mounted (avoid pipeline churn).
             if (canRenderVideo && streamToRender) {
@@ -1839,7 +1832,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                   </View>
                 )}
 
-                {peerReconnecting && !showLoader && (
+                {peerReconnecting && (
                   <View style={styles.reconnectingOverlay} pointerEvents="none">
                     <ActivityIndicator size="large" color={WELCOME_HEADER_TITLE} />
                     <Text style={styles.reconnectingText}>{L('randomReconnecting')}</Text>
@@ -1965,17 +1958,9 @@ const RandomChat: React.FC<Props> = ({ route }) => {
             // При выключении камеры используем unpublishTrack(), который полностью останавливает камеру
             // Это убирает индикатор камеры на iPhone
             if (shouldShowLocalVideo) {
-              const isTransition = loadingRef.current || isNextingRef.current;
               // КРИТИЧНО: Используем localStream из state, но если он невалидный, пробуем ref
               // Это предотвращает черный экран во время пересоздания треков при next()
-              const displayStream =
-                (localStream && isValidStream(localStream))
-                  ? localStream
-                  : (localStreamRef.current && isValidStream(localStreamRef.current))
-                    ? localStreamRef.current
-                    : (Platform.OS === 'android' && isTransition && localStreamRef.current)
-                      ? localStreamRef.current
-                      : null;
+              const displayStream = selectLiveVideoStream(localStream, localStreamRef.current);
               
               if (displayStream) {
                 // Безопасно получаем streamURL с проверкой на null/undefined
@@ -1986,7 +1971,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
                 const localRtcViewKey =
                   Platform.OS === 'ios'
                     ? `local-${displayStream.id}-${camOn}-${localRenderKey}-${localStreamTimestampRef.current}`
-                    : `local-${camOn}-${localRenderKey}`;
+                    : `local-${displayStream.id}-${camOn}-${localRenderKey}`;
                 
                 
                 // КРИТИЧНО: На Android используем prop `stream` для лучшей производительности

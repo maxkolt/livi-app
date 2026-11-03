@@ -69,6 +69,41 @@ beforeEach(() => {
 });
 
 describe('message outbox', () => {
+  it('sends in order over HTTP while socket reauth remains stuck, without a late socket send', async () => {
+    jest.useFakeTimers();
+    const reauth = require('./reauth').ensureReauthBeforePrivilegedSocketOp;
+    let finishReauth!: (ok: boolean) => void;
+    reauth.mockImplementationOnce(() => new Promise<boolean>(resolve => { finishReauth = resolve; }));
+    await enqueue('a', 1);
+    await enqueue('b', 2);
+    mockPost.mockImplementation(async (_path: string, p: any) => ({ ok: true, messageId: p.clientMessageId }));
+    const drain = outbox.drainMessageOutbox();
+    await jest.advanceTimersByTimeAsync(1200);
+    await drain;
+    expect(sentIds(mockPost)).toEqual(['a', 'b']);
+    expect(queued()).toEqual([]);
+    finishReauth(true);
+    await jest.advanceTimersByTimeAsync(9000);
+    expect(mockEmitAck).not.toHaveBeenCalled();
+  });
+
+  it('abandons a request on the previous VPN route and resends the durable ID on the new route', async () => {
+    jest.useFakeTimers();
+    mockSocket.connected = false;
+    await enqueue('a', 1);
+    mockPost.mockImplementationOnce(() => new Promise(() => {}));
+    const drain = outbox.drainMessageOutbox();
+    await jest.advanceTimersByTimeAsync(0);
+    expect(mockPost).toHaveBeenCalledTimes(1);
+    outbox.noteNetworkBack({ restartUpload: true });
+    await drain;
+    expect(queued()).toEqual(['a']);
+    mockPost.mockImplementation(async (_path: string, p: any) => ({ ok: true, messageId: p.clientMessageId }));
+    await jest.advanceTimersByTimeAsync(1000);
+    expect(sentIds(mockPost)).toEqual(['a', 'a']);
+    expect(queued()).toEqual([]);
+  });
+
   it('preserves existing rows when storage cannot be read or written', async () => {
     const storage = require('@react-native-async-storage/async-storage');
     await enqueue('saved', 1);

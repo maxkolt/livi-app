@@ -5,6 +5,7 @@ import { emitAck } from "./emit";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
+import { sendWithHttpFallback } from './messageTransport';
 
 export type FriendListItem = {
   _id: string;
@@ -161,18 +162,21 @@ export function fetchFriends(
   options: { includeAvatarThumbs?: boolean } = {},
 ) {
   const includeAvatarThumbs = options.includeAvatarThumbs !== false;
-  const viaSocket = async () => {
+  const viaSocket = async (signal: AbortSignal) => {
     // Защита от гонки: socket connected, но reauth на бэкенде ещё не успел завершиться.
     if (socket.connected && shared.currentUserId) {
       const ok = await ensureReauthBeforePrivilegedSocketOp();
       if (!ok) throw new Error("reauth_before_friends_fetch_failed");
     }
-    return emitAck<FriendsPage>("friends:fetch", { page, limit, includeAvatarThumbs });
+    if (signal.aborted) throw new Error('aborted');
+    const response = await emitAck<FriendsPage>("friends:fetch", { page, limit, includeAvatarThumbs }, 8000, 0);
+    if (!response?.ok) throw new Error(response?.error || 'friends_fetch_failed');
+    return response;
   };
 
   // Fallback for networks/VPNs that break socket connectivity:
   // use REST endpoint that returns the same list shape.
-  const viaHttp = async (): Promise<FriendsPage> => {
+  const viaHttp = async (signal: AbortSignal): Promise<FriendsPage> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
     // Legacy/audit-only header (server does NOT trust it, but may log mismatch).
     if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
@@ -185,7 +189,10 @@ export function fetchFriends(
     const url = `${API_BASE}/api/friends?page=${encodeURIComponent(String(page))}&limit=${encodeURIComponent(String(limit))}&includeAvatarThumbs=${includeAvatarThumbs ? "1" : "0"}`;
 
     for (const ms of timeouts) {
+      if (signal.aborted) throw new Error('aborted');
       const controller = new AbortController();
+      const onAbort = () => controller.abort();
+      signal.addEventListener('abort', onAbort, { once: true });
       const timeoutId = setTimeout(() => controller.abort(), ms);
       try {
         const res = await fetch(url, { method: "GET", headers, signal: controller.signal });
@@ -195,10 +202,12 @@ export function fetchFriends(
         }
         return await res.json();
       } catch (e) {
+        if (signal.aborted) throw e;
         lastErr = e;
         await new Promise((r) => setTimeout(r, 200));
       } finally {
         clearTimeout(timeoutId);
+        signal.removeEventListener('abort', onAbort);
       }
     }
 
@@ -206,11 +215,12 @@ export function fetchFriends(
   };
 
   return (async () => {
-    try {
-      return await viaSocket();
-    } catch (e) {
-      return await viaHttp();
-    }
+    const { resp } = await sendWithHttpFallback(
+      socket.connected && !shared.reconnecting ? viaSocket : null,
+      viaHttp,
+      new AbortController().signal,
+    );
+    return resp;
   })();
 }
 

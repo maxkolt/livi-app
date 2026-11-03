@@ -26,6 +26,7 @@ import {
   mergeQuietSyncMessages,
 } from "./chatHistory";
 import { mergePendingOutboxIntoMessages } from "./outboxPendingRows";
+import { startChatRecoveryPoll } from './chatRecoveryPoll';
 
 /** Повторы синхронизации открытого чата после переподключения сокета. */
 const RECONNECT_SYNC_DELAYS_MS = [650, 2500, 6000];
@@ -76,19 +77,22 @@ export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersi
 
   const loggedHistoryImageIdsRef = React.useRef<Set<string>>(new Set());
   const loggedHistoryImagesCountRef = React.useRef(0);
+  const quietSyncTargetRef = React.useRef('');
+  quietSyncTargetRef.current = `${currentUserId}:${peerId}`;
 
-  const quietSyncChat = React.useCallback(async () => {
+  const quietSyncChat = React.useCallback(async (recentHttpOnly = false) => {
+    if (!currentUserId || !peerId || quietSyncInFlightRef.current) return;
+    const now = Date.now();
+    if (now - lastQuietSyncAtRef.current < 1200) return;
+    lastQuietSyncAtRef.current = now;
+    quietSyncInFlightRef.current = true;
+    const target = `${currentUserId}:${peerId}`;
     try {
-      if (!currentUserId || !peerId) return;
-      if (quietSyncInFlightRef.current) return;
-      const now = Date.now();
-      if (now - lastQuietSyncAtRef.current < 1200) return;
-      lastQuietSyncAtRef.current = now;
-      quietSyncInFlightRef.current = true;
-
       const targetCount = Math.min(400, Math.max(60, Math.max(0, messagesLenRef.current)));
-      const pages = await fetchQuietSyncMessagePages(peerId, targetCount, fetchMessages);
-      if (pages.length === 0) return;
+      const pages = recentHttpOnly
+        ? (await fetchMessages({ with: peerId, limit: 50 }, { httpOnly: true })).messages || []
+        : await fetchQuietSyncMessagePages(peerId, targetCount, fetchMessages);
+      if (quietSyncTargetRef.current !== target || pages.length === 0) return;
 
       const hiddenForMeIds = hiddenForMeMessageIdsRef.current;
       const formatted = filterVisibleServerMessages(pages, {
@@ -103,6 +107,15 @@ export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersi
           readStatuses: readStatusesRef.current,
         }),
       );
+      const serverStatuses = buildOutgoingReadStatusesFromHistory(formatted);
+      if (Object.keys(serverStatuses).length) {
+        updateReadStatuses(prev => mergeChatReadStatuses(prev, serverStatuses));
+      }
+      if (recentHttpOnly && pages.some(msg => String(msg.from) === peerId && !msg.read)) {
+        void markMessagesAsRead(peerId, { httpOnly: true }).then(res => {
+          if (res?.ok) void resyncBadgeAfterChatRead(peerId);
+        }).catch(() => {});
+      }
     } catch {} finally {
       quietSyncInFlightRef.current = false;
     }
@@ -114,7 +127,13 @@ export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersi
     deletedServerMessageIdsRef,
     uploadStatusRef,
     readStatusesRef,
+    updateReadStatuses,
   ]);
+
+  React.useEffect(() => startChatRecoveryPoll(
+    () => isFocusedRef.current && historyReady && AppState.currentState === 'active',
+    () => quietSyncChat(true),
+  ), [isFocusedRef, historyReady, quietSyncChat]);
 
   const lastAppStatePersistAtRef = React.useRef(0);
   React.useEffect(() => {
@@ -433,6 +452,7 @@ export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersi
 
     socket.on("connect", run);
     socket.on("reconnect", run);
+    const routeSub = DeviceEventEmitter.addListener('LiviNetRouteChanged', run);
     // Сеть вернулась (режим полёта, VPN, лифт): синхронизируем, не дожидаясь connect
     // сокета — сообщения, ушедшие в «мёртвый» сокет, иначе не видны до переоткрытия чата.
     const unsubscribeNet = NetInfo.addEventListener((state) => {
@@ -444,6 +464,7 @@ export function useChatHistorySync({ session, isFocusedRef, enqueueMessagesPersi
       socket.off("connect", run);
       socket.off("reconnect", run);
       unsubscribeNet();
+      routeSub.remove();
       if (t) clearTimeout(t);
     };
     // Подписки — один раз на экран: с нестабильными колбэками в deps эффект

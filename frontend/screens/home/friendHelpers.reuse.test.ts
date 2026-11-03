@@ -1,4 +1,4 @@
-import { mergeFriendOnlineFromFetch, reuseUnchangedFriends } from './friendHelpers';
+import { mapToFriend, mergeFriendOnlineFromFetch, reuseUnchangedFriends } from './friendHelpers';
 import type { Friend } from './types';
 
 const f = (id: string, over: Partial<Friend> = {}): Friend =>
@@ -34,6 +34,10 @@ describe('reuseUnchangedFriends', () => {
 });
 
 describe('mergeFriendOnlineFromFetch', () => {
+  it('clears every call/busy flag when an authoritative snapshot says the friend is offline', () => {
+    expect(mapToFriend({ _id: 'max', online: false, isBusy: true, isRandomBusy: true, inCall: true }))
+      .toMatchObject({ online: false, isBusy: false, isRandomBusy: false, inCall: false });
+  });
   it('clears stale online=true when the authoritative refresh says offline', () => {
     expect(mergeFriendOnlineFromFetch(false, true)).toBe(false);
   });

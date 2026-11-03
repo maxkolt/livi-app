@@ -1009,7 +1009,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     exitSelectionMode,
     toggleSelectMessage,
     toggleSelectAlbumTile,
-    enterEmptySelectionMode,
     enterSelectionModeFromMessage,
     selectAllLoaded,
   } = useChatSelection({
@@ -3364,6 +3363,13 @@ export default function ChatScreen({ route, navigation }: Props) {
               top={headerTotalH}
               bottom={0}
             >
+            <Pressable
+              testID="chat-selection-background"
+              accessible={false}
+              disabled={!selectionMode}
+              onPress={exitSelectionMode}
+              style={{ flex: 1 }}
+            >
             <FlatList
               ref={flatListRef}
               data={iosChatListData}
@@ -3382,7 +3388,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingHorizontal: chatListSideInset,
               }}
               ListFooterComponent={null}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps={selectionMode ? 'always' : 'handled'}
               // Прокрутка ленты не прячет открытую клавиатуру.
               keyboardDismissMode="none"
               showsVerticalScrollIndicator={false}
@@ -3396,6 +3402,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
               ListEmptyComponent={ChatListEmpty}
             />
+            </Pressable>
             </ChatMessageEdgeFade>
             {chatEmptyFeedPlaceholder}
             {InlineGapIndicator ? (
@@ -3494,6 +3501,13 @@ export default function ChatScreen({ route, navigation }: Props) {
               bottom={0}
               sourceId={chatBlurFeedId}
             >
+            <Pressable
+              testID="chat-selection-background"
+              accessible={false}
+              disabled={!selectionMode}
+              onPress={exitSelectionMode}
+              style={{ flex: 1 }}
+            >
             <FlatList
               ref={flatListRef}
               data={androidChatListData}
@@ -3515,7 +3529,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingHorizontal: chatListSideInset,
               }}
               showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps={selectionMode ? 'always' : 'handled'}
               // Прокрутка ленты не прячет открытую клавиатуру.
               keyboardDismissMode="none"
               removeClippedSubviews={false}
@@ -3528,6 +3542,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
               ListEmptyComponent={ChatListEmpty}
             />
+            </Pressable>
             </ChatMessageEdgeFade>
             </Animated.View>
 
@@ -3756,18 +3771,6 @@ export default function ChatScreen({ route, navigation }: Props) {
       >
         <View style={[appDialogStyles.section, { gap: 10 }]}>
           <Text style={chatMenuSectionLabel}>
-            {t('menuTitle', lang)}
-          </Text>
-          <AppDialogButton
-            label={t('chatActionSelect', lang)}
-            variant="primary"
-            stretch={false}
-            onPress={() => {
-              setShowClearMenu(false);
-              enterEmptySelectionMode();
-            }}
-          />
-          <Text style={[chatMenuSectionLabel, { marginTop: 4 }]}>
             {t('chatClearMenuTitle', lang)}
           </Text>
           <AppDialogButton
@@ -4348,7 +4351,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             rows.push({
               key: 'select',
               label: t('chatActionSelect', lang),
-              icon: 'checkbox-outline',
+              icon: 'checkmark-circle-outline',
               onPress: () => enterSelectionModeFromMessage(selectedMessage, albumFocusIndex),
             });
             rows.push({

@@ -22,7 +22,9 @@ jest.mock('./emit', () => ({ emitAck: (...args: unknown[]) => mockEmitAck(...arg
 jest.mock('./apiHttp', () => ({ postApiJson: (...args: unknown[]) => mockPost(...args) }));
 jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(async () => true) }));
 jest.mock('./constants', () => ({ API_BASE: 'https://api.test' }));
-jest.mock('../../utils/installId', () => ({ getInstallId: jest.fn(async () => 'inst') }));
+jest.mock('../../utils/installId', () => ({
+  getInstallId: jest.fn(async () => 'inst'), getInstallAuthHeaders: jest.fn(async () => ({})),
+}));
 jest.mock('../../utils/logger', () => ({ logger: { warn: jest.fn(), info: jest.fn(), debug: jest.fn() } }));
 jest.mock('./e2e', () => ({
   decryptIncomingMessage: jest.fn(async (m: unknown) => m),
@@ -34,7 +36,7 @@ jest.mock('./e2e', () => ({
 }));
 jest.mock('./e2eText', () => ({ e2eUndecryptableText: () => 'undecryptable' }));
 
-import { sendMessage } from './messages';
+import { fetchMessages, sendMessage } from './messages';
 import { isMessagePendingInOutbox } from './outbox';
 import { shared } from './shared';
 
@@ -53,6 +55,21 @@ afterEach(() => {
 });
 
 describe('sendMessage', () => {
+  it('fetches missing incoming messages over HTTP while the connected socket is silent', async () => {
+    jest.useFakeTimers();
+    const oldFetch = global.fetch;
+    const page = { ok: true, messages: [{ id: 'incoming', from: 'peer', to: 'me', type: 'text', text: 'hello' }] };
+    global.fetch = jest.fn(async () => ({ ok: true, json: async () => page })) as any;
+    mockEmitAck.mockImplementation(() => new Promise(() => {}));
+    shared.reconnecting = false;
+    try {
+      const history = fetchMessages({ with: 'peer' });
+      await jest.advanceTimersByTimeAsync(1200);
+      await expect(history).resolves.toEqual(page);
+      expect(global.fetch).toHaveBeenCalledTimes(1);
+    } finally { global.fetch = oldFetch; }
+  });
+
   it('reports a durable-storage failure instead of claiming that the message was queued', async () => {
     const storage = require('@react-native-async-storage/async-storage');
     storage.setItem.mockRejectedValueOnce(new Error('SQLite full'));

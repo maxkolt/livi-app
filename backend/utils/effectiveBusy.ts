@@ -1,4 +1,5 @@
 import type { Server } from 'socket.io';
+import { isFriendGloballyVisibleOnline } from './friendOnlinePresence';
 
 /**
  * Реализация «эффективной» занятости для списка друзей.
@@ -17,10 +18,12 @@ export function setGetEffectiveBusy(fn: (io: Server, userId: string) => boolean)
  * Учитывает direct-call (callee до accept — не занят) и random/queue busy.
  */
 export function getEffectiveBusy(io: Server, userId: string): boolean {
+  // Old busy broadcasts/flags cannot keep an offline user occupied indefinitely.
+  if (!isFriendGloballyVisibleOnline(io, userId)) return false;
   if (getEffectiveBusyImpl) return getEffectiveBusyImpl(io, userId);
   // Fallback: хотя бы один сокет пользователя с data.busy === true
   for (const s of io.sockets.sockets.values()) {
-    if (String((s).data?.userId) === String(userId) && (s).data?.busy === true) return true;
+    if (s.connected !== false && String((s).data?.userId) === String(userId) && (s).data?.busy === true) return true;
   }
   return false;
 }

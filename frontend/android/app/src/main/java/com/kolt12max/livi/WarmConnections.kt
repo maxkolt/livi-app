@@ -165,6 +165,9 @@ object WarmConnections {
     val app = context.applicationContext
     io.execute {
       pool.evictAll()
+      // RN fetch/XHR owns a separate pool. DNS changes affect only new connections;
+      // retaining its idle sockets sent HTTP fallback back over the old VPN route.
+      rnClientInstance?.connectionPool?.evictAll()
       warm(app, "route_change")
     }
   }
@@ -200,9 +203,12 @@ object WarmConnections {
             val previous = defaultNetwork
             defaultNetwork = network
             if (previous == null || previous == network) return
-            pool.evictAll()
-            NetPath.probe("network_change", force = true)
-            warm(app, "network_change")
+            io.execute {
+              pool.evictAll()
+              rnClientInstance?.connectionPool?.evictAll()
+              NetPath.probe("network_change", force = true)
+              warm(app, "network_change")
+            }
           }
         },
       )

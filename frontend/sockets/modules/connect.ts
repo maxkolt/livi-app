@@ -30,6 +30,7 @@ import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { __notifyCurrentUserId } from "./authState";
 import { nextSocketTransportOrder } from "./socketTransportPreference";
+import { closeSocketTransportForRecovery } from './socketRecovery';
 
 type ConnectionGlobals = typeof global & {
   __incomingCallScreenVisibleRef?: { current: boolean };
@@ -78,12 +79,7 @@ export async function hardRecycleSocketConnection(reason = "manual"): Promise<vo
 
   try {
     const mgr = socket.io;
-    try {
-      socket.disconnect();
-    } catch {}
-    try {
-      mgr?.engine?.close?.();
-    } catch {}
+    closeSocketTransportForRecovery(socket);
     // Under VPN, HTTPS long-polling often survives when WS upgrade is blocked.
     if (mgr?.opts) {
       mgr.opts.transports = ["polling", "websocket"];

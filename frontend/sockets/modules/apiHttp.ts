@@ -8,11 +8,14 @@ import { shared } from "./shared";
  * Ошибку сервера возвращает как `{ ok:false, error:"http_<status>:<тело>" }`;
  * бросает, только если сеть не ответила (нет связи / таймаут).
  */
-export async function postApiJson<T = unknown>(path: string, body: unknown, timeoutMs: number): Promise<T> {
+export async function postApiJson<T = unknown>(path: string, body: unknown, timeoutMs: number, signal?: AbortSignal): Promise<T> {
   const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
   if (shared.currentUserId) headers["x-user-id"] = String(shared.currentUserId);
 
   const controller = new AbortController();
+  const onAbort = () => controller.abort();
+  if (signal?.aborted) controller.abort();
+  else signal?.addEventListener('abort', onAbort, { once: true });
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -28,5 +31,6 @@ export async function postApiJson<T = unknown>(path: string, body: unknown, time
     return (await res.json()) as T;
   } finally {
     clearTimeout(timeoutId);
+    signal?.removeEventListener('abort', onAbort);
   }
 }

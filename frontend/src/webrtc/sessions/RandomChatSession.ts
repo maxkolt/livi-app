@@ -40,6 +40,7 @@ import { buildLiveKitSignalProxyUrl } from './videoCall/signalProxy';
 import { LIVEKIT_APPLY_CLIENT_ICE } from './videoCall/constants';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
 import { getRoomIceTransportDiagnostics } from '../iceTransportDiagnostics';
+import { describeRemoteTrackChange } from './videoCall/remoteTrackChange';
 
 const LIVEKIT_URL = ((process.env.EXPO_PUBLIC_LIVEKIT_URL as string | undefined) ?? '').trim();
 /** LiveKit default PC timeout (~15s) is too short for VPN / slow ICE; match VideoCallSession. */
@@ -136,8 +137,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   private partnerAwayGiveUpTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectingSoftTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectingShown = false;
-  /** Сервер ждёт вернувшегося 10 с; ещё 5 с — запас на доставку «вернулся/ушёл». */
-  private readonly partnerAwayGiveUpMs = 15_000;
+  /** Server grace plus delivery margin; updated from random:partnerReconnecting. */
+  private partnerAwayGiveUpMs = 50_000;
   /** Короткие просадки LiveKit и уход собеседника через «Далее» не должны мигать оверлеем. */
   private readonly reconnectingSoftDelayMs = 1_200;
   /** Собеседник так и не зашёл в комнату (у него не вышло подключиться к LiveKit) — не ждём вечно. */
@@ -149,6 +150,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   private localVideoWatchdogForcedUntil = 0;
   private camToggleInProgress = false;
   private recoveringVideo = false;
+  private localCameraOperation: Promise<void> | null = null;
   private detachLocalVideoEnded: (() => void) | null = null;
   private micToggleInProgress = false;
   private flipCamInProgress = false;
@@ -353,6 +355,11 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     this.suppressLocalVideoEndedRecovery(reason, 2200);
     if (track === this.localVideoTrack) {
       this.detachLocalVideoEndedListener();
+      // Detach the native view before stop() disposes the track it is rendering.
+      this.localVideoTrack = null;
+      this.localStream = null;
+      this.notifyLocalStreamChange(null);
+      this.emit('localStream', null);
     }
     try {
       if (track.mediaStreamTrack) {
@@ -474,7 +481,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private logReconnectTrace(event: string, details: Record<string, unknown> = {}): void {
-    logger.info('[RandomChatSession][ReconnectTrace]', {
+    // Production strips info; preserve causes of teardown/recovery in release logcat.
+    const log = /disconnect_requested|room_lost|room_reconnecting|resume_rejected|connect_error/.test(event)
+      ? logger.warn : logger.info;
+    log('[RandomChatSession][ReconnectTrace]', {
       event,
       ...this.traceContext(),
       ...details,
@@ -1010,7 +1020,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
 
   /**
    * Вернуться в ту же пару после обрыва: переподключился сокет или сдался LiveKit.
-   * Сервер держит пару ~10 с; если LiveKit-комнаты уже нет — заходим в неё заново по свежему
+   * Сервер держит пару на время восстановления; если LiveKit-комнаты уже нет — заходим в неё заново по свежему
    * токену. Не вышло — уходим в поиск, как раньше.
    */
   private resumePair(reason: string): Promise<void> {
@@ -1415,7 +1425,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   async flipCam(): Promise<void> {
-    if (this.flipCamInProgress) {
+    if (this.flipCamInProgress || this.camToggleInProgress || this.recoveringVideo) {
       return;
     }
     
@@ -1439,17 +1449,24 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   async restartLocalCamera(): Promise<void> {
+    return this.queueLocalCameraOperation(() => this.restartLocalCameraInner());
+  }
+
+  private async restartLocalCameraInner(): Promise<void> {
     this.suppressLocalVideoEndedRecovery('flipCam');
     if (!this.room || this.room.state !== 'connected' || !this.room.localParticipant) {
       if (!this.localVideoTrack || !this.localAudioTrack) {
-        await this.ensureLocalTracks(true);
+        await this.ensureLocalTracksInner(true);
       } else {
-        await this.recreateLocalVideoTrack('toggleCam');
+        await this.recreateLocalVideoTrackInner('toggleCam');
       }
       return;
     }
     
     const oldVideoTrack = this.localVideoTrack;
+    if (Platform.OS === 'android' && oldVideoTrack) {
+      await this.stopLocalVideoTrackForRestart(oldVideoTrack, 'flipCam');
+    }
     let newVideoTrack: LocalVideoTrack;
     try {
       newVideoTrack = await this.createFreshLocalVideoTrack('toggleCam');
@@ -1465,10 +1482,11 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
       await this.stopLocalVideoTrackForRestart(oldVideoTrack, 'flipCam');
       newVideoTrack = await this.createFreshLocalVideoTrack('toggleCam');
     }
+    if (!this.started || this.stopRequested) { newVideoTrack.stop(); return; }
     this.swapLocalVideoTrack(newVideoTrack, 'toggleCam');
     await this.replacePublishedVideoTrack(newVideoTrack, oldVideoTrack);
     logger.info('[RandomChatSession] Camera restarted and replaced track');
-    if (oldVideoTrack && oldVideoTrack !== newVideoTrack) {
+    if (Platform.OS !== 'android' && oldVideoTrack && oldVideoTrack !== newVideoTrack) {
       await this.stopLocalVideoTrackForRestart(oldVideoTrack, 'flipCam');
     }
   }
@@ -1662,6 +1680,11 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     const partnerReconnectingHandler = (data?: { graceMs?: number }) => {
       if (!this.hasActivePair()) return;
       this.logReconnectTrace('partner_reconnecting', { graceMs: data?.graceMs ?? null });
+      const graceMs = Number(data?.graceMs);
+      this.partnerAwayGiveUpMs = Number.isFinite(graceMs) && graceMs > 0 ? graceMs + 5000 : 50_000;
+      // A LiveKit departure may have started its timer before the server grace arrived.
+      if (this.partnerAwayGiveUpTimer) clearTimeout(this.partnerAwayGiveUpTimer);
+      this.partnerAwayGiveUpTimer = null;
       this.partnerAwayServer = true;
       this.updateReconnectingState();
     };
@@ -1782,8 +1805,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
 
     // КРИТИЧНО: Дедуп - если комната уже подключена к той же комнате, не переподключаемся
     if (this.room && 
-        this.room.state === 'connected' && 
+        this.isRoomLive() &&
         this.room.name === data.livekitRoomName) {
+      this.roomReconnecting = this.room.state === 'reconnecting' || this.room.state === 'signalReconnecting';
+      this.updateReconnectingState();
       return;
     }
 
@@ -1892,7 +1917,24 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     }
   }
 
-  private async ensureLocalTracks(force = false): Promise<void> {
+  private async queueLocalCameraOperation(work: () => Promise<void>): Promise<void> {
+    const previous = this.localCameraOperation;
+    const pending = (async () => {
+      if (previous) await previous.catch(() => {});
+      if (!this.started || this.stopRequested) return;
+      await work();
+    })();
+    this.localCameraOperation = pending;
+    try { await pending; } finally {
+      if (this.localCameraOperation === pending) this.localCameraOperation = null;
+    }
+  }
+
+  private ensureLocalTracks(force = false): Promise<void> {
+    return this.queueLocalCameraOperation(() => this.ensureLocalTracksInner(force));
+  }
+
+  private async ensureLocalTracksInner(force = false): Promise<void> {
     // КРИТИЧНО: Проверяем что треки не только существуют, но и активны
     const videoActive = this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended';
     const audioActive = this.localAudioTrack && this.localAudioTrack.mediaStreamTrack?.readyState !== 'ended';
@@ -1956,6 +1998,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
       }
     }
 
+    if (!this.started || this.stopRequested) {
+      tracks.forEach(track => track.stop());
+      return;
+    }
     tracks.forEach((track) => {
       if (track.kind === Track.Kind.Video) {
         this.localVideoTrack = track as LocalVideoTrack;
@@ -2132,6 +2178,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private async recreateLocalVideoTrack(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<void> {
+    return this.queueLocalCameraOperation(() => this.recreateLocalVideoTrackInner(reason));
+  }
+
+  private async recreateLocalVideoTrackInner(reason: 'ended' | 'toggleCam' | 'stuck'): Promise<void> {
     // iOS Simulator: camera capture for WebRTC is often unavailable
     if (Platform.OS === 'ios' && !Device.isDevice) {
       logger.warn('[RandomChatSession] iOS Simulator: skipping video track recreation (camera unavailable)', { reason });
@@ -2150,6 +2200,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     }
     
     const newVideoTrack = await this.createFreshLocalVideoTrack(reason);
+    if (!this.started || this.stopRequested) {
+      newVideoTrack.stop();
+      return;
+    }
     this.swapLocalVideoTrack(newVideoTrack, reason);
   }
 
@@ -2236,18 +2290,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     }
     this.attachLocalVideoEndedListener(newVideoTrack);
 
-    if (!this.localStream) {
-      this.localStream = new MediaStream();
-    }
-
-    // Удаляем старые видео треки из localStream
-    try {
-      this.localStream.getVideoTracks().forEach((t) => {
-        try {
-          this.localStream?.removeTrack(t);
-        } catch {}
-      });
-    } catch {}
+    // A new native track needs a new stream ID even when the LiveKit SID is reused.
+    this.localStream = new MediaStream();
 
     const mediaTrack = newVideoTrack.mediaStreamTrack;
     if (mediaTrack) {
@@ -2704,24 +2748,33 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     if (this.room && 
         this.room.state !== 'disconnected' && 
         (!this.currentRoomName || !targetRoomName || this.currentRoomName !== targetRoomName)) {
-      // КРИТИЧНО: Не ждем полного отключения - просто отключаем асинхронно
-      // Это ускоряет подключение к новому собеседнику
-      void this.disconnectRoom('user', 'connectToLiveKit:room_switch');
+      const previousRoom = this.room;
+      await this.safeDisconnect(previousRoom);
+      if (this.room === previousRoom) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      if (!this.started || this.connectRequestId !== connectRequestId) return false;
     }
     
     // КРИТИЧНО: Если комната все еще существует, принудительно очищаем состояние
     // Не ждем полного отключения - это замедляет подключение
     if (this.room && this.room.state === 'disconnected') {
-      this.room = null;
-      this.currentRoomName = null;
-      this.isDisconnecting = false;
-      this.disconnectPromise = null;
+      const previousRoom = this.room;
+      await this.safeDisconnect(previousRoom);
+      if (this.room === previousRoom) {
+        this.room = null;
+        this.currentRoomName = null;
+      }
+      if (!this.started || this.connectRequestId !== connectRequestId) return false;
     }
     
     // КРИТИЧНО: Убеждаемся что локальные треки существуют и активны
     // Если треки были остановлены (чего не должно быть при next()), пересоздаем их
     // КРИТИЧНО: Сохраняем текущий localStream ПЕРЕД пересозданием треков, чтобы не было черного экрана
 
+    if (this.localCameraOperation) await this.localCameraOperation.catch(() => {});
+    if (!this.started || this.stopRequested || this.connectRequestId !== connectRequestId) return false;
     const refreshedEndedVideoBeforeReconnect = await this.refreshEndedLocalVideoTrackBeforeReconnect();
     
     if (!this.localVideoTrack || !this.localAudioTrack) {
@@ -3255,6 +3308,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     if (!room) return;
     this.isDisconnecting = true;
     this.disconnectReason = reason;
+    this.resetRemoteState();
     const pending = disposeRoom(room, this.started).finally(() => {
       if (this.room === room) {
         this.room = null;
@@ -3272,6 +3326,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private async safeDisconnect(room: Room): Promise<void> {
+    if (this.room === room) this.resetRemoteState();
     await disposeRoom(room, this.started);
   }
 
@@ -3304,7 +3359,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   private refreshCurrentRemoteParticipant(room: Room): void {
     const identities = [
       this.currentRemoteParticipant?.identity,
-      this.matchRoomId,
+      this.matchPartnerUserId,
     ]
       .map((v) => String(v || '').trim())
       .filter(Boolean);
@@ -3316,6 +3371,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         return;
       }
     }
+    this.currentRemoteParticipant = null;
   }
 
   private registerRoomEvents(room: Room): void {
@@ -3338,20 +3394,28 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         void sendClientMetrics(API_BASE, { roomReconnecting: true, reconnect: true }).catch(() => {});
       })
       .on(RoomEvent.Reconnected, () => {
+        if (this.room !== room) return;
         this.logReconnectTrace('room_reconnected', {
           sessionId: this.sessionId,
           reconnectCycleId: this.reconnectCycleId,
           roomName: room.name || null,
         });
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
-        if (this.room === room && this.roomReconnecting) {
-          this.roomReconnecting = false;
-          this.updateReconnectingState();
-        }
         this.refreshCurrentRemoteParticipant(room);
+        for (const participant of room.remoteParticipants.values()) {
+          if (participant.isLocal) continue;
+          for (const publication of participant.trackPublications.values()) {
+            if (publication.track) this.handleTrackSubscribed(publication.track, publication, participant);
+            else publication.setSubscribed(true);
+          }
+        }
+        this.roomReconnecting = false;
+        this.partnerAwayLiveKit = !this.currentRemoteParticipant && this.hasActivePair();
+        this.updateReconnectingState();
         this.scheduleIceTransportLogging(room, 'reconnected');
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
+        if (this.room !== room) return;
         if (participant.isLocal) return;
         const liveParticipant = this.resolveLiveRemoteParticipant(participant);
         if (!liveParticipant) {
@@ -3371,6 +3435,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         this.emitCamToggleRelay('participant_connected');
       })
       .on(RoomEvent.TrackSubscribed, (track, publication, participant) => {
+        if (this.room !== room) return;
         // КРИТИЧНО: Игнорируем подписки на локальные треки
         // LiveKit может отправлять события подписки на локальные треки, но они не должны обрабатываться
         // Это предотвращает предупреждение "could not find local track subscription for subscribed event"
@@ -3385,6 +3450,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         this.handleTrackSubscribed(track, publication, participant);
       })
       .on(RoomEvent.TrackPublished, (publication, participant) => {
+        if (this.room !== room) return;
         // КРИТИЧНО: При публикации трека удаленным участником подписываемся на него
         // Это особенно важно при перевороте камеры, когда старый трек удаляется и публикуется новый
         if (!participant.isLocal) {
@@ -3426,7 +3492,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
           }
         }
       })
-      .on(RoomEvent.TrackUnsubscribed, (_track, publication, participant) => {
+      .on(RoomEvent.TrackUnsubscribed, (track, publication, participant) => {
+        if (this.room !== room) return;
         // КРИТИЧНО: Проверяем тип участника перед обработкой
         // Локальные треки не должны влиять на remoteStream
         if (participant.isLocal) {
@@ -3437,13 +3504,14 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         if (!liveParticipant) {
           return;
         }
-        this.handleTrackUnsubscribed(publication, liveParticipant);
+        this.handleTrackUnsubscribed(publication, liveParticipant, track);
       })
       // IMPORTANT (RandomChat UX): no TrackMuted/TrackUnmuted handlers on purpose.
       // TrackMuted/Unmuted is NOT a reliable source of "user pressed camera button" intent in RandomChat.
       // It can occur during churn (resubscribe/reconnect/leave) and caused false "Отошел".
       // We drive "Отошел" ONLY from socket event 'cam-toggle' emitted on explicit toggleCam().
       .on(RoomEvent.ParticipantDisconnected, (participant) => {
+        if (this.room !== room) return;
         if (this.isSameRemoteParticipant(participant)) {
           // Не уходим сразу: это может быть переподключение собеседника. Решит сервер
           // (peer:left / disconnected / random:partnerResumed) или таймер partnerAwayGiveUpMs.
@@ -3471,6 +3539,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         }
       })
       .once(RoomEvent.Disconnected, () => {
+        if (this.room !== room) return;
         // КРИТИЧНО: Убираем циклический вызов handleRandomDisconnected
         // Если комната отключилась по причине 'server', это уже обработано в ParticipantDisconnected
         // или в других обработчиках. Здесь только сбрасываем флаги.
@@ -3513,8 +3582,11 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
 
     this.currentRemoteParticipant = liveParticipant;
     participant = liveParticipant;
+    const currentPublication = participant.trackPublications.get(publication.trackSid);
+    if (currentPublication?.track && currentPublication.track !== track) return;
 
     const mediaTrackEarly = track.mediaStreamTrack;
+    if (!mediaTrackEarly || mediaTrackEarly.readyState === 'ended') return;
     const isVid = publication.kind === Track.Kind.Video;
     const isAud = publication.kind === Track.Kind.Audio;
     if (mediaTrackEarly && this.remoteStream?.getTracks().includes(mediaTrackEarly as NativeLiveKitMediaTrack)) {
@@ -3561,6 +3633,24 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     const oldVideoTrackSid = this.remoteVideoTrack?.sid;
     const mediaTrack = track.mediaStreamTrack;
     const wasVideoTrackChanged = isVideoTrack && oldVideoTrackSid && oldVideoTrackSid !== track.sid;
+    const change = describeRemoteTrackChange({
+      isVideoTrack,
+      isAudioTrack: publication.kind === Track.Kind.Audio,
+      newTrackSid: track.sid,
+      previousVideoSid: oldVideoTrackSid,
+      previousAudioSid: this.remoteAudioTrack?.sid,
+      incomingMediaTrack: mediaTrack,
+      existingVideoMediaTracks: this.remoteStream?.getVideoTracks(),
+      existingAudioMediaTracks: this.remoteStream?.getAudioTracks(),
+    });
+    if (change.needsFreshStream) {
+      const freshStream = new MediaStream();
+      // Preserve only the other live source. Replaced/disposed tracks must not survive.
+      for (const existing of this.remoteStream?.getTracks() || []) {
+        if (existing.kind !== mediaTrack.kind && existing.readyState !== 'ended') freshStream.addTrack(existing);
+      }
+      this.remoteStream = freshStream;
+    }
     
     // Не пересоздаем stream, чтобы не было мерцаний — создаем один раз и переиспользуем
     if (!this.remoteStream) {
@@ -3631,9 +3721,9 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     const prevRemoteViewKey = this.remoteViewKey;
     if (isVideoTrack) {
       const hadVideoBefore = !!oldVideoTrackSid;
-      const shouldRemountForVideo = !hadVideoBefore || wasVideoTrackChanged;
+      const shouldRemountForVideo = !hadVideoBefore || wasVideoTrackChanged || change.videoResubscribed;
       if (shouldRemountForVideo) {
-        this.remoteViewKey = Date.now();
+        this.remoteViewKey = Math.max(Date.now(), this.remoteViewKey + 1);
       }
     } else if (publication.kind === Track.Kind.Audio && !this.remoteVideoTrack) {
       // Audio-only room (no video yet): a single bump helps RTCView mount once.
@@ -3659,7 +3749,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
 
   private handleTrackUnsubscribed(
     publication: RemoteTrackPublication,
-    participant: RemoteParticipant
+    participant: RemoteParticipant,
+    unsubscribedTrack?: RemoteTrack,
   ): void {
     // КРИТИЧНО: Обрабатываем только треки удаленного участника
     // Локальные треки (participant.isLocal === true) не должны влиять на remoteStream
@@ -3670,6 +3761,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     if (!this.isSameRemoteParticipant(participant)) {
       return;
     }
+    const current = publication.kind === Track.Kind.Video ? this.remoteVideoTrack : this.remoteAudioTrack;
+    // An unsubscribe from the previous PC can arrive after the new same-SID track.
+    if (!current || publication.trackSid !== current.sid ||
+        (unsubscribedTrack && current.mediaStreamTrack !== unsubscribedTrack.mediaStreamTrack)) return;
 
     logger.info('[RandomChatSession] Remote track unsubscribed', {
       kind: publication.kind,

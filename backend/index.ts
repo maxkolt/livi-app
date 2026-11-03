@@ -35,6 +35,7 @@ import { socketHandler } from './sockets/handler';
 import { bindAvatarSockets } from './sockets/avatar';
 import { setIoInstance } from './utils/ioInstance';
 import { setGetEffectiveBusy } from './utils/effectiveBusy';
+import { beginFriendBusyNotification } from './utils/friendBusyPresence';
 import User, { type UserRecord } from './models/User';
 import Install from './models/Install';
 import { decideHttpInstallAuth, verifyInstallSecret } from './utils/installSecret';
@@ -1017,8 +1018,9 @@ function schedulePresenceEmitAfterDisconnect(io: Server, userId?: string | null)
  * Это критично для масштабирования: при 100k пользователей вместо 100k отправок - только друзьям (~50)
  */
 async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boolean) {
+  if (!userId) return;
+  const notification = beginFriendBusyNotification(userId);
   try {
-    if (!userId) return;
     lastBroadcastBusyByUserId.set(String(userId), !!busy);
 
     // КРИТИЧНО: Проверяем готовность MongoDB перед операциями
@@ -1028,9 +1030,10 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
       return;
     }
     const friends = await getFriendIds(userId);
+    if (!notification.isCurrent()) return;
     if (friends.length === 0) {
       // Если друзей нет, отправляем только самому пользователю (для синхронизации состояния)
-      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      if (notification.isCurrent()) io.to(`u:${userId}`).emit('presence:update', { userId, busy });
       return;
     }
 
@@ -1046,9 +1049,10 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
   } catch (e) {
     // В случае ошибки отправляем только самому пользователю (fallback)
     try {
-      io.to(`u:${userId}`).emit('presence:update', { userId, busy });
+      if (notification.isCurrent()) io.to(`u:${userId}`).emit('presence:update', { userId, busy });
     } catch {}
   } finally {
+    notification.finish();
     scheduleGlobalFriendPresenceEmit(io, userId);
   }
 }
@@ -2699,8 +2703,7 @@ function getEffectiveBusyForExport(io: Server, userId: string): boolean {
   for (const s of getSocketsForUser(io, userId)) {
     if (isSocketBusyForFriendsExport(io, (s).data, userId)) return true;
   }
-  // Согласуем REST с последним presence:update друзьям (гонки / локальный socket.data).
-  if (lastBroadcastBusyByUserId.get(String(userId)) === true) return true;
+  // Broadcast history is a deduplication cache, not evidence of a live call.
   return false;
 }
 setGetEffectiveBusy(getEffectiveBusyForExport);

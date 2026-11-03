@@ -375,6 +375,47 @@ describe('random chat: simultaneous searches', () => {
 const flushMatch = () => new Promise((resolve) => setImmediate(resolve));
 
 describe('random chat: pause for reconnect', () => {
+  it('clears the departed user busy status even after disconnect unbound its identity', async () => {
+    const { io, a, b, aUser } = await pairUp();
+    const observer = new FakeSocket(io, 'busy-observer');
+    const recipients = jest.mocked(getPresenceFriendIds);
+    recipients.mockImplementation(async uid => uid === aUser ? ['busy-observer'] : []);
+    jest.useFakeTimers();
+    try {
+      await a.drop();
+      a.data.userId = undefined; // index.ts disconnect unbinds before grace expiry.
+      await jest.advanceTimersByTimeAsync(GRACE_MS + 1);
+      expect(observer.got('presence:update')).toContainEqual({
+        event: 'presence:update', payload: { userId: aUser, busy: false },
+      });
+      await b.fire('stop');
+    } finally {
+      recipients.mockImplementation(async () => []);
+      jest.useRealTimers();
+    }
+  });
+
+  it('keeps the default pair alive beyond a full 12s client transport attempt', async () => {
+    const { io, a, b, aUser, bUser } = await pairUp();
+    const previousGrace = process.env.RANDOM_RECONNECT_GRACE_MS;
+    delete process.env.RANDOM_RECONNECT_GRACE_MS;
+    jest.useFakeTimers();
+    try {
+      await a.drop();
+      expect(b.got('random:partnerReconnecting')[0].payload.graceMs).toBe(45_000);
+      await jest.advanceTimersByTimeAsync(13_000);
+      expect(b.got('disconnected')).toHaveLength(0);
+      const a2 = new FakeSocket(io, aUser);
+      const result = await a2.request('random:resume', { partnerUserId: bUser });
+      expect(result).toMatchObject({ ok: true, id: b.id });
+      await Promise.all([a2.fire('stop'), b.fire('stop')]);
+    } finally {
+      if (previousGrace === undefined) delete process.env.RANDOM_RECONNECT_GRACE_MS;
+      else process.env.RANDOM_RECONNECT_GRACE_MS = previousGrace;
+      jest.useRealTimers();
+    }
+  });
+
   it('returns the same pair when the dropped user comes back in time', async () => {
     const { io, a, b, aUser, bUser } = await pairUp();
 
