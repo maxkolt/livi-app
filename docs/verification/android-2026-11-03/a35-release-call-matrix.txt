@@ -1,0 +1,160 @@
+caller=emulator-5554 callee=RFCX306PWLE friend=Ron логи: /tmp/livi-acceptance-20261103/release-call-matrix
+▶ killed_decline
+frontend/e2e/call-matrix.sh: line 34: /tmp/livi-acceptance-20261103/release-call-matrix/killed_decline-call-start-emulator-5554.log: No such file or directory
+  ✗ call-start.yaml (emulator-5554) — лог: /tmp/livi-acceptance-20261103/release-call-matrix/killed_decline-call-start-emulator-5554.log
+▶ killed_answer
+  ✓ call-start.yaml (emulator-5554)
+  · путь: нативный экран
+  ✓ incoming-answer.yaml (RFCX306PWLE)
+  ✓ in-call.yaml (emulator-5554)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ hangup.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+▶ reopen_after_answer
+  ✓ reopen-home.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+▶ native_decline_foreground
+  ✓ smoke.yaml (RFCX306PWLE)
+  ✓ call-start.yaml (emulator-5554)
+  ✓ native-decline.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+▶ native_decline_overlay
+  ✓ call-start.yaml (emulator-5554)
+  ✓ native-decline.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+  ✓ служба входящего остановлена
+  ✓ уведомление входящего убрано
+▶ video_pip_earpiece
+  ✓ smoke.yaml (RFCX306PWLE)
+  ✓ call-start.yaml (emulator-5554)
+  ✓ native-answer.yaml (RFCX306PWLE)
+  ✓ in-call.yaml (emulator-5554)
+  ✓ звук: earpiece (RFCX306PWLE)
+  · камера
+  ✓ call-camera.yaml (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ call-camera.yaml (emulator-5554)
+  ✓ камера on (emulator-5554)
+  ✓ звук: earpiece (RFCX306PWLE)
+  · «пузырь» и обратно
+  ✓ call-minimize.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ pip-expand.yaml (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  · «Домой» с экрана звонка → системный PiP → назад
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ assert-full-call.yaml (RFCX306PWLE)
+  ✓ системный PiP: no (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  · «пузырь» → «Домой» → системный PiP → назад
+  ✓ call-minimize.yaml (RFCX306PWLE)
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ assert-in-app-pip.yaml (RFCX306PWLE)
+  ✓ системный PiP: no (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ pip-expand.yaml (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  · «Недавние» → системный PiP → назад
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ assert-full-call.yaml (RFCX306PWLE)
+  ✓ звук: earpiece (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  · камера выкл и отбой
+  ✓ call-camera.yaml (RFCX306PWLE)
+  ✓ камера off (RFCX306PWLE)
+  ✓ hangup.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+  ✓ режим звука MODE_NORMAL (emulator-5554)
+  ✓ камера off (emulator-5554)
+▶ video_pip_speaker
+  ✓ smoke.yaml (RFCX306PWLE)
+  ✓ call-start.yaml (emulator-5554)
+  ✓ native-answer.yaml (RFCX306PWLE)
+  ✓ in-call.yaml (emulator-5554)
+  ✓ call-speaker.yaml (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  · камера
+  ✓ call-camera.yaml (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ call-camera.yaml (emulator-5554)
+  ✓ камера on (emulator-5554)
+  ✓ звук: speaker (RFCX306PWLE)
+  · «пузырь» и обратно
+  ✓ call-minimize.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ pip-expand.yaml (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  · «Домой» с экрана звонка → системный PiP → назад
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ assert-full-call.yaml (RFCX306PWLE)
+  ✓ системный PiP: no (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  · «пузырь» → «Домой» → системный PiP → назад
+  ✓ call-minimize.yaml (RFCX306PWLE)
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ assert-in-app-pip.yaml (RFCX306PWLE)
+  ✓ системный PiP: no (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ pip-expand.yaml (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  · «Недавние» → системный PiP → назад
+  ✓ системный PiP: yes (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ assert-full-call.yaml (RFCX306PWLE)
+  ✓ звук: speaker (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  · камера выкл и отбой
+  ✓ call-camera.yaml (RFCX306PWLE)
+  ✓ камера off (RFCX306PWLE)
+  ✓ hangup.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+  ✓ режим звука MODE_NORMAL (emulator-5554)
+  ✓ камера off (emulator-5554)
+▶ screen_off_audio_5m
+  ✓ smoke.yaml (RFCX306PWLE)
+  ✓ call-start.yaml (emulator-5554)
+  ✓ native-answer.yaml (RFCX306PWLE)
+  ✓ in-call.yaml (emulator-5554)
+  ✓ режим звука MODE_IN_COMMUNICATION (emulator-5554)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ исходный маршрут speaker (emulator-5554)
+  ✓ исходный маршрут earpiece (RFCX306PWLE)
+  · оба экрана выключены; контроль звонка 300 с
+  · 0/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 30/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 60/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 90/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 120/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 150/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 180/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 210/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 240/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 270/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  · 300/300 с: оба процесса, FGS, wake lock, audio mode и маршруты в норме
+  ✓ звонок выдержал 300 с с выключенными экранами на обоих устройствах
+  ✓ back-in-call.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (RFCX306PWLE)
+  ✓ hangup.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+  ✓ режим звука MODE_NORMAL (emulator-5554)
+frontend/e2e/call-matrix.sh: line 373: syntax error near unexpected token `('
+frontend/e2e/call-matrix.sh: line 373: `  echo "ВСЁ ПРОШЛО (${#SCENARIOS[@]} сценариев)"'

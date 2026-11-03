@@ -1,0 +1,7 @@
+{"wait": 0, "incomingFgs": false, "normalAudio": false}
+{"wait": 10, "incomingFgs": false, "normalAudio": false}
+{"wait": 20, "incomingFgs": false, "normalAudio": false}
+{"wait": 30, "incomingFgs": false, "normalAudio": false}
+{"wait": 40, "incomingFgs": false, "normalAudio": true}
+{"wait": 50, "incomingFgs": false, "normalAudio": true}
+{"at": 1793661475.622282, "label": "unanswered-expiry-alarm-denied-real-missed-tap", "ok": true, "pidAbsentBeforeTap": true, "notificationLabel": "1 пропущенный вызов"}

@@ -1,0 +1,45 @@
+caller=RFCX306PWLE callee=emulator-5554 friend=— логи: /tmp/livi-acceptance-20261103/reverse-call-matrix
+▶ killed_answer
+  ✓ call-start.yaml (RFCX306PWLE)
+  · путь: нативный экран
+  ✓ incoming-answer.yaml (emulator-5554)
+  ✓ in-call.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_IN_COMMUNICATION (emulator-5554)
+  ✓ hangup.yaml (emulator-5554)
+  ✓ call-gone.yaml (RFCX306PWLE)
+  ✓ режим звука MODE_NORMAL (emulator-5554)
+▶ video_pip_speaker
+  ✓ smoke.yaml (emulator-5554)
+  ✓ call-start.yaml (RFCX306PWLE)
+  ✓ native-answer.yaml (emulator-5554)
+  ✓ in-call.yaml (RFCX306PWLE)
+  ✓ call-speaker.yaml (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  · камера
+  ✓ call-camera.yaml (emulator-5554)
+  ✓ камера on (emulator-5554)
+  ✓ call-camera.yaml (RFCX306PWLE)
+  ✓ камера on (RFCX306PWLE)
+  ✓ звук: speaker (emulator-5554)
+  · «пузырь» и обратно
+  ✓ call-minimize.yaml (emulator-5554)
+  ✓ режим звука MODE_IN_COMMUNICATION (emulator-5554)
+  ✓ камера on (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  ✓ pip-expand.yaml (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  · «Домой» с экрана звонка → системный PiP → назад
+  ✓ системный PiP: yes (emulator-5554)
+  ✓ режим звука MODE_IN_COMMUNICATION (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  ✗ assert-full-call.yaml (emulator-5554) — лог: /tmp/livi-acceptance-20261103/reverse-call-matrix/video_pip_speaker-assert-full-call-emulator-5554.log
+  ✗ системный PiP: yes вместо no (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  · «пузырь» → «Домой» → системный PiP → назад
+  ✗ call-minimize.yaml (emulator-5554) — лог: /tmp/livi-acceptance-20261103/reverse-call-matrix/video_pip_speaker-call-minimize-emulator-5554.log
+  ✓ системный PiP: yes (emulator-5554)
+  ✓ звук: speaker (emulator-5554)
+  ✗ assert-in-app-pip.yaml (emulator-5554) — лог: /tmp/livi-acceptance-20261103/reverse-call-matrix/video_pip_speaker-assert-in-app-pip-emulator-5554.log
+  ✓ системный PiP: no (emulator-5554)
+  ✓ камера on (emulator-5554)
+  ✓ звук: speaker (emulator-5554)

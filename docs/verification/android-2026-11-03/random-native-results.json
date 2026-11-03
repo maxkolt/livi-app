@@ -1,0 +1,142 @@
+{
+  "checks": [
+    {
+      "label": "random-native-start",
+      "media": {
+        "at": "2026-11-03T00:59:14.551Z",
+        "rooms": [
+          {
+            "name": "rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+            "sid": "RM_WLEyvUFs3UNP",
+            "participants": [
+              {
+                "identity": "6a62fae2c2583f4d42b33d16",
+                "sid": "PA_E7eLrPAoAxYJ",
+                "state": 2,
+                "joinedAt": "1793667549",
+                "tracks": [
+                  {
+                    "sid": "TR_VCSmXjTT2kGDGR",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_AMHBS42NuZ6QYp",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  }
+                ]
+              },
+              {
+                "identity": "6aa075a657dcabd3e27db3b0",
+                "sid": "PA_WVH4GDVddjed",
+                "state": 2,
+                "joinedAt": "1793667549",
+                "tracks": [
+                  {
+                    "sid": "TR_AM7675syBmJpJ2",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_VCow4PdX83JHM2",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "audit": {
+        "matchedSockets": 2,
+        "heldSockets": 0,
+        "asymmetricSockets": 0,
+        "stoppedWithPartner": 0,
+        "queuedSockets": 0,
+        "queuedWithPartner": 0,
+        "pairs": 1,
+        "pairDigest": "b3b0dd7ca4fe26e050ca8aace3e9b791c8b7050a07f1a0fa1cb91def652e2882"
+      }
+    },
+    {
+      "label": "random-native-next-1",
+      "media": {
+        "at": "2026-11-03T01:14:27.739Z",
+        "rooms": [
+          {
+            "name": "rand_room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+            "sid": "RM_jh8xJpACQ9UZ",
+            "participants": [
+              {
+                "identity": "6a62fae2c2583f4d42b33d16",
+                "sid": "PA_UEunuKzR9ZMo",
+                "state": 2,
+                "joinedAt": "1793668463",
+                "tracks": [
+                  {
+                    "sid": "TR_VC5eH7hXVSx5HE",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_AMygxDvNpBAuvv",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  }
+                ]
+              },
+              {
+                "identity": "6aa075a657dcabd3e27db3b0",
+                "sid": "PA_7dv2P39GmJu9",
+                "state": 2,
+                "joinedAt": "1793668463",
+                "tracks": [
+                  {
+                    "sid": "TR_AMqLJB4nhHizJE",
+                    "type": 0,
+                    "source": 2,
+                    "muted": false
+                  },
+                  {
+                    "sid": "TR_VCbXtS735JZvUk",
+                    "type": 1,
+                    "source": 1,
+                    "muted": false
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      "audit": {
+        "matchedSockets": 2,
+        "heldSockets": 0,
+        "asymmetricSockets": 0,
+        "stoppedWithPartner": 0,
+        "queuedSockets": 0,
+        "queuedWithPartner": 0,
+        "pairs": 1,
+        "pairDigest": "4e703d64aeb875be8c676df11ad85ad2dbedb0a8205768bec8c2b5727ee66a11"
+      }
+    }
+  ],
+  "finalAudit": {
+    "matchedSockets": 0,
+    "heldSockets": 0,
+    "asymmetricSockets": 0,
+    "stoppedWithPartner": 0,
+    "queuedSockets": 0,
+    "queuedWithPartner": 0,
+    "pairs": 0,
+    "pairDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}

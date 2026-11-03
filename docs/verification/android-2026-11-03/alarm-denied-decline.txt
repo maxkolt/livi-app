@@ -1,0 +1,12 @@
+caller=emulator-5554 callee=RFCX306PWLE friend=Ron логи: /tmp/livi-acceptance-20261103/alarm-disabled-call
+▶ killed_decline
+  ✓ call-start.yaml (emulator-5554)
+  · путь: нативный экран
+  ✓ incoming-decline.yaml (RFCX306PWLE)
+  ✓ call-gone.yaml (emulator-5554)
+  ✓ режим звука MODE_NORMAL (RFCX306PWLE)
+  ✓ служба входящего остановлена
+  ✓ уведомление входящего убрано
+
+ВСЁ ПРОШЛО (1 сценариев)
+{"at": 1793661317.85409, "label": "killed-decline-exact-alarm-denied", "ok": true}

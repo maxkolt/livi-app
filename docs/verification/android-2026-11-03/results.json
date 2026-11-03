@@ -1,0 +1,240 @@
+{
+  "status": "incomplete_device_disconnected",
+  "sourceCommit": "74e8767afba8f434d1f4c400608d1db6d41eb42c",
+  "backendDeployed": true,
+  "environmentPreserved": true,
+  "androidReleaseApkSha256": "80e0b9b28212a4d375ba97d62fde615f165c89e8d9d94a3c1cdd585db1264d64",
+  "nativeReleaseDebuggable": false,
+  "devices": {
+    "phone": "SM-A356E Android 16 API 36",
+    "emulator": "Pixel 10 Pro Android 17 API 37"
+  },
+  "navigation": {
+    "a35": [
+      {
+        "destination": "unread",
+        "passed": true,
+        "selected_filter": true,
+        "scenario_seconds": 7.21
+      },
+      {
+        "destination": "missed",
+        "passed": true,
+        "selected_filter": true,
+        "scenario_seconds": 8.34
+      },
+      {
+        "destination": "requests",
+        "passed": true,
+        "selected_filter": null,
+        "scenario_seconds": 7.64
+      },
+      {
+        "destination": "updates",
+        "passed": true,
+        "selected_filter": null,
+        "scenario_seconds": 7.59
+      }
+    ],
+    "emulator": [
+      {
+        "destination": "unread",
+        "passed": true,
+        "selected_filter": true,
+        "scenario_seconds": 4.35
+      },
+      {
+        "destination": "missed",
+        "passed": true,
+        "selected_filter": true,
+        "scenario_seconds": 4.19
+      },
+      {
+        "destination": "requests",
+        "passed": true,
+        "selected_filter": null,
+        "scenario_seconds": 4.54
+      },
+      {
+        "destination": "updates",
+        "passed": true,
+        "selected_filter": null,
+        "scenario_seconds": 3.82
+      }
+    ]
+  },
+  "chat": {
+    "menuSelectionFlowExitCode": 0,
+    "offlineSenderColdRestartPreserved": true,
+    "server": {
+      "rows": 1,
+      "messageIds": [
+        "1793659656563-08yozhj"
+      ],
+      "encrypted": true,
+      "plaintextEmpty": true,
+      "remainingOfflineRecords": 0
+    },
+    "encryptedFirstMessage": {
+      "testMessageId": "1793657509915-ekwm1i9",
+      "rows": 1,
+      "encrypted": true,
+      "plaintextEmpty": true,
+      "read": false
+    }
+  },
+  "screenOff": {
+    "durationSeconds": 300,
+    "samples": 29,
+    "lifecyclePassed": true,
+    "mediaRoomsConnectedAfterUnlock": true,
+    "audibilityConfirmed": false
+  },
+  "catalog": {
+    "availableBackgrounds": [
+      "Письма",
+      "Неон",
+      "Космос",
+      "Пушкин",
+      "Бирюза"
+    ],
+    "allBackgroundButtonsEnabled": true,
+    "lockedFramePurchaseButtonEnabled": false,
+    "purchasesMade": false
+  },
+  "confirmedFailures": [
+    {
+      "id": "direct-call-network-drop-30s",
+      "evidence": [
+        "network-call.log",
+        "network-drop-30s-recovery-failure-media.json",
+        "a35-runtime.log",
+        "emulator-runtime.log"
+      ],
+      "symptoms": [
+        "No bidirectional video recovery within 35 seconds after network restore",
+        "DUPLICATE_IDENTITY during repeated SFU joins",
+        "SDK reconnect attempts continued after callEnded on emulator",
+        "A35 temporarily retained a connected room with a peer lacking tracks"
+      ],
+      "internetRestoredConfirmed": true,
+      "rootCauseNotYetProven": true,
+      "durableEvidence": [
+        "network-recovery-excerpt.txt",
+        "network-recovery-media.json"
+      ]
+    },
+    {
+      "id": "cold-unread-stale-first-preview",
+      "evidence": [
+        "unread-stale-2s.png",
+        "unread-stale-2_4s.png",
+        "unread-fresh-3s.png"
+      ],
+      "oldOutgoingPreviewAtVideoSeconds": [
+        2.0,
+        2.4
+      ],
+      "newIncomingPreviewAtVideoSeconds": 3.0,
+      "pidAbsentImmediatelyBeforeTap": true,
+      "realFcmNotificationCount": 1,
+      "terminalDestinationCorrect": true,
+      "terminalNewTextInstances": 1
+    }
+  ],
+  "scopeLimits": [
+    "No human confirmation of bidirectional audibility",
+    "Emulator camera is synthetic",
+    "No 5000-stream SFU/TURN media workload performed on production"
+  ],
+  "rawArtifacts": "/tmp/livi-acceptance-20261103",
+  "automatedChecks": {
+    "command": "npm run check",
+    "frontendSuites": 95,
+    "frontendTests": 996,
+    "backendSuites": 25,
+    "backendTests": 280,
+    "source": "/tmp/livi-optimization-check.log",
+    "runBeforeDeviceAcceptance": true
+  },
+  "releaseCallMatrixA35": {
+    "initialCommandExitCode": 2,
+    "aggregatePassed": false,
+    "harnessErrors": [
+      "First killed_decline did not run because explicit LOG_DIR was absent",
+      "Harness was edited while running; final summary parser failed after all remaining device checks"
+    ],
+    "completedDeviceScenarios": [
+      "killed_answer",
+      "reopen_after_answer",
+      "native_decline_foreground",
+      "native_decline_overlay",
+      "video_pip_earpiece",
+      "video_pip_speaker",
+      "screen_off_audio_5m"
+    ],
+    "screenOffMinimumSeconds": 300,
+    "killedDeclineSeparateRetryExitCode": 0,
+    "exactAlarmDeniedDeclinePassed": true
+  },
+  "realMissedCall": {
+    "exactAlarmDenied": true,
+    "timeoutReleasedNativeRinging": true,
+    "incomingFgsRemoved": true,
+    "incomingNotificationRemoved": true,
+    "pidAbsentBeforeTap": true,
+    "selectedMissedFilter": true,
+    "newestCallTime": "02:17",
+    "blankSampleAtVideoSeconds": 2.5,
+    "freshFirstUiSampleAtVideoSeconds": 2.7
+  },
+  "emulatorIncomingAndPip": {
+    "killedAnswerPassed": true,
+    "inAppBubbleExpandPassed": true,
+    "cameraOnPassed": true,
+    "speakerRouteRetained": true,
+    "adbReturnAttemptPassed": false,
+    "adbMatrixStoppedExitCode": 143,
+    "realLauncherIconRetryExitCode": 0,
+    "realLauncherIconFullCallAssertionPassed": true,
+    "twoParticipantsAndTracksAfterReturn": true,
+    "adbReturnFailureClassifiedAsAppDefect": false
+  },
+  "randomNative": {
+    "checksPassed": [
+      "random-native-start",
+      "random-native-next-1"
+    ],
+    "finalAudit": {
+      "matchedSockets": 0,
+      "heldSockets": 0,
+      "asymmetricSockets": 0,
+      "stoppedWithPartner": 0,
+      "queuedSockets": 0,
+      "queuedWithPartner": 0,
+      "pairs": 0,
+      "pairDigest": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "wholeMatrixPassed": false,
+    "instrumentationErrors": [
+      "SSH banner timeout",
+      "HTTPS diagnostic connection reset",
+      "A35 screen off before UI test"
+    ],
+    "stoppedBecause": "A35 no longer present in adb devices"
+  },
+  "remaining": [
+    "Native random Next on emulator, overlapping Next, Stop and Start again",
+    "VPN off/on during active call",
+    "Final A35 resource and settings verification after USB reconnect",
+    "Human bidirectional audibility"
+  ],
+  "cleanup": {
+    "emulatorStoppedTestApp": true,
+    "emulatorAudioMode": "MODE_NORMAL",
+    "emulatorCallServices": 0,
+    "randomPairs": 0,
+    "randomQueue": 0,
+    "phoneCurrentlyReachableByAdb": false
+  }
+}

@@ -1,0 +1,227 @@
+{
+  "emulator-5554": {
+    "at": 1793658166975,
+    "localTracks": [],
+    "pcs": [],
+    "remoteParticipants": 0,
+    "roomName": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+    "roomState": "disconnected",
+    "route": "VideoCall",
+    "session": "VideoCallSession"
+  },
+  "RFCX306PWLE": {
+    "at": 1793658168999,
+    "localTracks": [
+      {
+        "enabled": true,
+        "kind": "audio",
+        "muted": false,
+        "ready": "live",
+        "source": "microphone",
+        "trackMuted": false
+      },
+      {
+        "enabled": true,
+        "kind": "video",
+        "muted": false,
+        "ready": "live",
+        "source": "camera",
+        "trackMuted": false
+      }
+    ],
+    "pcs": [
+      {
+        "path": "engine.pcManager.publisher._pc",
+        "stats": [
+          {
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "id": "CP7e9ZvJwf_kFgWxFp7",
+            "localCandidateId": "I7e9ZvJwf",
+            "nominated": false,
+            "packetsReceived": 0,
+            "packetsSent": 0,
+            "remoteCandidateId": "IkFgWxFp7",
+            "state": "in-progress",
+            "type": "candidate-pair"
+          },
+          {
+            "bytesReceived": 3648,
+            "bytesSent": 96567,
+            "currentRoundTripTime": 0.09,
+            "id": "CPZwPHPwxe_Y2IjKweR",
+            "localCandidateId": "IZwPHPwxe",
+            "nominated": true,
+            "packetsReceived": 49,
+            "packetsSent": 232,
+            "remoteCandidateId": "IY2IjKweR",
+            "state": "succeeded",
+            "type": "candidate-pair"
+          },
+          {
+            "candidateType": "host",
+            "id": "I7e9ZvJwf",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "IX2xA+L3Y",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "IY2IjKweR",
+            "protocol": "udp",
+            "type": "remote-candidate"
+          },
+          {
+            "candidateType": "srflx",
+            "id": "IZwPHPwxe",
+            "protocol": "udp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "IdwJRaqpN",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "IkFgWxFp7",
+            "protocol": "tcp",
+            "type": "remote-candidate"
+          },
+          {
+            "bytesSent": 4288,
+            "id": "OT01A3451062494",
+            "kind": "audio",
+            "packetsSent": 69,
+            "type": "outbound-rtp"
+          },
+          {
+            "bytesSent": 82095,
+            "framesEncoded": 118,
+            "framesPerSecond": 10,
+            "id": "OT01V1723303273",
+            "kind": "video",
+            "packetsSent": 135,
+            "type": "outbound-rtp"
+          },
+          {
+            "audioLevel": 0,
+            "id": "SA3",
+            "kind": "audio",
+            "totalAudioEnergy": 9.220656264301652e-10,
+            "totalSamplesDuration": 12.599999999999776,
+            "type": "media-source"
+          },
+          {
+            "framesPerSecond": 10,
+            "id": "SV4",
+            "kind": "video",
+            "type": "media-source"
+          }
+        ]
+      },
+      {
+        "path": "engine.pcManager.subscriber._pc",
+        "stats": [
+          {
+            "bytesReceived": 0,
+            "bytesSent": 0,
+            "currentRoundTripTime": 0.164,
+            "id": "CPOt3bQDLE_s2OHbTV7",
+            "localCandidateId": "IOt3bQDLE",
+            "nominated": false,
+            "packetsReceived": 0,
+            "packetsSent": 0,
+            "remoteCandidateId": "Is2OHbTV7",
+            "state": "succeeded",
+            "type": "candidate-pair"
+          },
+          {
+            "bytesReceived": 1348,
+            "bytesSent": 1318,
+            "currentRoundTripTime": 0.09,
+            "id": "CPwMS9ImDc_NfAwi+/+",
+            "localCandidateId": "IwMS9ImDc",
+            "nominated": true,
+            "packetsReceived": 9,
+            "packetsSent": 10,
+            "remoteCandidateId": "INfAwi+/+",
+            "state": "succeeded",
+            "type": "candidate-pair"
+          },
+          {
+            "candidateType": "host",
+            "id": "I/YgPi+qo",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "I0MhJjMoF",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "I4L2m6N5a",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "I5d4+zXdk",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "I9Uubz0RQ",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "INfAwi+/+",
+            "protocol": "udp",
+            "type": "remote-candidate"
+          },
+          {
+            "candidateType": "prflx",
+            "id": "IOt3bQDLE",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "Igh2IvCMO",
+            "protocol": "tcp",
+            "type": "local-candidate"
+          },
+          {
+            "candidateType": "host",
+            "id": "Is2OHbTV7",
+            "protocol": "tcp",
+            "type": "remote-candidate"
+          },
+          {
+            "candidateType": "srflx",
+            "id": "IwMS9ImDc",
+            "protocol": "udp",
+            "type": "local-candidate"
+          }
+        ]
+      }
+    ],
+    "remoteParticipants": 1,
+    "roomName": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+    "roomState": "connected",
+    "route": "VideoCall",
+    "session": "VideoCallSession"
+  }
+}

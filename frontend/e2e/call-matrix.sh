@@ -19,6 +19,7 @@ PKG=com.kolt12max.livi.dev
 MAESTRO=${MAESTRO:-$HOME/.maestro/maestro/bin/maestro}
 FLOWS="$(cd "$(dirname "$0")" && pwd)/flows"
 LOG_DIR=${LOG_DIR:-$(mktemp -d -t livi-call-matrix)}
+mkdir -p "$LOG_DIR" || exit 1
 export MAESTRO_CLI_NO_ANALYTICS=1 MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED=true
 
 FAILS=()

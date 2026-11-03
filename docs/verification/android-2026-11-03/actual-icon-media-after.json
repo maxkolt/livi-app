@@ -1,0 +1,51 @@
+{
+  "at": "2026-11-02T23:27:03.734Z",
+  "rooms": [
+    {
+      "name": "room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0",
+      "sid": "RM_WdMQvfSE7w9j",
+      "participants": [
+        {
+          "identity": "6a62fae2c2583f4d42b33d16",
+          "sid": "PA_LGcXiiuu9gmq",
+          "state": 2,
+          "joinedAt": "1793661955",
+          "tracks": [
+            {
+              "sid": "TR_AMHUY7XP5PXyk4",
+              "type": 0,
+              "source": 2,
+              "muted": false
+            },
+            {
+              "sid": "TR_VCYwWZjab49Cx2",
+              "type": 1,
+              "source": 1,
+              "muted": false
+            }
+          ]
+        },
+        {
+          "identity": "6aa075a657dcabd3e27db3b0",
+          "sid": "PA_fag5sYb8a4KY",
+          "state": 2,
+          "joinedAt": "1793661955",
+          "tracks": [
+            {
+              "sid": "TR_AM9VVUTWmaKvws",
+              "type": 0,
+              "source": 2,
+              "muted": false
+            },
+            {
+              "sid": "TR_VCR9EeCYp4kRKT",
+              "type": 1,
+              "source": 1,
+              "muted": false
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+11-03 01:22:27.365 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCallSession] Room disconnected event received', { sdkReason: 'DUPLICATE_IDENTITY',
+11-03 01:22:27.365 11488 11606 I ReactNativeJS:   reason: 'unknown',
+11-03 01:22:27.365 11488 11606 I ReactNativeJS:   isDisconnecting: false,
+11-03 01:22:27.365 11488 11606 I ReactNativeJS:   hasDisconnectPromise: false,
+11-03 01:22:27.365 11488 11606 I ReactNativeJS:   mediaReconnectInProgress: true }
+
+11-03 01:22:55.343 11488 11606 W ReactNativeJS: '[WARN]', '[VideoCallSession] Remote peer rejoin grace ended — ending call', { reason: 'grace_timeout',
+11-03 01:22:55.343 11488 11606 W ReactNativeJS:   callId: '1793657891855_5iyen4',
+11-03 01:22:55.343 11488 11606 W ReactNativeJS:   roomState: 'disconnected' }
+11-03 01:22:55.344 11488 11606 I ReactNativeJS: '[INFO]', '[LIVI][REL][event] signal_reconnect', { phase: 'remote_peer_rejoin_grace_failed',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   callId: '1793657891855_5iyen4',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   roomId: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   userId: '6a62fae2c2583f4d42b33d16',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   partnerUserId: '6aa075a657dcabd3e27db3b0',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   reason: 'grace_timeout' }
+11-03 01:22:55.344 11488 11606 I ReactNativeJS: '[INFO]', '[callLifecycle] transition', { event: 'endRequested',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   from: 'active',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   to: 'ending',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   callId: '1793657891855_5iyen4',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   role: 'caller',
+11-03 01:22:55.344 11488 11606 I ReactNativeJS:   reason: 'remote' }
+11-03 01:22:55.397 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCallSession] Removing socket handlers', { reason: 'callEnded',
+11-03 01:22:55.397 11488 11606 I ReactNativeJS:   handlersCount: 13,
+11-03 01:22:55.397 11488 11606 I ReactNativeJS:   myUserId: '6a62fae2c2583f4d42b33d16' }
+11-03 01:22:55.398 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCallSession] Cleared peerReconnecting UI', { reason: 'resetRemoteState', callId: '1793657891855_5iyen4' }
+11-03 01:22:55.480 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCall] Звонок завершается — пропускаем инициализацию/rebind сессии'
+11-03 01:22:55.486 11488 11606 I ReactNativeJS: '[INFO]', '[callAudio] close', { owner: 'direct',
+11-03 01:22:55.486 11488 11606 I ReactNativeJS:   reason: 'session:callEnded',
+11-03 01:22:55.486 11488 11606 I ReactNativeJS:   platform: 'android' }
+11-03 01:22:55.494 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCall] Звонок завершается — пропускаем инициализацию/rebind сессии'
+11-03 01:22:55.494 11488 11606 I ReactNativeJS: '[INFO]', '[navGuard] leave VideoCall — goBack', { routesLength: 3, videoCallCount: 1 }
+11-03 01:22:55.541 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCallSession] Cleared global session ref', { reason: 'callEnded', myUserId: '6a62fae2c2583f4d42b33d16' }
+11-03 01:22:55.546 11488 11606 I ReactNativeJS: '[INFO]', '[callLifecycle] transition', { event: 'ended',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   from: 'ending',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   to: 'idle',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   callId: null,
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   role: null,
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   reason: 'remote' }
+11-03 01:22:55.546 11488 11606 I ReactNativeJS: '[INFO]', '[LIVI][REL][event] call_outcome', { outcome: 'connected',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   reason: 'remote',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   role: 'caller',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   callId: '1793657891855_5iyen4',
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   ringMs: 3582,
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   connectMs: 2004,
+11-03 01:22:55.546 11488 11606 I ReactNativeJS:   talkMs: 278637 }
+11-03 01:22:56.475 11488 11606 I ReactNativeJS: '[INFO]', '[push] syncAppBadgeFromMissedCount', { missedTotal: 0,
+11-03 01:22:56.475 11488 11606 I ReactNativeJS:   unreadTotal: 0,
+11-03 01:22:56.475 11488 11606 I ReactNativeJS:   unreadRaw: 0,
+11-03 01:22:56.475 11488 11606 I ReactNativeJS:   unreadBaseline: 0,
+11-03 01:22:56.475 11488 11606 I ReactNativeJS:   total: 0 }
+11-03 01:22:56.844 11488 11606 W ReactNativeJS: '[WARN]', '[VideoCallSession] LiveKit connect attempt failed', { url: 'wss://api.liviapp.com/livekit',
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   urlHost: 'api.liviapp.com',
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   attempt: 1,
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   maxAttempts: 3,
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   isDnsError: false,
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   targetRoomName: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   connectReason: 'unexpected_disconnect',
+11-03 01:22:56.844 11488 11606 W ReactNativeJS:   error: 'could not establish pc connection' }
+11-03 01:22:56.846 11488 11606 I ReactNativeJS: '[INFO]', '[VideoCallSession] Connect aborted (call ended or user disconnect)', { ended: true, error: 'could not establish pc connection' }
+11-03 01:22:59.122 11488 11606 I ReactNativeJS: 'reconnecting, attempt: 6', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:22:59.122 11488 11606 I ReactNativeJS:   roomID: 'RM_zWFVurVKbMJ3',
+11-03 01:22:59.122 11488 11606 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+11-03 01:22:59.122 11488 11606 I ReactNativeJS:   pID: 'PA_EVWYTBajDdXN' }
+11-03 01:23:00.566 11488 11606 W ReactNativeJS: 'reconnect disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:23:00.566 11488 11606 W ReactNativeJS:   roomID: 'RM_zWFVurVKbMJ3',
+11-03 01:23:00.566 11488 11606 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+11-03 01:23:00.566 11488 11606 W ReactNativeJS:   pID: 'PA_ZNNPii8bCTLZ' }
+11-03 01:23:00.890 11488 11606 I ReactNativeJS: 'reconnecting, attempt: 1', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:23:00.890 11488 11606 I ReactNativeJS:   roomID: 'RM_zWFVurVKbMJ3',
+11-03 01:23:00.890 11488 11606 I ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+11-03 01:23:00.890 11488 11606 I ReactNativeJS:   pID: 'PA_ZNNPii8bCTLZ' }
+11-03 01:23:01.828 11488 11606 W ReactNativeJS: 'reconnect disconnected', { room: 'room_6a62fae2c2583f4d42b33d16_6aa075a657dcabd3e27db3b0',
+11-03 01:23:01.828 11488 11606 W ReactNativeJS:   roomID: 'RM_zWFVurVKbMJ3',
+11-03 01:23:01.828 11488 11606 W ReactNativeJS:   participant: '6a62fae2c2583f4d42b33d16',
+11-03 01:23:01.828 11488 11606 W ReactNativeJS:   pID: 'PA_dxRq3B6DBCRi' }

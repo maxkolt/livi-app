@@ -1,0 +1,5 @@
+NRestarts=0
+ActiveState=active
+SubState=running
+-- No entries --
+{"ok":true,"mongo":1,"socketIoRedisAdapter":true,"rateLimit":{"redisConfigured":true,"redisStatus":"ready","sensitiveFallbackMode":"bounded_memory","memoryKeys":0,"memoryMaxKeys":20000,"redisFallbackCount":0,"failClosedCount":0,"lastRedisFallbackAt":0,"lastRedisFallbackReason":""},"callKeepAlive":{"users":0,"sockets":0}}
