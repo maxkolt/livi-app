@@ -49,7 +49,7 @@ export const styles = StyleSheet.create({
     padding: 6,
     borderRadius: 18,
   },
-  /** Каждая кнопка ровно под своей карточкой: те же отступы от краёв и тот же зазор. */
+  /** Внешние края кнопок совпадают с краями видеокарточек. */
   bottomRowLandscape: {
     width: '100%',
     paddingHorizontal: LANDSCAPE_CARD_GAP,
@@ -157,8 +157,7 @@ export const styles = StyleSheet.create({
     fontSize: 22,
   },
   bottomRow: {
-    // Вертикаль: края кнопок совпадают с краями карточек — та же ширина, без своих отступов
-    // (на iOS 94%, на Android 100%).
+    // Оба внешних края кнопок совпадают с видеокарточками; вся ширина остаётся кликабельной.
     width: Platform.OS === 'android' ? '100%' : '94%',
     flexDirection: 'row',
     gap: Platform.OS === "android" ? 11 : 16,

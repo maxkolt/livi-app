@@ -90,6 +90,7 @@ function start(init: {
     player,
     opts: () => opts,
     ready: () => opts.events.onReady(),
+    error: (code: number) => opts.events.onError({ data: code }),
     state: (s: number) => {
       player.state = s;
       opts.events.onStateChange({ data: s });
@@ -234,14 +235,14 @@ describe('youtube player page', () => {
     expect(p.calls.filter((c) => c.startsWith('seek'))).toEqual(['seek:true']);
   });
 
-  it('finishes an in-flight buffer when list cells change roles', () => {
+  it('cancels hidden media loading when the active video needs the connection', () => {
     const p = start({ mode: 'pause', prebuffer: true });
     p.ready();
     p.state(1);
     p.win.__fliqPrebuffer(false);
     p.flushTimeouts();
 
-    expect(types(p.sent)).toEqual(['ready', 'primed', 'buffered']);
+    expect(types(p.sent)).toEqual(['ready', 'primed']);
     expect(p.calls).toContain('pause');
     expect(p.calls).toContain('seek:true');
   });
@@ -371,7 +372,7 @@ describe('youtube player page', () => {
     expect(p.calls[p.calls.length - 1]).toBe('pause');
   });
 
-  it('catches the end even when YouTube reports a longer duration than the video has', () => {
+  it('does not confuse a network time reset with the end of a video', () => {
     const p = start({ mode: 'play', loop: false });
     p.ready();
     p.player.time = 0;
@@ -383,14 +384,14 @@ describe('youtube player page', () => {
     p.state(3);
     p.player.time = 0.02;
     p.state(1);
-    expect(types(p.sent).slice(-1)).toEqual(['ended']);
-    expect(p.calls[p.calls.length - 1]).toBe('pause');
+    expect(types(p.sent)).not.toContain('ended');
+    expect(ticks(p.sent).slice(-1)).toEqual([{ c: 0.02, d: 30, p: 1 }]);
   });
 
   it('a looping Shorts video jumping back to the start counts as a new round', () => {
     const p = start({ mode: 'play' });
     p.ready();
-    p.player.time = 29.6;
+    p.player.time = 29.8;
     p.state(1);
     p.player.time = 0.2;
     p.poll();
@@ -435,5 +436,57 @@ describe('youtube player page', () => {
     p.player.muted = true;
     p.poll();
     expect(p.sent.filter((m) => m.t === 'mute')).toEqual([{ t: 'mute', m: true }]);
+  });
+
+  it('does not advance the feed while buffering close to the end', () => {
+    const p = start({ mode: 'play', loop: false });
+    p.ready();
+    p.player.time = 29.8;
+    p.state(1);
+    p.state(3);
+    p.flushTimeouts();
+    expect(types(p.sent)).not.toContain('ended');
+    expect(ticks(p.sent).slice(-1)[0].p).toBe(0);
+    p.state(1);
+    p.flushTimeouts();
+    expect(types(p.sent).slice(-1)).toEqual(['ended']);
+  });
+
+  it('stops ticking during an automatic pause even when resume is delayed by VPN', () => {
+    const p = start({ mode: 'play', loop: false });
+    p.ready();
+    p.state(1);
+    p.player.time = 29.9;
+    p.state(2);
+    p.poll();
+    p.flushTimeouts();
+    expect(ticks(p.sent).slice(-1)[0].p).toBe(0);
+    expect(types(p.sent)).not.toContain('ended');
+    expect(p.calls[p.calls.length - 1]).toBe('play');
+  });
+
+  it('does not mark hidden prebuffer as ready while its stream is buffering', () => {
+    const p = start({ mode: 'pause', prebuffer: true });
+    p.ready();
+    p.state(1);
+    p.state(3);
+    p.flushTimeouts();
+    expect(types(p.sent)).not.toContain('buffered');
+    p.state(1);
+    p.flushTimeouts();
+    expect(types(p.sent).slice(-1)).toEqual(['buffered']);
+  });
+
+  it('stops progress and end detection on a media error near the end', () => {
+    const p = start({ mode: 'play', loop: false });
+    p.ready();
+    p.player.time = 29.8;
+    p.state(1);
+    p.error(5);
+    p.poll();
+    p.flushTimeouts();
+    expect(ticks(p.sent).slice(-1)[0].p).toBe(0);
+    expect(types(p.sent)).not.toContain('ended');
+    expect(types(p.sent).slice(-1)).toEqual(['error']);
   });
 });

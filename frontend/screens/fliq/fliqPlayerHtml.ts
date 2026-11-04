@@ -78,8 +78,8 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   var buffering=false, buffered=false, prebufferTimer=null, starting=false, tick=null, lastMuted=null, quietUntil=0;
   var primedSent=false;
   // Конец ролика. Shorts-плеер YouTube сам крутит ролик по кругу (у конца — буферизация и снова
-  // PLAYING), а состояние 0 «закончился» не присылает. Поэтому конец ловим по времени: таймер
-  // на момент окончания и, на крайний случай, скачок времени с конца в начало.
+  // PLAYING), а состояние 0 «закончился» не присылает. Конец подтверждаем длительностью,
+  // чтобы сброс времени после смены сети не перелистывал недосмотренный ролик.
   var ended=false, endTimer=null, lastC=0, seekedAt=0;
   function send(m){try{window.ReactNativeWebView.postMessage(JSON.stringify(m));}catch(e){}}
   // Время ролика для полосы: сразу при старте, паузе и буферизации, пока играет — 4 раза в секунду.
@@ -87,12 +87,11 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
   function sendTick(p){
     var c=0, d=0;
     try{ c=player.getCurrentTime(); d=player.getDuration(); }catch(_){ return; }
-    // Время отскочило к началу без нашей перемотки — плеер сам начал круг заново. Длительность
-    // тут не опора: у части Shorts getDuration() больше настоящей (6 с у ролика на 3.5 с).
-    if(p&&lastC>1.5&&c<1&&c<lastC-1&&Date.now()-seekedAt>1500){ lastC=c; reachedEnd(); if(ended) return; }
+    // Сброс времени при переподключении — не конец ролика. Нужен подтверждённый конец.
+    if(p&&d>0&&lastC>=d-END_SLACK_S&&c<1&&c<lastC-1&&Date.now()-seekedAt>1500){ lastC=c; reachedEnd(); if(ended) return; }
     lastC=c;
     send({t:'tick',c:c,d:d,p:p?1:0,at:Date.now()});
-    if(p&&!loop&&d>0) scheduleEnd(d-c); else clearEndTimer();
+    if(p&&!loop&&d>0&&isFinite(d)) scheduleEnd(d-c); else clearEndTimer();
   }
   function startTicks(){
     sendTick(true);
@@ -106,10 +105,11 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
     clearEndTimer();
     endTimer=setTimeout(function(){
       endTimer=null;
+      if(want!=='play'||ended||player.getPlayerState()!==1) return;
       var c=0, d=0;
       try{ c=player.getCurrentTime(); d=player.getDuration(); }catch(_){ return; }
-      if(d-c<=END_SLACK_S) reachedEnd(); else scheduleEnd(d-c);
-    },Math.max(0,(left-END_SLACK_S/2)*1000));
+      if(d>0&&d-c<=END_SLACK_S) reachedEnd(); else if(d>0&&isFinite(d)) scheduleEnd(d-c);
+    },Math.max(100,(left-END_SLACK_S/2)*1000));
   }
   // loop — круг заново (его делает сам плеер; сообщаем, чтобы RN сбросил полосу и счёт);
   // иначе встаём на последнем кадре и отдаём решение ленте.
@@ -144,6 +144,12 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
     if(!ready) return;
     try{
       var s=player.getPlayerState();
+      if(buffering&&!prebuffer&&want!=='play'){
+        clearPrebufferTimer(); buffering=false;
+        seekedAt=Date.now(); lastC=0;
+        player.pauseVideo(); player.seekTo(0,true);
+        return;
+      }
       // Досмотренный ролик снова на экране — с начала.
       if(want==='play'&&ended){ ended=false; seekedAt=Date.now(); lastC=0; player.seekTo(0,true); }
       if(want==='play'){
@@ -197,8 +203,7 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
     if(!ready||buffering) return;
     try{ seekedAt=Date.now(); ended=false; player.seekTo(Math.max(0,+sec||0),!!final); }catch(e){}
   };
-  // Уже начатую подгрузку не обрываем из-за короткой смены ролей ячеек при свайпе:
-  // она сама закончится по таймеру. false лишь запрещает начинать новую.
+  // Текущий ролик буферизуется — освобождаем канал от скрытых медиапотоков.
   window.__fliqPrebuffer=function(p){ prebuffer=!!p; apply(); };
   window.onYouTubeIframeAPIReady=function(){
     // youtube-nocookie: на части телефонов обычный хост отдаёт Shorts-плеер с лайками,
@@ -214,6 +219,8 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
         },
         onStateChange:function(e){
           if(buffering){
+            if(e.data===3){ clearPrebufferTimer(); return; }
+            if(e.data===0){ finishPrebuffer(); return; }
             if(e.data===1){
               if(!primedSent){ primedSent=true; send({t:'primed'}); }
               // Первый кадр — ещё не буфер. Даём скрытому ролику скачать реальный запас,
@@ -225,6 +232,11 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
             }
             return;
           }
+          // Даже автоматическая пауза должна остановить тики и таймер конца до повторного play.
+          if(e.data!==1){
+            if(tick){ clearInterval(tick); tick=null; }
+            sendTick(false);
+          }
           // Запоздавший PLAYING не отменяет паузу. Касания принимает RN, поэтому
           // продолжить после hold может только явный __fliqUserToggle / команда play.
           if(e.data===1&&want!=='play'){ try{player.pauseVideo();}catch(_){} return; }
@@ -235,9 +247,6 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
             // Автосубтитры YouTube включает сам (cc_load_policy их не гасит) — модуль выгружаем.
             try{ player.unloadModule('captions'); player.unloadModule('cc'); }catch(_){}
             startTicks();
-          } else {
-            if(tick){ clearInterval(tick); tick=null; }
-            sendTick(false);
           }
           // Обычный (не Shorts) плеер всё-таки присылает «закончился».
           if(e.data===0&&want==='play'){
@@ -245,7 +254,12 @@ ${init.widthDp ? `window.__fliqFit(${Math.round(init.widthDp)});` : ''}
             else reachedEnd();
           }
         },
-        onError:function(e){send({t:'error',c:e.data});}
+        onError:function(e){
+          if(tick){ clearInterval(tick); tick=null; }
+          clearEndTimer();
+          if(!buffering) sendTick(false);
+          send({t:'error',c:e.data});
+        }
       }});
   };
   var tag=document.createElement('script');

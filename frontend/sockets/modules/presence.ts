@@ -13,6 +13,14 @@ const welcomeState = new WelcomePresenceState();
 let welcomeConnectionGeneration = 0;
 let welcomeSyncTimer: ReturnType<typeof setTimeout> | null = null;
 
+export function getWelcomePresenceSnapshot(): WelcomePresencePayload | null {
+  return welcomeState.snapshot();
+}
+
+export function refreshWelcomePresenceSnapshot(): void {
+  if (socket.connected) socket.emit('presence:welcome:sync');
+}
+
 function dispatchWelcomePresence(data: WelcomePresencePayload): void {
   for (const cb of [...shared.welcomePresenceSubscribers]) {
     try { cb(data); } catch (e) { logger.warn('[socket] presence:welcome subscriber error', e); }

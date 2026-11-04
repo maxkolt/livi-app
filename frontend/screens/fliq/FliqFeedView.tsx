@@ -68,6 +68,7 @@ import {
   takeWarmFliqFeed,
   type FliqItem,
 } from './fliqApi';
+import { FLIQ_UNAVAILABLE_CODES } from './fliqRecovery';
 import { youtubeShareUrl, youtubeThumbUrl } from './fliqLinks';
 import { useFliqTopics, type FliqTopic } from './fliqTopics';
 import { useFliqSound } from './fliqSound';
@@ -79,14 +80,10 @@ import { FLIQ_PROGRESS_ROW_H, FliqProgressBar, useFliqProgress } from './FliqPro
 import { FliqSavedView } from './FliqSavedView';
 import { useFliqSaved } from './fliqSaved';
 
-/** Подождать первый кадр, прежде чем показать «Видео не загружается». */
-const STALL_MS = 10_000;
 /** Сколько держать плееры после ухода с вкладки (вернулся быстро — ролик на месте). */
 const KEEP_PLAYERS_MS = 30_000;
 /** Человек сам остановил ролик — кадр держим дольше, чтобы вернуться ровно к нему. */
 const KEEP_HELD_PLAYERS_MS = 10 * 60_000;
-/** Ошибки IFrame API, после которых ролик пропускаем сами. */
-const SKIP_ERROR_CODES = new Set([2, 5, 100, 101, 150]);
 const PAGE_SIZE = 10;
 const CARD_RADIUS = 22;
 /** Свет вокруг рамки перетекает к въезжающему ролику, когда тот занял эту долю рамки. */
@@ -159,6 +156,7 @@ export function FliqFeedView({
   itemsRef.current = items;
   const [status, setStatus] = useState<'idle' | 'loading' | 'ready' | 'error' | 'empty'>('idle');
   const [activeIndex, setActiveIndex] = useState(0);
+  const [runningId, setRunningId] = useState<string | null>(null);
   /**
    * Ролик, от которого свет вокруг рамки, — по самой ленте: въезжающий, как только занял
    * AMBIENT_SWITCH_AT рамки, а не когда стал активным (60%, плюс загрузка превью).
@@ -187,8 +185,6 @@ export function FliqFeedView({
   const [heldId, setHeldId] = useState<string | null>(null);
   /** Ролик на экране уже показал первый кадр — можно подгружать следующий, не отнимая у него сеть. */
   const [startedId, setStartedId] = useState<string | null>(null);
-  const startedIdRef = useRef(startedId);
-  startedIdRef.current = startedId;
   /** Готовые скрытые ролики: второй следующий запускаем только после ближайшего, без конкуренции за сеть. */
   const [bufferedIds, setBufferedIds] = useState<ReadonlySet<string>>(() => new Set());
   /**
@@ -254,14 +250,6 @@ export function FliqFeedView({
     if (!prewarming) return;
     if (status === 'error' || status === 'empty') settlePrewarm(status);
   }, [prewarming, settlePrewarm, status]);
-
-  // Ушли на другую вкладку посреди ролика — по возвращении он стоит на паузе там же,
-  // как после своей паузы: дальше по нажатию. Ещё не заигравший ролик просто запустится.
-  useEffect(() => {
-    if (active) return;
-    const id = itemsRef.current[activeIndexRef.current]?.id;
-    if (id && id === startedIdRef.current) setHeldId(id);
-  }, [active]);
 
   useEffect(() => {
     if (active || prewarming) {
@@ -415,7 +403,10 @@ export function FliqFeedView({
       if (dur > 0) w.durSec = dur;
       watchRef.current.set(id, w);
       positionRef.current.set(id, cur);
-      if (isActiveId(id)) onTick(cur, dur, running, sentAt);
+      if (isActiveId(id)) {
+        setRunningId(running ? id : null);
+        onTick(cur, dur, running, sentAt);
+      }
     },
     [isActiveId, onTick],
   );
@@ -454,12 +445,11 @@ export function FliqFeedView({
   );
 
   const onPlayError = useCallback(
-    (id: string, index: number, code: number) => {
-      if (!SKIP_ERROR_CODES.has(code)) return;
+    (id: string, code: number) => {
+      if (!FLIQ_UNAVAILABLE_CODES.has(code)) return;
       reportFliqUnplayable(id, code);
-      setTimeout(() => goNext(index), 700);
     },
-    [goNext],
+    [],
   );
 
   /** Звук и пауза из самого плеера считаются, только если это ролик на экране. */
@@ -487,7 +477,7 @@ export function FliqFeedView({
     setStartedId(id);
     setNeighborsOn(true);
   }, []);
-  /** Ближайший уже тянет поток — следующий за ним можно будить, не дожидаясь полного запаса. */
+  /** Следующий медиапоток разрешаем только после завершения подгрузки ближайшего. */
   const markChainReady = useCallback((id: string) => {
     setBufferedIds((current) => {
       if (current.has(id)) return current;
@@ -502,12 +492,6 @@ export function FliqFeedView({
       settlePrewarm('buffered');
     }
   }, [markChainReady, settlePrewarm]);
-  useEffect(() => {
-    if (neighborsOn || status !== 'ready' || !active) return;
-    const timer = setTimeout(() => setNeighborsOn(true), 4000);
-    return () => clearTimeout(timer);
-  }, [neighborsOn, status, active]);
-
   const onShare = useCallback((item: FliqItem) => {
     // Пересылка — сильный сигнал интереса к теме.
     queueFliqEvent({ id: item.id, watchedMs: 0, durationMs: item.durationSec * 1000, shared: true });
@@ -648,7 +632,7 @@ export function FliqFeedView({
         !playbackOn || offset !== 0 ? 'pause' : heldId === item.id ? 'hold' : 'play';
       const activeId = items[activeIndex]?.id;
       const nextId = items[activeIndex + 1]?.id;
-      const mayPrebuffer = playbackOn && !!activeId && startedId === activeId;
+      const mayPrebuffer = playbackOn && !!activeId && heldId !== activeId && runningId === activeId;
       const prewarmCurrent = prewarming && offset === 0 && startedId == null;
       return (
         <FliqSlide
@@ -659,13 +643,12 @@ export function FliqFeedView({
           cardH={cardH}
           wide={wide}
           boxW={boxW}
-          // Ближайший WebView/API поднимается сразу; медиапоток пойдёт лишь после первого
-          // кадра текущего. Предыдущий и второй следующий подключаются следом.
+          // До первого кадра весь канал отдаём текущему ролику, включая загрузку WebView/API.
           mountPlayer={
             keepPlayers &&
             (prewarming
               ? offset === 0
-              : offset === 0 || offset === 1 || (neighborsOn && offset >= -1 && offset <= 2))
+              : offset === 0 || (neighborsOn && offset >= -1 && offset <= 2))
           }
           mode={mode}
           prebuffer={
@@ -690,7 +673,6 @@ export function FliqFeedView({
           onUserPause={onUserPause}
           onUserPlay={onUserPlay}
           onStarted={onStarted}
-          onPrimed={markChainReady}
           onBuffered={onBuffered}
         />
       );
@@ -702,6 +684,7 @@ export function FliqFeedView({
       neighborsOn,
       prewarming,
       startedId,
+      runningId,
       onStarted,
       onBuffered,
       lang,
@@ -994,7 +977,7 @@ type FliqSlideProps = {
   /** Доиграл до конца и есть следующий ролик (loop выключен). */
   onEnded: (id: string, index: number) => void;
   loop: boolean;
-  onPlayError: (id: string, index: number, code: number) => void;
+  onPlayError: (id: string, code: number) => void;
   onSkip: (index: number) => void;
   /** Перемотка полосой под рамкой: плеер кладёт сюда свою, пока смонтирован. */
   seekers: MutableRefObject<Map<string, (sec: number, final: boolean) => void>>;
@@ -1002,7 +985,6 @@ type FliqSlideProps = {
   onUserPause: (id: string, index: number) => void;
   onUserPlay: (id: string) => void;
   onStarted: (id: string) => void;
-  onPrimed: (id: string) => void;
   onBuffered: (id: string) => void;
 };
 
@@ -1032,7 +1014,6 @@ const FliqSlide = memo(function FliqSlide({
   onUserPause,
   onUserPlay,
   onStarted,
-  onPrimed,
   onBuffered,
 }: FliqSlideProps) {
   const [firstFrame, setFirstFrame] = useState(false);
@@ -1071,12 +1052,6 @@ const FliqSlide = memo(function FliqSlide({
     if (playing && !timingRef.current.playAt) timingRef.current.playAt = Date.now();
   }, [playing]);
 
-  useEffect(() => {
-    if (!playing || firstFrame || stalled) return;
-    const timer = setTimeout(() => setStalled(true), STALL_MS);
-    return () => clearTimeout(timer);
-  }, [playing, firstFrame, stalled, retryKey]);
-
   const handleReady = useCallback(() => {
     timingRef.current.readyMs = Date.now() - timingRef.current.mountAt;
     logger.info('[fliq] player ready', { id: item.id, readyMs: timingRef.current.readyMs });
@@ -1091,7 +1066,6 @@ const FliqSlide = memo(function FliqSlide({
     onBuffered(item.id);
     setPrimed(true);
   }, [item.id, onBuffered]);
-  const handlePrimed = useCallback(() => onPrimed(item.id), [item.id, onPrimed]);
   const handleFirstFrame = useCallback(() => {
     const t = timingRef.current;
     logger.info('[fliq] first frame', {
@@ -1133,12 +1107,20 @@ const FliqSlide = memo(function FliqSlide({
   const handleUserPlay = useCallback(() => onUserPlay(item.id), [item.id, onUserPlay]);
   const handleError = useCallback(
     (code: number) => {
-      // Не загрузился сам плеер (нет сети, упал процесс WebView) — предложить повтор.
-      if (code === -1 || code === -2) setStalled(true);
-      else onPlayError(item.id, index, code);
+      // Сетевой сбой восстанавливает общий плеер; окончательный отказ остаётся на этом видео.
+      if (code === -3 || FLIQ_UNAVAILABLE_CODES.has(code)) setStalled(true);
+      onPlayError(item.id, code);
     },
-    [item.id, index, onPlayError],
+    [item.id, onPlayError],
   );
+  const handleRecovery = useCallback(() => {
+    const now = Date.now();
+    timingRef.current = { mountAt: now, readyMs: 0, bufferedMs: 0, playAt: playing ? now : 0 };
+    setStalled(false);
+    setFirstFrame(false);
+    setPrimed(false);
+    coverOpacity.setValue(1);
+  }, [coverOpacity, playing]);
   const retry = useCallback(() => {
     setStalled(false);
     setFirstFrame(false);
@@ -1193,7 +1175,6 @@ const FliqSlide = memo(function FliqSlide({
             prebufferMs={prebufferMs}
             widthDp={cardW}
             onReady={handleReady}
-            onPrimed={handlePrimed}
             onBuffered={handleBuffered}
             onFirstFrame={handleFirstFrame}
             onProgress={handleProgress}
@@ -1204,6 +1185,7 @@ const FliqSlide = memo(function FliqSlide({
             onUserPause={handleUserPause}
             onUserPlay={handleUserPlay}
             onError={handleError}
+            onRecovery={handleRecovery}
             style={StyleSheet.absoluteFill}
           />
         ) : null}
@@ -1228,7 +1210,7 @@ const FliqSlide = memo(function FliqSlide({
             ) : null}
           </Animated.View>
         </View>
-        {stalled && !firstFrame ? (
+        {stalled ? (
           <View style={styles.stalledShade}>
             <FliqMessage
               icon="cloud-offline-outline"

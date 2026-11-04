@@ -29,7 +29,8 @@ jest.mock('../../utils/logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));
 
-import { onPresenceUpdate, beginWelcomePresenceRefresh } from './presence';
+import { onPresenceUpdate, beginWelcomePresenceRefresh, getWelcomePresenceSnapshot, refreshWelcomePresenceSnapshot } from './presence';
+import { socket } from './socketCore';
 import { shared } from './shared';
 
 describe('presence snapshots after reconnect', () => {
@@ -51,6 +52,22 @@ describe('presence snapshots after reconnect', () => {
 });
 
 describe('welcome HTTP/socket ordering', () => {
+  it('exposes the confirmed snapshot immediately to a remounted banner', () => {
+    const data = { ok: true, epoch: 'welcome-cache-read', revision: 1, list: ['me', 'peer'] };
+    socketHandlers.get('presence:welcome')?.(data);
+    expect(getWelcomePresenceSnapshot()).toBe(data);
+  });
+
+  it('requests a socket snapshot independently of HTTP and does not buffer sync requests while offline', () => {
+    (socket.emit as jest.Mock).mockClear();
+    socket.connected = true;
+    refreshWelcomePresenceSnapshot();
+    expect(socket.emit).toHaveBeenCalledWith('presence:welcome:sync');
+    socket.connected = false;
+    refreshWelcomePresenceSnapshot();
+    expect(socket.emit).toHaveBeenCalledTimes(1);
+  });
+
   it('reuses a current snapshot for a conditional refresh after the UI skipped an update', () => {
     const data = { ok: true, epoch: 'welcome-server-a', revision: 10, list: [{ id: 'peer', nick: 'Peer', avatarVer: 1 }] };
     socketHandlers.get('presence:welcome')?.(data);

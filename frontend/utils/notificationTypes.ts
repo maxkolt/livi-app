@@ -7,6 +7,10 @@ export type PushNotificationData = Partial<CallIncomingPayload> & {
   roomId?: string;
   messageId?: string;
   sentAt?: string;
+  messagePreview?: string;
+  unreadFromSender?: string | number;
+  unreadUpdatedAt?: string | number;
+  enc?: unknown;
   /** Producers use platform-specific values; consumers normalize their truthiness. */
   endedFromActive?: unknown;
 };

@@ -32,11 +32,18 @@ function moveDigits(image) {
   }
 }
 
-async function repaintBubble(image) {
+async function repaintBubble(image, previous = HEADER_BUBBLE) {
   const { width, data } = image.bitmap;
   const scale = width / SOURCE_WIDTH;
   // Полностью убрать прежнее облако вместе с тенью. По краям здесь ровный фон.
-  const rect = [Math.min(190, HEADER_BUBBLE.cx - HEADER_BUBBLE.w / 2 - 4), 128, 305, 211]
+  const bounds = [previous, HEADER_BUBBLE].map(b => [
+    b.cx - b.w / 2 - 4, b.cy - b.h / 2 - 4,
+    b.cx + b.w / 2 + 4, b.cy + b.h * 0.76 + 4,
+  ]);
+  const rect = [
+    Math.min(190, ...bounds.map(b => b[0])), Math.min(128, ...bounds.map(b => b[1])),
+    Math.max(305, ...bounds.map(b => b[2])), Math.max(211, ...bounds.map(b => b[3])),
+  ]
     .map(v => Math.round(v * scale));
   fillRect(image, rect);
   const [x0, y0, x1, y1] = rect;
@@ -106,4 +113,4 @@ if (require.main === module) {
   relayoutSpatialHeader(process.argv[2] || path.join(__dirname, '..', 'assets/spatial/stage-hq.png'))
     .catch(error => { console.error(error); process.exit(1); });
 }
-module.exports = { relayoutSpatialHeader };
+module.exports = { relayoutSpatialHeader, repaintBubble };

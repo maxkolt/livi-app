@@ -2,6 +2,7 @@ import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/types';
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
+  ActivityIndicator,
   AppState,
   BackHandler,
   Keyboard,
@@ -169,6 +170,8 @@ function HomeWelcomeChatsViewInner({
   const friendIds = useMemo(() => allFriends.map((f) => String(f.id)), [allFriends]);
   const unreadRevision = JSON.stringify(unreadByUser);
   const { previews, reloadPreviews, dropPreviews } = useChatPreviews(friendIds, lang, active, unreadRevision, unreadByUser);
+  const waitingForUnreadPreview = (filter === 'unread' && !dataReady) ||
+    friendIds.some(id => (unreadByUser[id] || 0) > 0 && !previews[id]?.text?.trim());
 
   // The shared snapshot also updates hidden panes before their first visible frame.
 
@@ -294,7 +297,10 @@ function HomeWelcomeChatsViewInner({
     // Только реальные переписки: без превью строка = «пустой» чат (после удаления должна пропасть).
     let list = allFriends.filter((f) => {
       const id = String(f.id);
-      return !!previews[id] || (unreadByUser[id] || 0) > 0;
+      // A notification row becomes visible with both its message and its badge.
+      // Legacy/oversized push payloads can still require a server read.
+      if ((unreadByUser[id] || 0) > 0) return !!previews[id]?.text?.trim();
+      return !!previews[id];
     });
     if (filter === 'unread') {
       list = list.filter((f) => (unreadByUser[String(f.id)] || 0) > 0);
@@ -644,7 +650,9 @@ function HomeWelcomeChatsViewInner({
                 index,
               })}
               ListEmptyComponent={
-                dataReady && (allFriends.length > 0 || !Object.values(unreadByUser).some(n => n > 0)) ? <View style={styles.emptyWrap}>
+                waitingForUnreadPreview ? <View style={styles.emptyWrap}>
+                  <ActivityIndicator testID="unread-previews-loading" color={UI_ACCENT} />
+                </View> : dataReady && (allFriends.length > 0 || !Object.values(unreadByUser).some(n => n > 0)) ? <View style={styles.emptyWrap}>
                   <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
                 </View> : null
               }

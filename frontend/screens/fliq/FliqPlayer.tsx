@@ -1,16 +1,18 @@
 // Плееры Fliq — родные плееры источников в WebView.
 // YouTube: официальный IFrame Player API; касания и значок продолжения при своей паузе — в RN.
 // TikTok / Instagram: их встраиваемые страницы как есть.
-import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef } from 'react';
+import React, { forwardRef, memo, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
 import { Linking, Pressable, StyleSheet, View, type StyleProp, type ViewStyle } from 'react-native';
 import { WebView, type WebViewMessageEvent } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
+import NetInfo from '@react-native-community/netinfo';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 import { logger } from '../../utils/logger';
 import { useLang } from '../../store/lang';
 import { splitUrl } from './fliqLinks';
 import { fliqT } from './fliqI18n';
 import { MIN_PLAYER_CSS_W, PLAYER_ORIGIN, YT_PLAYING, youtubePlayerHtml, type FliqPlayMode } from './fliqPlayerHtml';
+import { FliqRecovery } from './fliqRecovery';
 
 export type { FliqPlayMode } from './fliqPlayerHtml';
 
@@ -87,6 +89,8 @@ type FliqYoutubePlayerProps = {
   onUserPlay?: () => void;
   /** Код ошибки IFrame API (2, 5, 100, 101, 150) или -1 — не загрузился сам API. */
   onError?: (code: number) => void;
+  /** Текущий ролик пересоздаётся после сетевого зависания, с сохранением позиции. */
+  onRecovery?: () => void;
   style?: StyleProp<ViewStyle>;
 };
 
@@ -115,6 +119,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   onUserPause,
   onUserPlay,
   onError,
+  onRecovery,
   style,
 }, handleRef) {
   const lang = useLang((s) => s.lang);
@@ -122,17 +127,49 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   const playerScale = widthDp && widthDp > 0 ? Math.min(1, widthDp / MIN_PLAYER_CSS_W) : 1;
   const playBadgeSize = 56 * playerScale;
   const ref = useRef<WebView>(null);
+  const [generation, setGeneration] = useState(0);
+  const generationRef = useRef(generation);
+  generationRef.current = generation;
+  const resumeRef = useRef(startSec);
+  const durationRef = useRef(0);
   // html собирается один раз: смена props — команды в страницу, а не перезагрузка.
   const initRef = useRef({ mode, muted, prebuffer, prebufferMs, startSec, widthDp, loop });
+  initRef.current = { mode, muted, prebuffer, prebufferMs, startSec: resumeRef.current, widthDp, loop };
   const source = useMemo(
     () => ({ html: youtubePlayerHtml(videoId, initRef.current), baseUrl: PLAYER_ORIGIN }),
-    [videoId],
+    [videoId, generation],
   );
   const firstFrameRef = useRef(false);
-  const cbRef = useRef({ onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError });
-  cbRef.current = { onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError };
-  const stateRef = useRef({ mode, muted, prebuffer });
-  stateRef.current = { mode, muted, prebuffer };
+  const cbRef = useRef({ onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError, onRecovery });
+  cbRef.current = { onReady, onPrimed, onBuffered, onFirstFrame, onProgress, onLoop, onEnded, onMuteChange, onUserPause, onUserPlay, onError, onRecovery };
+  const stateRef = useRef({ mode, muted, prebuffer, loop });
+  stateRef.current = { mode, muted, prebuffer, loop };
+  const recovery = useMemo(() => new FliqRecovery({
+    reload: () => {
+      logger.info('[fliq] recovering current video', { videoId, resumeSec: resumeRef.current });
+      generationRef.current += 1;
+      firstFrameRef.current = false;
+      cbRef.current.onProgress?.(resumeRef.current, durationRef.current, false, Date.now());
+      cbRef.current.onRecovery?.();
+      setGeneration((value) => value + 1);
+    },
+    stalled: () => cbRef.current.onError?.(-3),
+  }), [videoId]);
+  useEffect(() => {
+    recovery.setMode(mode, Date.now());
+  }, [mode, recovery]);
+  useEffect(() => {
+    const timer = setInterval(() => recovery.check(Date.now()), 1000);
+    let previous: { connected: boolean; type: string } | null = null;
+    const unsubscribe = NetInfo.addEventListener((network) => {
+      const connected = network.isConnected !== false && network.isInternetReachable !== false;
+      if (previous && connected && (!previous.connected || previous.type !== network.type)) {
+        recovery.networkRestored(Date.now());
+      }
+      previous = { connected, type: network.type };
+    });
+    return () => { clearInterval(timer); unsubscribe(); };
+  }, [recovery]);
 
   const inject = useCallback((js: string) => {
     ref.current?.injectJavaScript(`${js};true;`);
@@ -142,6 +179,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
     const st = stateRef.current;
     inject(
       `window.__fliqMute&&window.__fliqMute(${st.muted});` +
+        `window.__fliqLoop&&window.__fliqLoop(${st.loop});` +
         `window.__fliqPrebuffer&&window.__fliqPrebuffer(${st.prebuffer});` +
         `window.__fliq&&window.__fliq('${st.mode}')`,
     );
@@ -175,6 +213,7 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
 
   const onMessage = useCallback(
     (e: WebViewMessageEvent) => {
+      if (generation !== generationRef.current) return;
       let msg: YoutubePlayerMessage | null = null;
       try {
         msg = JSON.parse(e.nativeEvent.data);
@@ -193,6 +232,9 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
         firstFrameRef.current = true;
         cb.onFirstFrame?.();
       } else if (msg?.t === 'tick') {
+        resumeRef.current = Math.max(0, Number(msg.c) || 0);
+        durationRef.current = Math.max(0, Number(msg.d) || 0);
+        recovery.progress(resumeRef.current, msg.p !== 0, Date.now());
         cb.onProgress?.(Number(msg.c) || 0, Number(msg.d) || 0, msg.p !== 0, Number(msg.at) || 0);
       } else if (msg?.t === 'loop') {
         cb.onLoop?.();
@@ -201,15 +243,18 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
       } else if (msg?.t === 'mute') {
         cb.onMuteChange?.(!!msg.m);
       } else if (msg?.t === 'userpause') {
+        recovery.setMode('hold', Date.now());
         cb.onUserPause?.();
       } else if (msg?.t === 'userplay') {
+        recovery.setMode('play', Date.now());
         cb.onUserPlay?.();
       } else if (msg?.t === 'error') {
         logger.warn('[fliq] youtube player error', { videoId, code: msg.c });
+        recovery.error(Number(msg.c));
         cb.onError?.(Number(msg.c));
       }
     },
-    [videoId, syncAll],
+    [videoId, syncAll, recovery, generation],
   );
 
   const onShouldStart = useCallback((req: ShouldStartLoadRequest) => {
@@ -224,13 +269,21 @@ export const FliqYoutubePlayer = memo(forwardRef<FliqYoutubePlayerHandle, FliqYo
   return (
     <View style={[styles.youtubeHost, style]}>
       <WebView
+        key={generation}
         ref={ref}
         {...WEBVIEW_COMMON}
         pointerEvents="none"
         source={source}
         onMessage={onMessage}
         onShouldStartLoadWithRequest={onShouldStart}
-        onRenderProcessGone={() => cbRef.current.onError?.(-2)}
+        onError={() => {
+          if (generation !== generationRef.current) return;
+          recovery.error(-1); cbRef.current.onError?.(-1);
+        }}
+        onRenderProcessGone={() => {
+          if (generation !== generationRef.current) return;
+          recovery.error(-2); cbRef.current.onError?.(-2);
+        }}
         style={styles.web}
         containerStyle={StyleSheet.absoluteFill}
       />

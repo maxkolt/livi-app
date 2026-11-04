@@ -1353,7 +1353,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             if (u && typeof (u).nick === 'string') fromNick = String((u).nick).trim() || undefined;
           } catch {}
 
-          const unreadCount = await countUnreadTotal(payload.to);
+          const [unreadCount, unreadFromSender] = await Promise.all([
+            countUnreadTotal(payload.to), countUnreadFrom(payload.to, me),
+          ]);
+          const unreadUpdatedAt = Date.now();
           const msgType = payload.type === 'image' ? 'image' : payload.type === 'audio' ? 'audio' : payload.type === 'sticker' ? 'sticker' : payload.type === 'video_note' ? 'video_note' : 'text';
           const albumCount = payload.type === 'image' ? imageUris.length : 0;
           const messagePreview =
@@ -1370,6 +1373,9 @@ function registerMessageHandlers(io: Server, sock: Socket) {
             fromNick: fromNick || '',
             sentAt: message.timestamp.toISOString(),
             unreadCount,
+            unreadFromSender,
+            unreadUpdatedAt,
+            ...(enc ? { enc } : {}),
             messagePreview,
             previewKind,
             albumCount,
@@ -1377,22 +1383,24 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         } catch {}
       };
 
-      // Живая доставка с подтверждением (sockets/liveMessageDelivery.ts): не дошло —
-      // офлайн-очередь и пуш, как если бы получатель был офлайн.
-      const delivery = await deliverLiveMessage(io, payload.to, emitPayload, () => {
-        void saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
+      // Commit unread before delivery: the message and its per-chat count are one snapshot.
+      if (!(await isViewingChatWithUser(payload.to, me))) {
+        await addUnread(payload.to, messageId, me);
+      }
+      const deliveredPayload = {
+        ...emitPayload,
+        unreadCount: await countUnreadFrom(payload.to, me),
+        unreadUpdatedAt: Date.now(),
+      };
+      const delivery = await deliverLiveMessage(io, payload.to, deliveredPayload, () => {
+        void saveOfflineMessage(payload.to, deliveredPayload);
         void sendNewMessagePush(true);
       });
       const recipientOnline = delivery !== 'offline';
 
-      // Счётчик непрочитанных: не копим, если получатель уже в этом чате (chat:viewing).
-      if (!(await isViewingChatWithUser(payload.to, me))) {
-        await addUnread(payload.to, messageId, me);
-      }
-
       // Оффлайн-очередь, если получатель не онлайн (emit выше не отправлялся).
       if (!recipientOnline) {
-        await saveOfflineMessage(payload.to, { ...emitPayload, id: messageId });
+        await saveOfflineMessage(payload.to, deliveredPayload);
       }
 
       // Подтверждение отправителю после персиста — статусы/ретраи outbox остаются корректными.

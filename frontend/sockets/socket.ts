@@ -44,6 +44,8 @@ export {
   onPresenceUpdate,
   onWelcomePresence,
   beginWelcomePresenceRefresh,
+  getWelcomePresenceSnapshot,
+  refreshWelcomePresenceSnapshot,
 } from "./modules/presence";
 
 

@@ -10,6 +10,8 @@ interface IOfflineMessage extends Document {
   messageId: string; // ID сообщения
   messageData: {
     id: string;
+    unreadCount?: number;
+    unreadUpdatedAt?: number;
     from: string;
     to: string;
     type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
@@ -56,6 +58,8 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
   },
   messageData: {
     id: { type: String, required: true },
+    unreadCount: { type: Number },
+    unreadUpdatedAt: { type: Number },
     from: { type: String, required: true },
     to: { type: String, required: true },
     type: { type: String, enum: ['text', 'image', 'audio', 'sticker', 'video_note'], required: true },

@@ -98,7 +98,7 @@ const GROUPS = [
   { name: 'data-right', rect: [1170, 1020, 1440, 1340], plane: PLANE.deep },
   { name: 'chart-right', rect: [1060, 1430, 1440, 1600], plane: PLANE.deep },
   { name: 'chart-left', rect: [0, 1460, 360, 1720], plane: PLANE.deep },
-  { name: 'honeycomb', rect: [0, 1780, 270, 2140], plane: PLANE.deep },
+  { name: 'honeycomb', rect: [0, 1820, 270, 2180], plane: PLANE.deep },
   // Карта — шире: линии через океаны тоже уходят с ней.
   { name: 'map', rect: [270, 730, 1170, 1300], plane: PLANE.map, close: 64 },
 ];

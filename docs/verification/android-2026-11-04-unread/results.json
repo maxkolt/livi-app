@@ -1,0 +1,68 @@
+{
+  "warm-final": {
+    "frames_analyzed": 9,
+    "first_row_seconds_in_recording": 1.775311111111111,
+    "first_row_texts": [
+      "20:50",
+      "100",
+      "чаты",
+      "Все",
+      "Непрочитанные",
+      "Di",
+      "LOCAL PREVIEW THREE",
+      "20:50",
+      "A ER",
+      "DI HoU",
+      "PAD DEH",
+      "1 0s0",
+      "0 : 109258",
+      "78 53"
+    ],
+    "row_without_preview_frames": 0,
+    "badge_in_accessibility_tree": true,
+    "transient_empty_list_frames": 4
+  },
+  "cold": {
+    "frames_analyzed": 26,
+    "first_row_seconds_in_recording": 10.36031111111111,
+    "first_row_texts": [
+      "20:45",
+      "100",
+      "Чаты",
+      "Все",
+      "Непрочитанные",
+      "Di",
+      "LOCAL COLD PREVIEW FIVE",
+      "20:44",
+      "5",
+      "Pa DE",
+      "• OH",
+      "2 57",
+      "11050",
+      "0 0 109288"
+    ],
+    "row_without_preview_frames": 0,
+    "pid_empty_before_launch": true
+  },
+  "cold-online": {
+    "frames_analyzed": 47,
+    "first_row_seconds_in_recording": 11.785577777777778,
+    "first_row_texts": [
+      "20:49",
+      "100",
+      "Чаты",
+      "Все",
+      "Непрочитанные",
+      "Di",
+      "LOCAL COLD PREVIEW FIVE",
+      "20:48",
+      "5",
+      "DAD DEDI",
+      "11050",
+      "0 0 109288",
+      "78 53"
+    ],
+    "row_without_preview_frames": 0,
+    "pid_empty_before_launch": true
+  }
+}

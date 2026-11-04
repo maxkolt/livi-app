@@ -2,7 +2,7 @@ import { setVideoCallActive, setPipVisible, setPipInSystemMode, setCallEndedFrom
 import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
 import { notificationHomeTab } from '../utils/notificationHome';
 // screens/HomeScreen.tsx
-import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, startTransition } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore, startTransition } from 'react';
 import {
   BackHandler,
   StyleSheet,
@@ -119,7 +119,7 @@ import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../u
 import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
 import { GLASS_DOCK_TOP_PAD, GLASS_SEGMENT_PAD, WelcomeGlassDock, WelcomeGlassTop } from './home/WelcomeGlassHeader';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
-import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
+import { getChatPreviewSnapshot, prefetchChatPreviews, selectChatPreviews, subscribeChatPreviews } from './home/hooks/useChatPreviews';
 import {
   markChatCallBubbleEligibleIfViewing,
   appendChatCallStatusIfEligible,
@@ -632,6 +632,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     appIsActive,
   });
 
+  const lang = useLang((s) => s.lang);
   const {
     unreadByUser,
     unreadLoaded,
@@ -641,7 +642,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     setMissedLoaded,
     refreshUnreadCountsForFriends,
     refreshBadgesOnAppResume,
-  } = useHomeBadges({ friends, friendsRef });
+  } = useHomeBadges({ friends, friendsRef, lang });
 
   // Paint a cold notification destination together with its local rows. In Calls,
   // import the native inbox first so inserting the new call cannot shift the list.
@@ -651,7 +652,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const [notificationEntryReady, setNotificationEntryReady] = useState(
     !notificationEntryKind,
   );
-  const notificationChatHasRow = unreadLoaded && friends.some(f => (unreadByUser[String(f.id)] || 0) > 0);
+  const notificationPreviewSnapshot = useSyncExternalStore(subscribeChatPreviews, getChatPreviewSnapshot, getChatPreviewSnapshot);
+  const notificationPreviews = selectChatPreviews(notificationPreviewSnapshot, unreadByUser);
+  const notificationChatHasRow = unreadLoaded && friends.some(f =>
+    (unreadByUser[String(f.id)] || 0) > 0 && !!notificationPreviews[String(f.id)]?.text?.trim(),
+  );
   useLayoutEffect(() => {
     if (notificationEntryKind === 'unread' && notificationChatHasRow) setNotificationEntryReady(true);
   }, [notificationEntryKind, notificationChatHasRow]);
@@ -1018,7 +1023,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
 
   /* language */
-  const lang = useLang((s) => s.lang);
   const setLang = useLang((s) => s.setLang);
   // Cold Fliq начинаем сразу за splash: иначе самый ранний тап всегда обгоняет WebView.
   // Splash уйдёт после onPrewarmSettled (или ограниченного deadline внутри Fliq).

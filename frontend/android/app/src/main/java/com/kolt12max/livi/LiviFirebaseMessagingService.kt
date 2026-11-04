@@ -528,6 +528,13 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     messageId = JSONObject(data["body"]!!).optString("messageId", "").trim()
                 } catch (_: Exception) {}
             }
+            val bodyData = try { JSONObject(data["body"] ?: "{}") } catch (_: Exception) { JSONObject() }
+            val unreadEvent = JSONObject().put("from", fromUserIdMsg)
+                .put("to", data["to"] ?: bodyData.optString("to"))
+                .put("messageId", messageId).put("sentAt", sentAtIso).put("messagePreview", messagePreview)
+                .put("unreadFromSender", data["unreadFromSender"]?.toIntOrNull() ?: bodyData.optInt("unreadFromSender", -1))
+                .put("unreadUpdatedAt", data["unreadUpdatedAt"]?.toLongOrNull() ?: bodyData.optLong("unreadUpdatedAt"))
+                .put("enc", data["enc"] ?: bodyData.optString("enc"))
             val timeStr = formatMessageNotificationTime(sentAtIso)
             // Эта переписка открыта на экране. Пуш (часто повторный: живая доставка не подтвердилась
             // за 8 с под VPN) не должен делать её непрочитанной — ни сводкой в шторке, ни pending unread.
@@ -545,21 +552,17 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 return
             }
             val duplicateMessage = messageId.isNotEmpty() && LiviAppModule.wasMessageNotifiedForId(this, messageId)
+            // Persist the complete snapshot before the notification becomes tappable.
+            if (fromUserIdMsg.isNotEmpty()) LiviAppModule.addPendingUnreadMessage(this, fromUserIdMsg, unreadEvent)
             if (duplicateMessage) {
                 val forShade = LiviAppModule.updateAppIconBadgeFromUnreadAndMissed(this, unreadCount).coerceAtLeast(1)
                 showMessageNotificationWithPreview(this, fromUserIdMsg, fromNickMsg, timeStr, messagePreview, forShade, allowAlert = false)
-                if (fromUserIdMsg.isNotEmpty()) {
-                    LiviAppModule.addPendingUnreadMessage(this, fromUserIdMsg)
-                }
                 vLog("FCM message: duplicate messageId=$messageId, silent shade update forShade=$forShade raw=$unreadCount")
                 return
             }
             if (messageId.isNotEmpty()) LiviAppModule.markMessageNotifiedForId(this, messageId)
             val forShade = LiviAppModule.updateAppIconBadgeFromUnreadAndMissed(this, unreadCount).coerceAtLeast(1)
             showMessageNotificationWithPreview(this, fromUserIdMsg, fromNickMsg, timeStr, messagePreview, forShade, allowAlert = true)
-            if (fromUserIdMsg.isNotEmpty()) {
-                LiviAppModule.addPendingUnreadMessage(this, fromUserIdMsg)
-            }
             vLog("FCM message: notified fromUserId=$fromUserIdMsg forShade=$forShade raw=$unreadCount messageId=$messageId")
             return
         }

@@ -193,7 +193,7 @@ const MAP_MARKED_CLEANUP = [
  * сот меньше, книзу ряд шире и чуть правее. Координаты исходника, r — радиус соты.
  */
 // На экране видно с x ≈ 58: сверху край одной соты, книзу 2–3, остальное под краем.
-const HONEYCOMB = { top: 706, rows: 5, r: 19, reachTop: 44, reachBottom: 112, seed: 0x51ce7a };
+const HONEYCOMB = { top: 722, rows: 5, r: 19, reachTop: 44, reachBottom: 112, seed: 0x51ce7a };
 
 function gaussianBlur(src, w, h, sigma) {
   const radius = Math.ceil(sigma * 3);

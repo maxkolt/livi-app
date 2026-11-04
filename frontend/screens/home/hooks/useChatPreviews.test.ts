@@ -20,7 +20,7 @@ jest.mock('../../chat/chatMessageMeta', () => ({
 jest.mock('../../../utils/i18n', () => ({ t: (key: string) => key }));
 jest.mock('../../../utils/globalEvents', () => ({}));
 
-import { getChatPreviewSnapshot, noteLocalChatPreview, prefetchChatPreviews, selectChatPreviews } from './useChatPreviews';
+import { getChatPreviewSnapshot, noteIncomingChatPreview, noteLocalChatPreview, prefetchChatPreviews, selectChatPreviews } from './useChatPreviews';
 import { beginChatExitTransition, finishChatExitTransition } from '../../chat/chatExitTransition';
 const message = (id: string, text: string, at: number, from = 'peer') => ({
   id, text, timestamp: new Date(at).toISOString(), from, to: from === 'me' ? 'peer' : 'me', type: 'text',
@@ -169,4 +169,28 @@ it('keeps unread confirmation when a generic prefetch or an older unread request
   finishOld({ ok: true, previews: { [peer]: message('overlap-old', 'older response', 24_000) } });
   await older;
   expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 2 })[peer].id).toBe('overlap-new');
+});
+
+it('shows a push-delivered message immediately and retains it through a stalled VPN read', async () => {
+  const peer = 'push-preview';
+  mockLocal.mockResolvedValue([message('old', 'old outgoing', 30_000, 'me')]);
+  let finish!: (value: unknown) => void;
+  mockFetch.mockImplementation(() => new Promise(resolve => { finish = resolve; }));
+  const pending = prefetchChatPreviews([peer], 'ru', false, { [peer]: 1 });
+  for (let i = 0; i < 20; i++) await Promise.resolve();
+  noteIncomingChatPreview(message('push-new', 'from notification', 31_000, peer), 'ru', 1);
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 1 })[peer].text).toBe('from notification');
+  // An old request that finishes after the push cannot revoke its confirmation.
+  finish({ ok: true, previews: { [peer]: message('old', 'old outgoing', 30_000, 'me') } });
+  await pending;
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 1 })[peer].id).toBe('push-new');
+});
+
+it('confirms live deliveries without another server request and ignores older replay text', () => {
+  const peer = 'live-preview';
+  noteIncomingChatPreview(message('live-latest', 'latest live', 40_000, peer), 'ru', 3);
+  noteIncomingChatPreview(message('live-replay', 'older replay', 39_000, peer), 'ru', 1);
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 3 })[peer].text).toBe('latest live');
+  expect(mockFetch).not.toHaveBeenCalled();
+  expect(noteIncomingChatPreview({ ...message('foreign', 'wrong account', 41_000, peer), to: 'someone-else' }, 'ru', 1)).toBeNull();
 });

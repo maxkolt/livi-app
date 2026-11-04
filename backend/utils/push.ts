@@ -1,4 +1,5 @@
 import { readFileSync } from 'fs';
+import { messagePushSnapshotData, type MessagePushSnapshot } from './messagePushSnapshot';
 import { createHash } from 'crypto';
 import mongoose from 'mongoose';
 import { Expo, ExpoPushMessage } from 'expo-server-sdk';
@@ -574,15 +575,7 @@ export async function upsertExpoPushToken(opts: {
 /** Пуш о новом сообщении: на Android — только FCM (data-only), чтобы не было пустого уведомления от Expo; на iOS — Expo. */
 export async function sendMessagePushToUser(
   userId: string,
-  data: {
-    type: 'message';
-    messageId: string;
-    from: string;
-    to: string;
-    fromNick: string;
-    sentAt: string;
-    unreadCount: number;
-    messagePreview: string;
+  data: MessagePushSnapshot & {
     /** Медиа: превью собирается на языке каждого устройства вместо messagePreview. */
     previewKind?: MediaPreviewKind;
     albumCount?: number;
@@ -590,27 +583,8 @@ export async function sendMessagePushToUser(
 ): Promise<void> {
   const previewFor = (lang?: string) =>
     data.previewKind ? mediaPreviewText(lang, data.previewKind, data.albumCount || 0) : data.messagePreview;
-  const dataStr = {
-    type: data.type,
-    messageId: data.messageId,
-    from: data.from,
-    to: data.to,
-    fromNick: data.fromNick,
-    sentAt: data.sentAt,
-    unreadCount: String(data.unreadCount),
-    messagePreview: data.messagePreview,
-  };
-  // FCM v1: ключ "from" в data payload зарезервирован — иначе Invalid data payload key: from
-  const dataStrFcm: Record<string, string> = {
-    type: dataStr.type,
-    messageId: dataStr.messageId,
-    fromUserId: data.from,
-    to: dataStr.to,
-    fromNick: dataStr.fromNick,
-    sentAt: dataStr.sentAt,
-    unreadCount: dataStr.unreadCount,
-    messagePreview: dataStr.messagePreview,
-  };
+  const dataStr = messagePushSnapshotData(data);
+  const dataStrFcm = messagePushSnapshotData(data, true);
   const messaging = getFirebaseMessaging();
   const recs = await PushTokenModel.find({ userId }).select('token platform fcmToken voipToken lang').lean();
   type Rec = { token: string; platform: string; fcmToken?: string; voipToken?: string; lang?: string };

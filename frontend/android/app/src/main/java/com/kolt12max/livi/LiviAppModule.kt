@@ -50,6 +50,7 @@ import android.view.TextureView
 import android.view.View
 import android.view.ViewGroup
 import org.json.JSONObject
+import org.json.JSONArray
 import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.crashlytics.FirebaseCrashlytics
 import me.leolin.shortcutbadger.ShortcutBadger
@@ -2752,6 +2753,31 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
+  /** Read without consuming: JS acknowledges only after preview hydration succeeds. */
+  @ReactMethod
+  fun getPendingUnreadMessageEventsJson(promise: Promise) {
+    try {
+      promise.resolve(readPendingUnreadMessageEvents(reactApplicationContext).toString())
+    } catch (_: Exception) { promise.resolve("[]") }
+  }
+
+  @ReactMethod
+  fun acknowledgePendingUnreadMessageEvents(eventsJson: String, promise: Promise) {
+    try {
+      acknowledgeUnreadMessageEvents(reactApplicationContext, JSONArray(eventsJson))
+      promise.resolve(true)
+    } catch (_: Exception) { promise.resolve(false) }
+  }
+
+  @ReactMethod
+  fun recordPendingUnreadMessageEventJson(eventJson: String, promise: Promise) {
+    try {
+      val event = JSONObject(eventJson)
+      addPendingUnreadMessage(reactApplicationContext, event.optString("from"), event)
+      promise.resolve(true)
+    } catch (_: Exception) { promise.resolve(false) }
+  }
+
   /** Прочитать и сбросить флаг «открыть welcome Calls» (тап по уведомлению о пропущенном вызове). */
   @ReactMethod
   fun getAndClearPendingOpenTabFriends(promise: Promise) {
@@ -4950,7 +4976,8 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     /** FCM показал message-уведомление — запомнить fromUserId для точки Chat на resume. */
     @JvmStatic
-    fun addPendingUnreadMessage(context: Context, userId: String) {
+    @Synchronized
+    fun addPendingUnreadMessage(context: Context, userId: String, event: JSONObject? = null) {
       if (userId.isBlank()) return
       val prefs = context.getSharedPreferences(PREFS_PENDING_UNREAD, Context.MODE_PRIVATE)
       val current = prefs.getString(KEY_PENDING_UNREAD_IDS, "") ?: ""
@@ -4958,9 +4985,64 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       val list = if (current.isEmpty()) mutableListOf<String>() else current.split(',').map { it.trim() }.filter { it.isNotEmpty() }.toMutableList()
       if (!list.contains(key)) list.add(key)
       prefs.edit().putString(KEY_PENDING_UNREAD_IDS, list.joinToString(",")).apply()
+      if (event != null) {
+        val events = readPendingUnreadMessageEvents(context)
+        val next = JSONArray()
+        var snapshot: JSONObject = event
+        for (i in 0 until events.length()) {
+          val old = events.optJSONObject(i) ?: continue
+          // A legacy sender-only marker is replaced by the complete snapshot.
+          if (old.optString("from") == key && old.optString("to").isEmpty() && old.optString("messageId").isEmpty()) continue
+          if (old.optString("from") != key || old.optString("to") != event.optString("to")) {
+            next.put(old)
+          } else {
+            // Reordered/duplicate FCM must not roll back either the text or the count.
+            if (old.optString("sentAt") > event.optString("sentAt")) snapshot = JSONObject(old.toString())
+            val countSource = if (old.optLong("unreadUpdatedAt") > event.optLong("unreadUpdatedAt")) old else event
+            snapshot.put("unreadFromSender", countSource.optInt("unreadFromSender", -1))
+            snapshot.put("unreadUpdatedAt", countSource.optLong("unreadUpdatedAt"))
+          }
+        }
+        next.put(snapshot)
+        prefs.edit().putString("events_v1", next.toString()).commit()
+      }
     }
 
     @JvmStatic
+    @Synchronized
+    fun readPendingUnreadMessageEvents(context: Context): JSONArray {
+      val prefs = context.getSharedPreferences(PREFS_PENDING_UNREAD, Context.MODE_PRIVATE)
+      val events = try { JSONArray(prefs.getString("events_v1", "[]")) } catch (_: Exception) { JSONArray() }
+      val peers = (0 until events.length()).mapNotNull { events.optJSONObject(it)?.optString("from") }.toSet()
+      val legacy = prefs.getString(KEY_PENDING_UNREAD_IDS, "") ?: ""
+      legacy.split(',').map { it.trim() }.filter { it.isNotEmpty() && !peers.contains(it) }.forEach {
+        events.put(JSONObject().put("from", it))
+      }
+      return events
+    }
+
+    @JvmStatic
+    @Synchronized
+    fun acknowledgeUnreadMessageEvents(context: Context, acknowledged: JSONArray) {
+      val current = readPendingUnreadMessageEvents(context)
+      val remaining = JSONArray()
+      for (i in 0 until current.length()) {
+        val event = current.optJSONObject(i) ?: continue
+        val matched = (0 until acknowledged.length()).any { j ->
+          val ack = acknowledged.optJSONObject(j)
+          ack != null && ack.optString("from") == event.optString("from") &&
+            ack.optString("to") == event.optString("to") && ack.optString("messageId") == event.optString("messageId") &&
+            ack.optLong("unreadUpdatedAt") == event.optLong("unreadUpdatedAt")
+        }
+        if (!matched) remaining.put(event)
+      }
+      val ids = (0 until remaining.length()).mapNotNull { remaining.optJSONObject(it)?.optString("from") }.distinct()
+      context.getSharedPreferences(PREFS_PENDING_UNREAD, Context.MODE_PRIVATE).edit()
+        .putString("events_v1", remaining.toString()).putString(KEY_PENDING_UNREAD_IDS, ids.joinToString(",")).commit()
+    }
+
+    @JvmStatic
+    @Synchronized
     fun getAndClearPendingUnreadMessages(context: Context): List<String> {
       val prefs = context.getSharedPreferences(PREFS_PENDING_UNREAD, Context.MODE_PRIVATE)
       val current = prefs.getString(KEY_PENDING_UNREAD_IDS, "") ?: ""

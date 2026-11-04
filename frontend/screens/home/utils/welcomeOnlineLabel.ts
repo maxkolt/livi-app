@@ -1,5 +1,10 @@
 import { t, type Lang } from '../../../utils/i18n';
-import { formatWelcomeOnlineCount } from '../hooks/useWelcomeOnlineCount';
+
+export function formatWelcomeOnlineCount(count: number): string {
+  if (!Number.isFinite(count) || count < 0) return '—';
+  try { return new Intl.NumberFormat('ru-RU').format(Math.round(count)); }
+  catch { return String(Math.round(count)); }
+}
 
 /**
  * Выбор формы множественного числа.
@@ -23,7 +28,7 @@ function pluralKey(n: number, lang: Lang): string {
 
 /** «12 345 пользователей онлайн» на языке интерфейса. */
 export function formatWelcomeUsersOnlineLine(count: number | null, lang: Lang): string {
-  if (count == null) return '…';
+  if (count == null) return t('welcomeUsersOnline', lang).replace('{count}', '…');
   const fmt = formatWelcomeOnlineCount(count);
   const n = Math.abs(Math.round(count));
   return t(pluralKey(n, lang), lang).replace('{count}', fmt);

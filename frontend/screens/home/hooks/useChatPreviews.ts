@@ -38,7 +38,8 @@ import {
 export type { ChatPreview };
 
 let previewMemory: Record<string, ChatPreview> = {};
-const unreadPreviewVersions = new Map<string, { count: number; id: string }>();
+let previewAccountId = '';
+const unreadPreviewVersions = new Map<string, { count: number; id: string; updatedAt?: number }>();
 const unreadPreviewRequests = new Map<string, number>();
 
 /** Unverified disk history cannot identify the newest unread message after a cold launch. */
@@ -49,14 +50,29 @@ export function selectChatPreviews(
   for (const [peerId, count] of Object.entries(unreadByUser)) {
     if (count <= 0) continue;
     const confirmed = unreadPreviewVersions.get(peerId);
-    if (confirmed?.count !== count || confirmed.id !== previews[peerId]?.id) delete visible[peerId];
+    if (!confirmed || (confirmed.count !== -1 && confirmed.count !== count) || confirmed.id !== previews[peerId]?.id) delete visible[peerId];
   }
   return visible;
 }
 /** Хуки вкладки, которым нужен результат prefetch (в т.ч. скрытая keep-alive вкладка). */
 const prefetchListeners = new Set<() => void>();
 
+function ensurePreviewAccount(): void {
+  const me = String(getCurrentUserId() || '').trim();
+  if (previewAccountId === me) return;
+  previewAccountId = me;
+  previewMemory = {};
+  unreadPreviewVersions.clear();
+  unreadPreviewRequests.clear();
+}
+
+export function subscribeChatPreviews(listener: () => void): () => void {
+  prefetchListeners.add(listener);
+  return () => { prefetchListeners.delete(listener); };
+}
+
 export function getChatPreviewSnapshot(): Record<string, ChatPreview> {
+  ensurePreviewAccount();
   return previewMemory;
 }
 
@@ -66,6 +82,38 @@ function notifyPreviewListeners(): void {
       listener();
     } catch {}
   });
+}
+
+/** A delivered message is already authoritative; it does not need a second network read. */
+export function noteIncomingChatPreview(message: ChatMessage & { unreadUpdatedAt?: number }, lang: Lang, count?: number): ChatPreview | null {
+  ensurePreviewAccount();
+  const me = String(getCurrentUserId() || '').trim();
+  const peerId = String(message.from || '').trim();
+  if (!me || !peerId || peerId === me || String(message.to || '') !== me || !message.id) return null;
+  const at = messageTimestampMs(message);
+  const text = previewTextFromMessage(message, lang);
+  if (!at || !text.trim()) return null;
+  const prev = previewMemory[peerId];
+  const preview = prev && prev.at > at ? prev : previewWithStatus(message, text, at);
+  previewMemory = { ...previewMemory, [peerId]: preview };
+  const confirmed = unreadPreviewVersions.get(peerId);
+  const staleCount = (prev && prev.at > at && !!confirmed) ||
+    ((message.unreadUpdatedAt || 0) > 0 && (confirmed?.updatedAt || 0) > message.unreadUpdatedAt!);
+  unreadPreviewVersions.set(peerId, {
+    count: staleCount ? confirmed!.count : count ?? confirmed?.count ?? -1,
+    id: preview.id || '', updatedAt: staleCount ? confirmed?.updatedAt : message.unreadUpdatedAt ?? confirmed?.updatedAt,
+  });
+  // An earlier server response cannot invalidate this newer delivery.
+  unreadPreviewRequests.set(peerId, (unreadPreviewRequests.get(peerId) || 0) + 1);
+  void unmarkChatsClearedForMe([peerId]);
+  notifyPreviewListeners();
+  return preview;
+}
+
+export function invalidateUnreadChatPreview(peerId: string): void {
+  unreadPreviewVersions.delete(peerId);
+  unreadPreviewRequests.set(peerId, (unreadPreviewRequests.get(peerId) || 0) + 1);
+  notifyPreviewListeners();
 }
 
 /** Квитанции о прочтении за сессию: превью могло собраться из кэша, где read ещё false. */
@@ -136,6 +184,7 @@ function patchPreviewMemory(update: (preview: ChatPreview, peerId: string) => Ch
  * не дожидаясь message:received и не опираясь на устаревший messageCache.
  */
 export function noteLocalChatPreview(peerId: string, message: unknown, lang: Lang): void {
+  ensurePreviewAccount();
   const id = String(peerId || "").trim();
   if (!id || !message) return;
   const at = messageTimestampMs(message) || Date.now();
@@ -246,6 +295,8 @@ function previewMapsEqual(
 export async function prefetchChatPreviews(
   friendIds: string[], lang: Lang, preferMemory = false, unreadByUser: Record<string, number> = {},
 ): Promise<void> {
+  ensurePreviewAccount();
+  const me = previewAccountId;
   await waitForChatExitTransition();
   const ids = friendIds.map((id) => String(id || '').trim()).filter(Boolean);
   if (ids.length === 0) return;
@@ -263,9 +314,11 @@ export async function prefetchChatPreviews(
   await waitForChatExitTransition();
   // Локальные превью — сразу: за VPN ответ сервера для недостающих идёт секундами,
   // а вкладка всё это время оставалась бы пустой.
+  if (String(getCurrentUserId() || '').trim() !== me) return;
   previewMemory = mergeLiveMemory(ids, next);
   notifyPreviewListeners();
   const hydrated = await refreshPreviewsFromServer(ids, next, lang, unreadByUser);
+  if (String(getCurrentUserId() || '').trim() !== me) return;
   previewMemory = mergeLiveMemory(ids, hydrated);
   notifyPreviewListeners();
 }
@@ -374,6 +427,8 @@ export function useChatPreviews(friendIds: string[], lang: Lang, enabled: boolea
   // старый список, а новая строка вставлялась следующим коммитом.
   useEffect(() => {
     const offReceived = onMessageReceived((message) => {
+      const incoming = noteIncomingChatPreview(message, langRef.current, message.unreadCount);
+      if (incoming) return;
       const me = String(getCurrentUserId() || '');
       const from = String(message?.from || '');
       const to = String(message?.to || '');

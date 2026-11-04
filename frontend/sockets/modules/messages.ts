@@ -494,6 +494,9 @@ export function fetchChatPreviews(withIds: string[]) {
 
 export type IncomingMessage = {
   id: string;
+  /** Exact per-peer snapshot, never the global notification total. */
+  unreadCount?: number;
+  unreadUpdatedAt?: number;
   from: string;
   to: string;
   type: "text" | "image" | "audio" | "sticker" | "video_note";

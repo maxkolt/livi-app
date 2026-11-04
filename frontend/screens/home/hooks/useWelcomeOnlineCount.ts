@@ -1,21 +1,15 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
-import { AppState } from 'react-native';
-import { API_BASE, onConnected, onWelcomePresence, beginWelcomePresenceRefresh } from '../../../sockets/socket';
+import { AppState, DeviceEventEmitter } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
+import {
+  API_BASE, onConnected, onWelcomePresence, beginWelcomePresenceRefresh,
+  getWelcomePresenceSnapshot, refreshWelcomePresenceSnapshot,
+} from '../../../sockets/socket';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import { fetchWithTimeout } from '../../../utils/fetchWithTimeout';
 import type { WelcomeBannerPeer } from '../WelcomeOnlineBanner';
-
-/** Fallback heal, если socket snapshot давно не приходил. */
-const FALLBACK_REFRESH_MS = 120_000;
-
-export function formatWelcomeOnlineCount(count: number): string {
-  if (!Number.isFinite(count) || count < 0) return '—';
-  try {
-    return new Intl.NumberFormat('ru-RU').format(Math.round(count));
-  } catch {
-    return String(Math.round(count));
-  }
-}
+import { WelcomeOnlineRefresh } from './welcomeOnlineRefresh';
+export { formatWelcomeOnlineCount } from '../utils/welcomeOnlineLabel';
 
 type PresenceListItem =
   | string
@@ -80,81 +74,73 @@ function applyPresenceList(
 }
 
 export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | null) {
-  const [count, setCount] = useState<number | null>(null);
-  const [peers, setPeers] = useState<WelcomeBannerPeer[]>([]);
-  const lastGoodRef = useRef<number | null>(null);
+  const initial = getWelcomePresenceSnapshot()?.list;
+  const [count, setCount] = useState<number | null>(() => Array.isArray(initial)
+    ? normalizePresencePeers(initial, excludeUserId).length : null);
+  const [peers, setPeers] = useState<WelcomeBannerPeer[]>(() => Array.isArray(initial)
+    ? normalizePresencePeers(initial, excludeUserId) : []);
+  const lastGoodRef = useRef<number | null>(count);
+  const sourceRef = useRef<PresenceListItem[] | null>(Array.isArray(initial) ? initial : null);
   const excludeRef = useRef(excludeUserId);
   excludeRef.current = excludeUserId;
-
-  const refresh = useCallback(async () => {
-    if (!enabled) return;
-    try {
-      const request = beginWelcomePresenceRefresh();
-      const res = await fetchWithTimeout(`${API_BASE}/api/presence${request.query}`, { method: 'GET' }, 10_000);
-      if (!res.ok) return;
-      const json = request.apply(await res.json());
-      if (json?.ok && Array.isArray(json.list)) {
-        applyPresenceList(json.list, excludeRef.current, setCount, setPeers, lastGoodRef);
-      }
-    } catch {
-      if (lastGoodRef.current != null) setCount(lastGoodRef.current);
-    }
-  }, [enabled]);
-
-  // Socket realtime: presence:welcome при входе/выходе/фоне любого пользователя.
-  useEffect(() => {
-    if (!enabled) return;
-    const unsub = onWelcomePresence((data) => {
-      if (shouldSkipHomeUiSettle()) return;
-      if (!data || data.ok === false || !Array.isArray(data.list)) return;
-      applyPresenceList(data.list, excludeRef.current, setCount, setPeers, lastGoodRef);
-    });
-    return unsub;
-  }, [enabled]);
+  const refreshRef = useRef<WelcomeOnlineRefresh | null>(null);
+  const refresh = useCallback(() => refreshRef.current?.refresh() ?? Promise.resolve(), []);
 
   useEffect(() => {
     if (!enabled) return;
-    const recentOutgoingCancel = () => {
-      try {
+    const controller = new WelcomeOnlineRefresh({
+      load: async (signal) => {
+        const request = beginWelcomePresenceRefresh();
+        const response = await fetchWithTimeout(`${API_BASE}/api/presence${request.query}`, { method: 'GET', signal }, 10_000);
+        if (!response.ok || signal.aborted) return null;
+        const data = await response.json();
+        // An old path can finish after its cancellation or after the app goes to the background.
+        if (signal.aborted) return null;
+        return request.apply(data);
+      },
+      syncSocket: refreshWelcomePresenceSnapshot,
+      publish: (snapshot) => {
+        if (!Array.isArray(snapshot.list)) return;
+        sourceRef.current = snapshot.list;
+        applyPresenceList(snapshot.list, excludeRef.current, setCount, setPeers, lastGoodRef);
+      },
+      shouldDefer: () => {
+        // The first number must never be lost behind a temporary call/UI transition.
+        if (lastGoodRef.current == null) return false;
         const at = Number((global as typeof global & { __lastOutgoingCancelAtRef?: { current: number } }).__lastOutgoingCancelAtRef?.current || 0);
-        return at > 0 && Date.now() - at < 12000;
-      } catch {
-        return false;
-      }
-    };
-    // Первый снимок: HTTP + после connect (сервер шлёт welcome вместе с friend presence).
-    if (!shouldSkipHomeUiSettle() && !recentOutgoingCancel()) {
-      void refresh();
-    }
-    const unsubConnected = onConnected(() => {
-      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
-      void refresh();
+        return shouldSkipHomeUiSettle() || (at > 0 && Date.now() - at < 12_000);
+      },
     });
-    const interval = setInterval(() => {
-      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
-      void refresh();
-    }, FALLBACK_REFRESH_MS);
-    const sub = AppState.addEventListener('change', (state) => {
-      if (state !== 'active') return;
-      if (shouldSkipHomeUiSettle() || recentOutgoingCancel()) return;
-      void refresh();
+    refreshRef.current = controller;
+    // Never discard a delivered snapshot during a UI transition. It is already authoritative.
+    const offPresence = onWelcomePresence(data => controller.receive(data));
+    void controller.refresh();
+    const offConnected = onConnected(() => { void controller.refresh(true); });
+    const appState = AppState.addEventListener('change', state => {
+      if (state === 'active') void controller.refresh(true);
+    });
+    const route = DeviceEventEmitter.addListener('LiviNetRouteChanged', () => controller.networkChanged());
+    let lastReachable: boolean | null = null;
+    let lastType: string | null = null;
+    const offNetwork = NetInfo.addEventListener(state => {
+      // VPNs can block the OS internet probe while our API is reachable.
+      const reachable = state.isConnected === true;
+      const type = String(state.type || '');
+      if (reachable && (lastReachable === false || (lastType !== null && type !== lastType))) controller.networkChanged();
+      lastReachable = reachable;
+      lastType = type;
     });
     return () => {
-      clearInterval(interval);
-      sub.remove();
-      unsubConnected();
+      controller.stop();
+      if (refreshRef.current === controller) refreshRef.current = null;
+      offPresence(); offConnected(); offNetwork(); appState.remove(); route.remove();
     };
-  }, [enabled, refresh]);
+  }, [enabled]);
 
-  // Пересчитать peers при смене своего id (исключить себя из стека).
+  // Recompute from the complete authoritative list, so changing identity can also restore the old self.
   useEffect(() => {
-    const exclude = String(excludeUserId || '').trim().toLowerCase();
-    if (!exclude || !peers.some((p) => String(p.id).toLowerCase() === exclude)) return;
-    const next = peers.filter((p) => String(p.id).toLowerCase() !== exclude);
-    lastGoodRef.current = next.length;
-    setCount(next.length);
-    setPeers(next);
-  }, [excludeUserId, peers]);
+    if (sourceRef.current) applyPresenceList(sourceRef.current, excludeUserId, setCount, setPeers, lastGoodRef);
+  }, [excludeUserId]);
 
   return { onlineCount: count, peers, refreshOnlineCount: refresh };
 }

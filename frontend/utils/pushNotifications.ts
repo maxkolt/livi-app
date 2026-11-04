@@ -1559,6 +1559,7 @@ async function handleNotificationResponse(data: PushNotificationData, actionIden
 
     if (type === 'message') {
       const fromId = String(data?.from || data?.fromUserId || '').trim();
+      await import('./pendingUnreadMessages').then(m => m.persistUnreadMessagePush(data)).catch(() => {});
       await navigateNotificationHome('unread', fromId);
       void dismissMessageNotificationsOnly().catch(() => {});
       return;

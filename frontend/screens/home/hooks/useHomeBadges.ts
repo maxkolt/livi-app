@@ -1,4 +1,7 @@
 import type { HomeUiGlobals } from '../types';
+import type { Lang } from '../../../utils/i18n';
+import { readPendingUnreadMessages, type PendingUnreadMessage } from '../../../utils/pendingUnreadMessages';
+import { noteIncomingChatPreview } from './useChatPreviews';
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from 'react';
 import { AppState, NativeModules, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,6 +29,7 @@ import type { Friend } from '../types';
 type UseHomeBadgesArgs = {
   friends: Friend[];
   friendsRef: MutableRefObject<Friend[]>;
+  lang: Lang;
 };
 
 const UNREAD_FLOOR_TTL_MS = 2500;
@@ -56,7 +60,7 @@ function persistUnreadMap(map: Record<string, number>) {
   AsyncStorage.setItem(UNREAD_BY_USER_KEY, JSON.stringify(cleaned)).catch(() => {});
 }
 
-export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
+export function useHomeBadges({ friends, friendsRef, lang }: UseHomeBadgesArgs) {
   const [unreadByUser, setUnreadByUserState] = useState<Record<string, number>>({});
   const [missedByUser, setMissedByUser] = useState<Record<string, number>>({});
   const [missedLoaded, setMissedLoaded] = useState(false);
@@ -69,6 +73,27 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const unreadFloorRef = useRef<Map<string, { min: number; until: number }>>(new Map());
   /** message.id уже учтён в unread — переживает remount слушателя (friendsIdsKey). */
   const countedUnreadMessageIdsRef = useRef<Set<string>>(new Set());
+  const countVersionsRef = useRef(new Map<string, number>());
+  const countSnapshotsRef = useRef(new Map<string, { count: number; at: number }>());
+  const readAtRef = useRef(new Map<string, number>());
+
+  const acceptCountSnapshot = useCallback((id: string, count: number, at = 0): boolean => {
+    if (at > 0 && (at <= (readAtRef.current.get(id) || 0) || at < (countSnapshotsRef.current.get(id)?.at || 0))) return false;
+    countVersionsRef.current.set(id, (countVersionsRef.current.get(id) || 0) + 1);
+    countSnapshotsRef.current.set(id, { count, at });
+    return true;
+  }, []);
+
+  const importPendingUnread = useCallback(async (): Promise<PendingUnreadMessage[]> => {
+    const pending = await readPendingUnreadMessages(lang);
+    return pending.filter(item => {
+      if (item.messageId) rememberCountedUnreadMessageId(countedUnreadMessageIdsRef.current, item.messageId);
+      const openPeer = AppState.currentState === 'active' ? String((global as HomeUiGlobals).__currentChatPeerId || '').trim() : '';
+      if (item.peerId === openPeer) return false;
+      return item.count === undefined || acceptCountSnapshot(item.peerId, item.count, item.updatedAt);
+    });
+  }, [lang, acceptCountSnapshot]);
+
 
   const clearUnreadFloor = useCallback((userId: string) => {
     unreadFloorRef.current.delete(String(userId));
@@ -93,6 +118,9 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       const id = String(userId || '').trim();
       if (!id) return;
       unreadFloorRef.current.delete(id);
+      readAtRef.current.set(id, Date.now());
+      countVersionsRef.current.set(id, (countVersionsRef.current.get(id) || 0) + 1);
+      countSnapshotsRef.current.set(id, { count: 0, at: Date.now() });
       setUnreadByUserState((prev) => {
         if ((prev[id] || 0) <= 0) return prev;
         const next = patchUnreadCountsIfChanged(prev, { [id]: 0 });
@@ -102,19 +130,22 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     });
   }, []);
 
-  const resolveServerUnreadCount = useCallback((userId: string, serverCount: number) => {
+  const resolveServerUnreadCount = useCallback((userId: string, serverCount: number, version?: number, requestedAt = Date.now()) => {
     const id = String(userId);
+    if (version !== undefined && version !== (countVersionsRef.current.get(id) || 0)) {
+      return countSnapshotsRef.current.get(id)?.count ?? serverCount;
+    }
+    if (requestedAt < (countSnapshotsRef.current.get(id)?.at || 0)) return countSnapshotsRef.current.get(id)!.count;
     const floor = unreadFloorRef.current.get(id);
-    if (!floor) return serverCount;
-    if (Date.now() > floor.until) {
-      unreadFloorRef.current.delete(id);
-      return serverCount;
+    let count = serverCount;
+    if (floor) {
+      if (Date.now() > floor.until || serverCount >= floor.min) unreadFloorRef.current.delete(id);
+      else count = Math.max(serverCount, floor.min);
     }
-    if (serverCount >= floor.min) {
-      unreadFloorRef.current.delete(id);
-      return serverCount;
-    }
-    return Math.max(serverCount, floor.min);
+    // A slow response still describes the request that started earlier.
+    // In particular it must not make a native push being decrypted look stale.
+    countSnapshotsRef.current.set(id, { count, at: requestedAt });
+    return count;
   }, []);
 
   const setUnreadByUser = useCallback((
@@ -135,6 +166,8 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
   const refreshUnreadCountsForFriends = useCallback(async (list: Friend[], attempt = 0) => {
     if (!list.length) return;
     const ids = list.map((f) => String(f.id));
+    const versions = new Map(ids.map(id => [id, countVersionsRef.current.get(id) || 0]));
+    const requestedAt = Date.now();
     try {
       const result = await getUnreadCounts(ids);
       if (!result?.ok || !result.counts) return;
@@ -146,7 +179,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       for (const id of ids) {
         const n = result.counts[id];
         const raw = typeof n === 'number' && n > 0 ? n : 0;
-        entries[id] = id === openChatPeer ? 0 : resolveServerUnreadCount(id, raw);
+        entries[id] = id === openChatPeer ? 0 : resolveServerUnreadCount(id, raw, versions.get(id), requestedAt);
       }
       setUnreadByUserState((prev) => {
         const next = patchUnreadCountsIfChanged(prev, entries);
@@ -187,19 +220,21 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
         // A killed app has no resume event in this JS context. Import the native
         // push inbox before publishing readiness, rather than briefly showing Empty.
         if (Platform.OS === 'android') {
-          let pending: string[] | undefined;
-          try { pending = await NativeModules.LiviAppModule?.getAndClearPendingUnreadMessages?.(); } catch {}
+          const pending = await importPendingUnread();
           const openPeer = AppState.currentState === 'active'
             ? String((global as HomeUiGlobals).__currentChatPeerId || '').trim() : '';
-          for (const peer of pending || []) {
-            const id = String(peer || '').trim();
-            if (id && id !== openPeer) normalized[id] = Math.max(normalized[id] || 0, 1);
+          for (const item of pending) {
+            const id = item.peerId;
+            if (id && id !== openPeer) normalized[id] = item.count ?? Math.max(normalized[id] || 0, 1);
           }
         }
         if (disposed) return;
         if (Object.keys(normalized).length) {
           setUnreadByUser((prev) => {
             const next = { ...normalized, ...prev };
+            for (const [id, snapshot] of countSnapshotsRef.current) next[id] = snapshot.count;
+            const openPeer = AppState.currentState === 'active' ? String((global as HomeUiGlobals).__currentChatPeerId || '').trim() : '';
+            if (openPeer) delete next[openPeer];
             persistUnreadMap(next);
             return next;
           });
@@ -355,6 +390,15 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     const refreshUnread = () => {
       const list = friendsRef.current;
       if (!list.length) return;
+      void importPendingUnread().then(pending => {
+        setUnreadByUserState(prev => {
+          const entries: Record<string, number> = {};
+          for (const item of pending) if (item.count !== undefined) entries[item.peerId] = item.count;
+          const next = patchUnreadCountsIfChanged(prev, entries);
+          if (next !== prev) persistUnreadMap(next);
+          return next;
+        });
+      }).catch(() => {});
       void refreshUnreadCountsForFriends(list).catch((e) => {
         logger.warn('[HomeScreen] Unread refresh after socket failed:', e);
       });
@@ -372,7 +416,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       socket.off('reconnect', schedule);
       if (t) clearTimeout(t);
     };
-  }, [friendsRef, refreshUnreadCountsForFriends]);
+  }, [friendsRef, refreshUnreadCountsForFriends, importPendingUnread]);
 
   /**
    * Возврат из фона: сразу точки на Chat/Calls (не ждать loadFriends / 30s debounce).
@@ -380,6 +424,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
    */
   const refreshBadgesOnAppResume = useCallback(async () => {
     const started = Date.now();
+    setUnreadLoaded(false);
     logger.info('[welcome-tab] badge resume refresh start');
     try {
       const rawMissed = await AsyncStorage.getItem(MISSED_CALLS_KEY);
@@ -411,36 +456,26 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       }
 
       try {
-        const pendingUnread = (await (NativeModules.LiviAppModule?.getAndClearPendingUnreadMessages?.() ??
-          Promise.resolve([]))) as string[];
-        // Пуш уже посчитан сервером (unread пишется до отправки пуша) — без floor: сверка через
-        // 1.4 с должна суметь вернуть 0, если сообщение тем временем прочитали. Открытый чат —
-        // не непрочитанное: его отметит сам ChatScreen при возврате.
+        const pendingUnread = await importPendingUnread();
         const openChatPeer = String((global as HomeUiGlobals).__currentChatPeerId || '').trim();
-        if (pendingUnread?.length) {
-          const ids = [...new Set(pendingUnread.map((u) => String(u || '').trim()).filter(Boolean))]
-            .filter((id) => id !== openChatPeer);
+        if (pendingUnread.length) {
           setUnreadByUserState((prev) => {
-            let changed = false;
-            const next = { ...prev };
-            for (const id of ids) {
-              const cur = typeof next[id] === 'number' ? next[id]! : 0;
-              if (cur < 1) {
-                next[id] = 1;
-                changed = true;
-              }
+            const entries: Record<string, number> = {};
+            for (const item of pendingUnread) {
+              if (item.peerId !== openChatPeer) entries[item.peerId] = item.count ?? Math.max(prev[item.peerId] || 0, 1);
             }
-            if (!changed) return prev;
-            persistUnreadMap(next);
+            const next = patchUnreadCountsIfChanged(prev, entries);
+            if (next !== prev) persistUnreadMap(next);
             return next;
           });
-          logger.info('[welcome-tab] badge resume pending unread applied', { n: ids.length });
+          logger.info('[welcome-tab] badge resume pending unread applied', { n: pendingUnread.length });
         }
       } catch (e) {
         logger.warn('[welcome-tab] badge resume pending unread failed', e);
       }
     }
 
+    setUnreadLoaded(true);
     // Точный server unread + системный badge не нужны для первого кадра после resume.
     // Раньше этот блок занимал до 1.7с и конкурировал с тапом по Chat/Calls.
     if (badgeResumeHeavyTimerRef.current) clearTimeout(badgeResumeHeavyTimerRef.current);
@@ -472,7 +507,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       })();
     }, 1400);
     logger.info('[welcome-tab] badge resume local refresh done', { elapsedMs: Date.now() - started });
-  }, [friendsRef, refreshUnreadCountsForFriends]);
+  }, [friendsRef, refreshUnreadCountsForFriends, importPendingUnread]);
 
   useEffect(() => () => {
     if (badgeResumeHeavyTimerRef.current) {
@@ -507,10 +542,12 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
 
     const updateOne = async (pid: string) => {
       try {
+        const version = countVersionsRef.current.get(pid) || 0;
+        const requestedAt = Date.now();
         const result = await getUnreadCount(pid);
         if (!result.ok) return;
         const raw = result.count || 0;
-        const count = resolveServerUnreadCount(pid, raw);
+        const count = resolveServerUnreadCount(pid, raw, version, requestedAt);
         if (!disposed) {
           setUnreadByUserState((prev) => {
             const next = patchUnreadCountsIfChanged(prev, { [pid]: count });
@@ -545,6 +582,10 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
       if (!rememberCountedUnreadMessageId(countedUnreadMessageIdsRef.current, message?.id)) {
         return;
       }
+      const exactCount = Number.isInteger(message.unreadCount) && Number(message.unreadCount) >= 0
+        ? Number(message.unreadCount) : undefined;
+      if (exactCount !== undefined && !acceptCountSnapshot(messageFromStr, exactCount, message.unreadUpdatedAt)) return;
+      noteIncomingChatPreview(message, lang, exactCount);
       const openChatPeer = String((global as HomeUiGlobals).__currentChatPeerId || '').trim();
       if (openChatPeer && openChatPeer === messageFromStr) {
         if (!disposed) {
@@ -560,7 +601,7 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
           setUnreadByUserState((prev) => {
             // Delivery is an invalidation, not an increment: native push, disk cache
             // or a server snapshot may already include this exact message.
-            const nextCount = Math.max(prev[messageFromStr] || 0, 1);
+            const nextCount = exactCount ?? Math.max(prev[messageFromStr] || 0, 1);
             bumpUnreadFloor(messageFromStr, nextCount);
             const next = patchUnreadCountsIfChanged(prev, { [messageFromStr]: nextCount });
             if (next !== prev) persistUnreadMap(next);
@@ -605,6 +646,8 @@ export function useHomeBadges({ friends, friendsRef }: UseHomeBadgesArgs) {
     resolveServerUnreadCount,
     bumpUnreadFloor,
     clearUnreadFloor,
+    acceptCountSnapshot,
+    lang,
   ]);
 
   return {
