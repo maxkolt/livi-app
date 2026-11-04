@@ -1,4 +1,5 @@
 import { useChatSessionState } from './chat/useChatSessionState';
+import { useChatScroll } from './chat/useChatScroll';
 import type { ChatBubbleRow } from './chat/chatList';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../navigation/types';
@@ -76,6 +77,7 @@ import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
+import { ChatSelectionRow } from './chat/ChatSelectionRow';
 import { ChatComposerContextBar } from './chat/ChatComposerContextBar';
 import { AppOverlay, useOverlayBackHandler } from '../components/AppOverlay';
 import { AppDialogButton, AppDialogModal, appDialogStyles } from '../components/AppDialog';
@@ -1150,50 +1152,21 @@ export default function ChatScreen({ route, navigation }: Props) {
     onCancelToast: onVoiceCancelToast,
   });
 
-  // Refs для автоскролла
+  // Scroll state belongs to this focused visit, not to persisted chat history.
   const flatListRef = useRef<FlatList<ChatListRow>>(null);
   const iosChatListDataRef = useRef<ChatListRow[]>([]);
   const androidChatListDataRef = useRef<ChatListRow[]>([]);
+  const { scrollToBottom, scheduleScrollToBottom, preserveScrollPosition, listScrollProps } =
+    useChatScroll(flatListRef, peerId, Platform.OS === 'android', pauseActiveChatVideoNote);
 
-  // Функция автоскролла к последнему сообщению (стабильная — в deps подписок useChatRealtime)
-  const scrollToBottom = React.useCallback(() => {
-    try {
-      if (flatListRef.current) {
-        if (Platform.OS === 'android') {
-          // В инвертированном списке "низ" = offset 0
-          (flatListRef.current).scrollToOffset?.({ offset: 0, animated: false });
-        } else {
-          flatListRef.current.scrollToEnd({ animated: false });
-        }
-      }
-    } catch (error) {
-      console.warn('Failed to scroll to bottom:', error);
-      // Fallback: пробуем scrollToEnd
-      try {
-        if (flatListRef.current) {
-          if (Platform.OS === 'android') {
-            (flatListRef.current).scrollToOffset?.({ offset: 0, animated: false });
-          } else {
-            flatListRef.current.scrollToEnd({ animated: false });
-          }
-        }
-      } catch (e) {
-        console.warn('Fallback scroll also failed:', e);
-      }
+  // Message actions also hold the viewport while incoming messages update the list.
+  useEffect(() => {
+    if (selectionMode || showMessageActions || reactionBarForMessageId !== null || editingMessageId) {
+      preserveScrollPosition();
     }
-  }, []);
+  }, [selectionMode, showMessageActions, reactionBarForMessageId, editingMessageId, preserveScrollPosition]);
 
-  // Коалесируем многократные вызовы скролла, чтобы избежать дёрганий
-  const scrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const scheduleScrollToBottom = (delay = 0) => {
-    if (scrollTimerRef.current) return;
-    scrollTimerRef.current = setTimeout(() => {
-      scrollTimerRef.current = null;
-      scrollToBottom();
-    }, delay);
-  };
-
-  // Всегда прижимаем к низу при показе/скрытии клавиатуры
+  // Клавиатура прижимает ленту вниз только если пользователь уже у последних сообщений.
   useEffect(() => {
     // Закрыть возможный глобальный оверлей входящего, если звонящий отменил/таймаут
     const offClose = onCloseIncoming(() => {
@@ -1301,17 +1274,6 @@ export default function ChatScreen({ route, navigation }: Props) {
     ];
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
   }, []);
-
-  // На любое изменение количества сообщений — прижать вниз.
-  // Android: делаем дополнительный проход после layout нового пузыря,
-  // иначе первое положение может остаться под инпутом до позднего пересчёта.
-  useEffect(() => {
-    scheduleScrollToBottom(0);
-    if (Platform.OS === 'android') {
-      scheduleScrollToBottom(80);
-      scheduleScrollToBottom(220);
-    }
-  }, [messages.length]);
 
   // Android: pad для списка/empty/overlays — IME (окно не resize) или emoji-панель.
   const androidKeyboardPad = emojiPanelOpen
@@ -2078,6 +2040,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       }
 
       setHighlightedMessageId(id);
+      preserveScrollPosition();
 
       requestAnimationFrame(() => {
         try {
@@ -2094,7 +2057,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         highlightClearTimerRef.current = null;
       }, 1500);
     },
-    [messages, showNotice, lang],
+    [messages, showNotice, lang, preserveScrollPosition],
   );
 
   useEffect(() => {
@@ -2689,10 +2652,11 @@ export default function ChatScreen({ route, navigation }: Props) {
     : 0;
   /** На сколько лента (Android) продлена вниз под кнопки навигации — см. её bottom. */
   const androidFeedNavExtend = Platform.OS === 'android' && !emojiPanelOpen ? Math.max(0, androidPinnedNavInset) : 0;
-  useEffect(() => {
-    if (Platform.OS !== 'android') return;
-    scheduleScrollToBottom(0);
-  }, []);
+  // The list translates up with the dock. Reserve that lift at the oldest end
+  // too, so the first date and bubble can scroll fully below the fixed header.
+  const androidFeedTopReserve = headerTotalH + 10 + (emojiPanelOpen
+    ? 0
+    : Math.max(androidFeedNavExtend, androidImeInset - ANDROID_COMPOSER_NAV_GAP));
   // Empty: центр в зоне над композером (+IME / emoji).
   const androidEmptyBottomPad = Math.max(
     72,
@@ -2785,7 +2749,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       // The date separator was handled above; message rows carry their stored identity.
       const msg = item as ChatBubbleRow;
       const isOwnMessage = msg?.sender === 'me' || msg?.from === currentUserId;
-      return (
+      const message = (
         <ChatMessageItem
           item={msg}
           currentUserId={currentUserId}
@@ -2844,6 +2808,18 @@ export default function ChatScreen({ route, navigation }: Props) {
           layoutWidth={chatLayoutW}
         />
       );
+      if (centered) return message;
+      return (
+        <ChatSelectionRow
+          messageId={String(msg.id)}
+          selectionMode={selectionMode}
+          isOwn={isOwnMessage}
+          sideInset={chatListSideInset}
+          onToggleSelect={toggleSelectMessage}
+        >
+          {message}
+        </ChatSelectionRow>
+      );
     },
     [
       currentUserId,
@@ -2884,6 +2860,7 @@ export default function ChatScreen({ route, navigation }: Props) {
       isDark,
       lang,
       chatLayoutW,
+      chatListSideInset,
     ],
   );
 
@@ -3372,6 +3349,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             >
             <FlatList
               ref={flatListRef}
+              {...listScrollProps}
               data={iosChatListData}
               extraData={chatLayoutW}
               keyExtractor={(item) => item.id!}
@@ -3385,7 +3363,6 @@ export default function ChatScreen({ route, navigation }: Props) {
                 justifyContent: showEmpty ? 'center' : 'flex-end',
                 paddingTop: headerTotalH + 10,
                 paddingBottom: resolvedInputBarH + CHAT_STATUS_GAP_H,
-                paddingHorizontal: chatListSideInset,
               }}
               ListFooterComponent={null}
               keyboardShouldPersistTaps={selectionMode ? 'always' : 'handled'}
@@ -3394,12 +3371,10 @@ export default function ChatScreen({ route, navigation }: Props) {
               showsVerticalScrollIndicator={false}
               inverted={false}
               onScrollToIndexFailed={handleScrollToIndexFailed}
-              onScrollBeginDrag={pauseActiveChatVideoNote}
               initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}
               updateCellsBatchingPeriod={CHAT_LIST_UPDATE_CELLS_BATCHING_PERIOD}
-              onContentSizeChange={() => setTimeout(() => scrollToBottom(), 0)}
               ListEmptyComponent={ChatListEmpty}
             />
             </Pressable>
@@ -3510,6 +3485,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             >
             <FlatList
               ref={flatListRef}
+              {...listScrollProps}
               data={androidChatListData}
               extraData={chatLayoutW}
               keyExtractor={(item) => item.id!}
@@ -3525,8 +3501,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 paddingTop: showEmpty
                   ? 0
                   : resolvedInputBarH + CHAT_STATUS_GAP_H + androidEmojiBottomReserve + androidFeedNavExtend,
-                paddingBottom: showEmpty ? 0 : headerTotalH + 8,
-                paddingHorizontal: chatListSideInset,
+                paddingBottom: showEmpty ? 0 : androidFeedTopReserve,
               }}
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps={selectionMode ? 'always' : 'handled'}
@@ -3535,7 +3510,6 @@ export default function ChatScreen({ route, navigation }: Props) {
               removeClippedSubviews={false}
               inverted={!showEmpty}
               onScrollToIndexFailed={handleScrollToIndexFailed}
-              onScrollBeginDrag={pauseActiveChatVideoNote}
               initialNumToRender={CHAT_LIST_INITIAL_NUM_TO_RENDER}
               maxToRenderPerBatch={CHAT_LIST_MAX_TO_RENDER_PER_BATCH}
               windowSize={CHAT_LIST_WINDOW_SIZE}
