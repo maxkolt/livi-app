@@ -3166,6 +3166,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   /** Release telemetry event (Analytics + Crashlytics breadcrumb log). */
   @ReactMethod
+  fun getReleaseDiagnosticExits(since: Double, promise: Promise) {
+    try { promise.resolve(ReleaseDiagnosticExits.read(reactApplicationContext, since.toLong())) }
+    catch (_: Exception) { promise.resolve(Arguments.createArray()) }
+  }
+
+  @ReactMethod
   fun trackAppEvent(eventName: String, paramsJson: String?) {
     trackAppEventStatic(reactApplicationContext, eventName, paramsJson)
   }

@@ -5434,7 +5434,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     token: string,
     targetRoomName?: string,
   ): Promise<void> {
-    if (this.ended || this.endCallInProgress) return;
+    if (this.ended || this.endCallInProgress || this.networkLinkDown) return;
     if (!this.mediaReconnectInProgress) {
       this.armOrExtendMediaReconnectGrace();
     }
@@ -5455,7 +5455,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     targetRoomName?: string,
   ): Promise<void> {
     const tryOnce = async (forceRelayOnly: boolean): Promise<boolean> => {
-      if (this.ended || this.endCallInProgress || !this.mediaReconnectInProgress) return false;
+      if (this.ended || this.endCallInProgress || this.networkLinkDown || !this.mediaReconnectInProgress) return false;
       try {
         if (targetRoomName) {
           try {
@@ -5464,7 +5464,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         }
         const previousRoom = this.room;
         if (previousRoom) await disposeRoom(previousRoom);
-        if (this.ended || this.endCallInProgress || !this.mediaReconnectInProgress) return false;
+        if (this.ended || this.endCallInProgress || this.networkLinkDown || !this.mediaReconnectInProgress) return false;
         if (this.room !== previousRoom) return false;
         this.room = null;
         this.currentRoomName = null;
@@ -5508,6 +5508,13 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
   }
 
   private onMediaReconnectSucceeded(): void {
+    if (this.ended || this.endCallInProgress) return;
+    // Joining an empty room is only local transport recovery. Keep waiting for the
+    // peer and keep the lease alive instead of announcing a recovered conversation.
+    if (this.remotePeerSeenInCall && !this.hasExpectedRemoteParticipantInRoom()) {
+      this.beginWaitingForRemotePeerRejoin('media_reconnected_waiting_peer');
+      return;
+    }
     if (this.mediaReconnectGraceTimer) {
       clearTimeout(this.mediaReconnectGraceTimer);
       this.mediaReconnectGraceTimer = null;
@@ -7252,7 +7259,8 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     if (this.room === room) {
       this.room = null;
       this.currentRoomName = null;
-      setActiveVideoCall(false);
+      // A failed recovery attempt does not end the call or its native keepalive.
+      if (!this.mediaReconnectInProgress) setActiveVideoCall(false);
     }
     if (cancelled) return false;
 

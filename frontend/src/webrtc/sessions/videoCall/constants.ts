@@ -19,11 +19,10 @@ export const REMOTE_MEDIA_WATCHDOG_MS = 12_000;
 export const REMOTE_MEDIA_SUBSCRIBE_RETRY_MS = 5_000;
 
 /**
- * Client media restore window after unexpected disconnect / network drop.
- * Server CALL_LEASE_RECONNECTING_TTL_MS is longer so lease does not race this grace
- * while the peer (or restored socket) can still heartbeat.
+ * Keep the call through a five-minute mobile/VPN outage, plus one minute to rejoin.
+ * The reachable peer keeps renewing the server lease throughout this window.
  */
-export const MEDIA_RECONNECT_GRACE_MS = 45_000;
+export const MEDIA_RECONNECT_GRACE_MS = 6 * 60_000;
 /** После своего reconnect: сколько ждать, пока LiveKit досинхронизирует список участников. */
 export const REMOTE_PRESENCE_AFTER_RECONNECT_MS = 4_000;
 /**

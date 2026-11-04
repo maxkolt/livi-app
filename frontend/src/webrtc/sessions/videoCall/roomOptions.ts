@@ -35,6 +35,8 @@ export function buildLiveKitRoomOptions(input: LiveKitRoomOptionsInput): RoomOpt
   return {
     adaptiveStream,
     dynacast,
+    // The session owns capture across room/ICE failures and stops it on actual hangup.
+    stopLocalTrackOnUnpublish: false,
     publishDefaults: {
       videoEncoding: {
         maxBitrate: isHighCapture ? HIGH_CAPTURE_MAX_BITRATE : LOW_CAPTURE_MAX_BITRATE,

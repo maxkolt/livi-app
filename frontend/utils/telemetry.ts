@@ -1,5 +1,6 @@
 import { NativeModules } from 'react-native';
 import { logger } from './logger';
+import { recordReleaseDiagnostic } from './releaseDiagnosticBridge';
 
 type Correlation = {
   callId?: string | null;
@@ -33,6 +34,7 @@ function logRelease(tag: string, message: string, payload: TelemetryPayload = {}
 }
 
 export function trackReleaseEvent(event: string, payload: TelemetryPayload = {}): void {
+  recordReleaseDiagnostic(event, 'info', payload);
   const normalized = normalizeCorrelation(payload);
   logRelease('event', event, normalized);
   try {
@@ -41,6 +43,7 @@ export function trackReleaseEvent(event: string, payload: TelemetryPayload = {})
 }
 
 export function trackReleaseError(event: string, error: unknown, payload: TelemetryPayload = {}): void {
+  recordReleaseDiagnostic(event, 'error', { ...payload, errorName: error instanceof Error ? error.name : 'Error' });
   const normalized = normalizeCorrelation(payload);
   const errorMessage =
     typeof error === 'string'

@@ -12,6 +12,11 @@ const levels = {
 
 // `??`, not `||`: debug is level 0, and `0 || info` silently turned LOG_LEVEL=debug into info.
 const currentLevel = levels[LOG_LEVEL as keyof typeof levels] ?? levels.info;
+let diagnosticSink: ((level: 'warning' | 'error', args: unknown[]) => void) | null = null;
+export function setDiagnosticLogSink(sink: typeof diagnosticSink): void { diagnosticSink = sink; }
+function diagnose(level: 'warning' | 'error', args: unknown[]): void {
+  try { diagnosticSink?.(level, args); } catch {}
+}
 
 export const logger = {
   debug: (...args: unknown[]) => {
@@ -25,11 +30,13 @@ export const logger = {
     }
   },
   warn: (...args: unknown[]) => {
+    diagnose('warning', args);
     if (currentLevel <= levels.warn) {
       console.warn('[WARN]', ...args);
     }
   },
   error: (...args: unknown[]) => {
+    diagnose('error', args);
     if (currentLevel <= levels.error) {
       console.error('[ERROR]', ...args);
     }

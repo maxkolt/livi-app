@@ -4,6 +4,10 @@ import { buildLiveKitRoomOptions } from './roomOptions';
 const base = { adaptiveStream: false, dynacast: true };
 
 describe('buildLiveKitRoomOptions', () => {
+  it('keeps session-owned capture alive when the SDK disconnects during an outage', () => {
+    const opts = buildLiveKitRoomOptions({ ...base, isHighCapture: true });
+    expect(opts.stopLocalTrackOnUnpublish).toBe(false);
+  });
   it('на мощном устройстве поднимает потолок битрейта и включает simulcast', () => {
     const opts = buildLiveKitRoomOptions({ ...base, isHighCapture: true });
     expect(opts.publishDefaults?.videoEncoding?.maxBitrate).toBe(2_500_000);

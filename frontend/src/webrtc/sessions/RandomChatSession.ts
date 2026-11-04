@@ -32,6 +32,7 @@ import socket, {
   onDisconnected,
 } from '../../../sockets/socket';
 import { logger } from '../../../utils/logger';
+import { recordReleaseDiagnostic } from '../../../utils/releaseDiagnosticBridge';
 import { prewarmApiConnections } from '../../../utils/warmConnections';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration, enableForcedRelayFallback, prefetchIceConfiguration } from '../../../utils/iceConfig';
@@ -481,6 +482,9 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private logReconnectTrace(event: string, details: Record<string, unknown> = {}): void {
+    recordReleaseDiagnostic('random_chat', /room_lost|resume_rejected|connect_error/.test(event) ? 'warning' : 'info', {
+      phase: event, roomId: this.room?.name, ...details,
+    });
     // Production strips info; preserve recovery failures while routine teardown stays informational.
     const log = /room_lost|room_reconnecting|resume_rejected|connect_error/.test(event)
       ? logger.warn : logger.info;

@@ -2,6 +2,7 @@ import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 // frontend/sockets/modules/outbox.ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from "../../utils/logger";
+import { recordReleaseDiagnostic } from '../../utils/releaseDiagnosticBridge';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { emitAck } from "./emit";
@@ -380,6 +381,8 @@ export async function enqueueMessageOutbox(item: MessageOutboxItem): Promise<boo
     items.push(item);
     assertOutboxCapacity(items);
     await saveMessageOutbox(items);
+    recordReleaseDiagnostic('message_queued', 'info', { messageId: item.payload.clientMessageId || item.optimisticUiId || item.id,
+      type: item.payload.type, pending: items.length });
     return true;
   });
 }
@@ -787,6 +790,10 @@ async function onRowDelivered(row: MessageOutboxItem, resp: MessageMutationRespo
   const oldIds = [row.id, row.optimisticUiId].map((x) => String(x || '').trim()).filter(Boolean);
   await remapEditOutboxMessageIds(oldIds, serverMessageId);
   await removeMessageOutboxRow(row.id);
+  recordReleaseDiagnostic('message_server_accepted', 'info', {
+    messageId: row.payload.clientMessageId || row.optimisticUiId || row.id,
+    delivered, durationMs: Math.max(0, Date.now() - row.createdAt), type: row.payload.type,
+  });
   void persistOutgoingStatus(to, serverMessageId, delivered ? 'delivered' : 'sent', oldIds);
   const uploadedUri = row.payload.localUri ? row.payload.uri : undefined;
   const uploadedThumb = row.payload.localThumbUri ? row.payload.thumbUri : undefined;
@@ -809,6 +816,10 @@ async function onRowDelivered(row: MessageOutboxItem, resp: MessageMutationRespo
 }
 
 async function onRowFailed(row: MessageOutboxItem, error: string): Promise<void> {
+  recordReleaseDiagnostic('message_send_failed', 'error', {
+    messageId: row.payload.clientMessageId || row.optimisticUiId || row.id,
+    code: error, type: row.payload.type, durationMs: Math.max(0, Date.now() - row.createdAt),
+  });
   const to = String(row.payload?.to || '');
   const uiId = String(row.optimisticUiId || row.id);
   logger.warn('[outbox] message rejected for good', { error, outboxId: row.id });

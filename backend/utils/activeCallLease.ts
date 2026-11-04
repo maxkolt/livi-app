@@ -18,8 +18,8 @@ export type ActiveCallLease = {
 /** Max silence before server force-ends (active phase). */
 const CALL_LEASE_TTL_MS = 45_000;
 /**
- * Longer TTL while client reports phase=reconnecting (airplane / media restore).
- * Avoids racing MEDIA_RECONNECT_GRACE_MS (~45s) when heartbeats are sparse.
+ * Longer heartbeat TTL during media recovery. The reachable participant renews
+ * this lease throughout the client's longer wait for an offline peer.
  */
 export const CALL_LEASE_RECONNECTING_TTL_MS = 75_000;
 const CALL_LEASE_SWEEP_MS = 5_000;

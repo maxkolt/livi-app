@@ -27,6 +27,8 @@ import moderationRouter from './routes/moderation';
 import cosmeticsRouter from './routes/cosmetics';
 import fliqRouter from './routes/fliq';
 import integrityRouter from './routes/integrity';
+import releaseDiagnosticsRouter from './routes/release-diagnostics';
+import { startDiagnosticDailyReports } from './utils/diagnosticDailyReport';
 import { startFliqCollector } from './utils/fliqCollector';
 import registerFriendSockets from './sockets/friends';
 import registerIdentitySockets, { bindUser as bindUserIdentity } from './sockets/identity';
@@ -524,6 +526,7 @@ app.set('io', io);
 app.use('/api', cosmeticsRouter);
 app.use('/api', fliqRouter);
 app.use('/api', integrityRouter);
+app.use('/api', releaseDiagnosticsRouter);
 
 // Stream utility убран - больше не используется
 
@@ -852,6 +855,7 @@ async function onMongoConnected(): Promise<void> {
 connectMongo();
 // Лента Fliq: сборщик Shorts сам ждёт подключения к MongoDB.
 startFliqCollector();
+startDiagnosticDailyReports();
 
 /* ========= Presence helpers ========= */
 function getOnlineListFromIo(io: Server): string[] {
