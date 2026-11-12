@@ -143,6 +143,7 @@ import {
 import { useOverlayBackHandler } from '../components/AppOverlay';
 import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
+import { getSearchAvatarDisplayUri } from './home/selfAvatarDisplay';
 import {
   DRAFT_KEY,
   FRIENDS_CACHE_KEY_LEGACY,
@@ -839,15 +840,12 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * не прогреет кадр — иначе после fade на радаре серый круг.
    */
   const searchAvatarDisplayUri = React.useMemo(() => {
-    const prefer =
-      (myFullAvatarResolvedReady && myFullAvatarResolvedUri) ||
-      (resolvedAvatarReady && resolvedAvatarUri) ||
-      '';
-    if (prefer) return String(prefer).trim();
-    const raw = String(myFullAvatarUri || avatarUri || savedAvatarUrl || '').trim();
-    if (!raw) return '';
-    if (Platform.OS === 'android' && /^data:/i.test(raw)) return '';
-    return raw;
+    return getSearchAvatarDisplayUri({
+      avatarUri, myFullAvatarUri, savedAvatarUrl,
+      resolvedAvatarUri, resolvedAvatarReady,
+      myFullAvatarResolvedUri, myFullAvatarResolvedReady,
+      isAndroid: Platform.OS === 'android',
+    });
   }, [
     myFullAvatarResolvedReady,
     myFullAvatarResolvedUri,
@@ -5760,7 +5758,7 @@ const handleClearNick = useCallback(async () => {
       {/* Интерфейс — плоскость экрана: при наклоне за стеклом движется только сцена (SpatialDepth). */}
       <View style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
-        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad}>
+        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad} hiddenRevision={centerProfile}>
           <HomeWelcomeView
             styles={styles}
             isDark={isDark}

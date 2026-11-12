@@ -50,6 +50,7 @@ import {
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import { hasProfilePhoto } from './HomeCenterProfile';
+import { PHONE_AVATAR_REFERENCE_WIDTH, usesLargePhoneAvatar } from './phoneAvatarLayout';
 import {
   WelcomeProfileRow,
   WelcomeProfileSection,
@@ -181,16 +182,21 @@ function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPr
 /**
  * Аватар профиля чуть меньше радара на Поиске — в обеих ориентациях один диаметр
  * фото. Купленная рамка рисуется снаружи и не меняет раскладку экрана.
- * Визуально чуть крупнее прежних 0.9; прирост компенсируется отступами (см. ниже).
+ * На крупных телефонах фото чуть больше эталона A35, независимо от масштаба интерфейса.
  */
-const PROFILE_AVATAR_SCALE = 0.96;
+const PROFILE_AVATAR_SCALE = 0.9696;
+const PROFILE_WIDE_PHONE_AVATAR_SCALE = 0.98;
 /** Прежний эталон слота — от него считаем, сколько px отнять у gapTop / gapUnderAvatar. */
 const PROFILE_AVATAR_SLOT_SCALE = 0.9;
 /** Сдвиг аватара вниз: +gapTop / −gapUnderAvatar — карточки не двигаются. */
 const PROFILE_AVATAR_NUDGE_DOWN = 6;
+const PROFILE_WIDE_PHONE_AVATAR_NUDGE_DOWN = 2;
 
 function phoneAvatarSize(shortSide: number): number {
-  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * PROFILE_AVATAR_SCALE);
+  const largePhone = usesLargePhoneAvatar(shortSide);
+  const scale = largePhone ? PROFILE_WIDE_PHONE_AVATAR_SCALE : PROFILE_AVATAR_SCALE;
+  const referenceWidth = largePhone ? PHONE_AVATAR_REFERENCE_WIDTH : shortSide;
+  return Math.round(welcomePhoneAvatarMetrics(referenceWidth).outer * scale);
 }
 
 function phoneAvatarSlotSize(shortSide: number): number {
@@ -226,10 +232,14 @@ function resolveHubMetrics(
   frameId: string,
 ): HubMetrics {
   const basePreset = resolveHubPreset(isTablet, isLandscape);
+  const largePhone = !isTablet && usesLargePhoneAvatar(shortSide);
+  const avatarNudgeDown = largePhone
+    ? PROFILE_WIDE_PHONE_AVATAR_NUDGE_DOWN
+    : PROFILE_AVATAR_NUDGE_DOWN;
   const preset = (() => {
     const nudgeDown = (p: HubMetricsPreset): HubMetricsPreset => {
       // Берём только то, что реально есть снизу — иначе сумма отступов вырастет и сдвинет список.
-      const take = Math.min(PROFILE_AVATAR_NUDGE_DOWN, Math.max(0, p.gapUnderAvatar - 4));
+      const take = Math.min(avatarNudgeDown, Math.max(0, p.gapUnderAvatar - 4));
       return { ...p, gapTop: p.gapTop + take, gapUnderAvatar: p.gapUnderAvatar - take };
     };
     if (isTablet) return nudgeDown(basePreset);
@@ -242,7 +252,7 @@ function resolveHubMetrics(
       ...basePreset,
       avatarSize: visual,
       gapTop: Math.max(gapTopFloor, basePreset.gapTop - Math.ceil(grow / 2)),
-      gapUnderAvatar: Math.max(4, basePreset.gapUnderAvatar - Math.floor(grow / 2)),
+      gapUnderAvatar: Math.max(largePhone && !isLandscape ? 14 : 4, basePreset.gapUnderAvatar - Math.floor(grow / 2)),
     });
     if (isLandscape) return phoneBase;
     return scaleHubPreset(phoneBase, Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)));

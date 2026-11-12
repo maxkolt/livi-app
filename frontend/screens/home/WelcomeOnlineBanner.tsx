@@ -145,8 +145,6 @@ function WelcomeOnlineBannerInner({
                   avatarVer={hasAvatar ? peer.avatarVer || 0 : 0}
                   uri={hasAvatar ? uri : undefined}
                   size={stackSize}
-                  // В стеке онлайна — просто кружки: купленные рамки профиля здесь не рисуем.
-                  frameId={null}
                   fallbackText="—"
                   containerStyle={[styles.stackAvatar, stackAvatarStyle]}
                   fallbackTextStyle={styles.stackFallback}

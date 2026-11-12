@@ -24,7 +24,7 @@ jest.mock('./missedCalls', () => ({ applyMissedFromReauth: jest.fn() }));
 jest.mock('./outboxTriggers', () => ({ drainAllOutboxes: jest.fn() }));
 jest.mock('./outbox', () => ({ noteNetworkBack: jest.fn() }));
 jest.mock('./e2e', () => ({ refreshE2eState: jest.fn(async () => undefined) }));
-jest.mock('../../utils/cosmetics', () => ({ applyRemoteFrameChange: jest.fn() }));
+jest.mock('../../utils/cosmetics', () => ({ applyRemoteFrameChange: jest.fn(), refreshObservedUserFrames: jest.fn() }));
 jest.mock('../../utils/logger', () => ({
   logger: { debug: jest.fn(), info: jest.fn(), warn: jest.fn(), error: jest.fn() },
 }));

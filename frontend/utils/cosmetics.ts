@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { AppState, DeviceEventEmitter } from 'react-native';
+import NetInfo from '@react-native-community/netinfo';
 // Импортируем из листовых модулей, а не из бареля sockets/socket: барель
 // реэкспортирует presence.ts, который сам подписывается на cosmetics:frame и
 // зовёт этот файл. Через барель получался цикл, и при инициализации значения
@@ -10,6 +12,7 @@ import { getInstallAuthHeaders } from './installId';
 import { fetchWithTimeout } from './fetchWithTimeout';
 import { getCosmeticBackground } from './cosmeticCatalog';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
+import { UserFrameRefresh } from './userFrameRefresh';
 
 export type CosmeticKind = 'frame' | 'background';
 
@@ -53,6 +56,61 @@ let loadPromise: Promise<CosmeticEntitlements> | null = null;
 const listeners = new Set<(value: CosmeticEntitlements) => void>();
 const userFrameCache = new Map<string, { frameId: string; loadedAt: number }>();
 const userFrameListeners = new Map<string, Set<(frameId: string) => void>>();
+const userFrameRefreshers = new Map<string, UserFrameRefresh>();
+let stopFrameNetworkWatch: (() => void) | null = null;
+
+/** Socket reconnect heals missed frame events even when the avatar stays mounted. */
+export function refreshObservedUserFrames(): void {
+  userFrameRefreshers.forEach(refresh => { void refresh.refresh(true); });
+}
+
+function watchFrameNetwork(): void {
+  if (stopFrameNetworkWatch) return;
+  const appState = AppState.addEventListener('change', state => {
+    if (state === 'active') refreshObservedUserFrames();
+  });
+  const routeChanged = () => userFrameRefreshers.forEach(refresh => refresh.networkChanged());
+  const route = DeviceEventEmitter.addListener('LiviNetRouteChanged', routeChanged);
+  let lastConnected: boolean | null = null;
+  let lastType: string | null = null;
+  const offNetwork = NetInfo.addEventListener(state => {
+    const connected = state.isConnected === true;
+    const type = String(state.type || '');
+    // A VPN may block the OS reachability probe while the API still works.
+    if (connected && (lastConnected === false || (lastType !== null && lastType !== type))) routeChanged();
+    lastConnected = connected;
+    lastType = type;
+  });
+  stopFrameNetworkWatch = () => {
+    appState.remove(); route.remove(); offNetwork(); stopFrameNetworkWatch = null;
+  };
+}
+
+function observeUserFrame(id: string): void {
+  let refresh = userFrameRefreshers.get(id);
+  if (!refresh) {
+    refresh = new UserFrameRefresh({
+      load: async (signal, force) => {
+        const known = userFrameCache.get(id);
+        if (!force && known && Date.now() - known.loadedAt < 5 * 60_000) return null;
+        const json = await request(`/cosmetics/user/${encodeURIComponent(id)}`, { signal });
+        if (typeof json.activeFrameId !== 'string') throw new Error('invalid_frame_response');
+        return json.activeFrameId;
+      },
+      publish: frame => applyRemoteFrameChange(id, frame),
+    });
+    userFrameRefreshers.set(id, refresh);
+    watchFrameNetwork();
+  }
+  void refresh.refresh();
+}
+
+function stopObservingUserFrame(id: string): void {
+  if (userFrameListeners.get(id)?.size) return;
+  userFrameRefreshers.get(id)?.stop();
+  userFrameRefreshers.delete(id);
+  if (!userFrameRefreshers.size) stopFrameNetworkWatch?.();
+}
 
 /**
  * Рамки с прошлого запуска. Без них до ответа сервера аватары рисовались без
@@ -267,6 +325,7 @@ export function applyRemoteFrameChange(userId: string, frameId: string): void {
   const next = String(frameId || '');
   const current = userFrameCache.get(id);
   userFrameCache.set(id, { frameId: next, loadedAt: Date.now() });
+  userFrameRefreshers.get(id)?.received();
   if (String(getCurrentUserId() || '') === id) {
     cached = { ...cached, activeFrameId: next };
     listeners.forEach((listener) => listener(cached));
@@ -276,27 +335,16 @@ export function applyRemoteFrameChange(userId: string, frameId: string): void {
   userFrameListeners.get(id)?.forEach((listener) => listener(next));
 }
 
-async function loadUserActiveFrame(userId: string): Promise<string> {
-  const cachedFrame = userFrameCache.get(userId);
-  if (cachedFrame && Date.now() - cachedFrame.loadedAt < 5 * 60_000) return cachedFrame.frameId;
-  const json = await request(`/cosmetics/user/${encodeURIComponent(userId)}`);
-  const frameId = String(json.activeFrameId || '');
-  userFrameCache.set(userId, { frameId, loadedAt: Date.now() });
-  userFrameListeners.get(userId)?.forEach((listener) => listener(frameId));
-  schedulePersist();
-  return frameId;
-}
-
 /** Активная рамка любого пользователя; запрос кешируется, чтобы списки не дёргали API повторно. */
 export function useUserActiveFrame(userId?: string): string {
   const id = String(userId || '');
   const ownId = String(getCurrentUserId() || '');
   const initial = id && id === ownId ? ownFrameId(id) : userFrameCache.get(id)?.frameId || '';
-  const [frameId, setFrameId] = useState(initial);
+  const [frame, setFrame] = useState({ id, frameId: initial });
 
   useEffect(() => {
     if (!id) {
-      setFrameId('');
+      setFrame({ id, frameId: '' });
       return;
     }
     let group = userFrameListeners.get(id);
@@ -304,21 +352,23 @@ export function useUserActiveFrame(userId?: string): string {
       group = new Set();
       userFrameListeners.set(id, group);
     }
+    const setFrameId = (frameId: string) => setFrame({ id, frameId });
     group.add(setFrameId);
     if (id === String(getCurrentUserId() || '')) {
       setFrameId(ownFrameId(id));
       void loadCosmetics().catch(() => {});
     } else {
       const known = userFrameCache.get(id);
-      if (known) setFrameId(known.frameId);
-      void loadUserActiveFrame(id).then(setFrameId).catch(() => {});
+      setFrameId(known?.frameId || '');
+      observeUserFrame(id);
     }
     return () => {
       const listenersForId = userFrameListeners.get(id);
       listenersForId?.delete(setFrameId);
       if (listenersForId?.size === 0) userFrameListeners.delete(id);
+      stopObservingUserFrame(id);
     };
-  }, [id]);
+  }, [id, ownId]);
 
-  return frameId;
+  return frame.id === id ? frame.frameId : initial;
 }

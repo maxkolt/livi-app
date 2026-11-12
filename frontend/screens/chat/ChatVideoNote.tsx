@@ -19,8 +19,8 @@ import { claimChatPlayback, releaseChatPlayback } from './chatPlaybackCoordinato
 
 export const CHAT_VIDEO_NOTE_SIZE = 216;
 const RING_W = 3;
-/** Касание не дальше этого от кольца внутрь — перемотка; в середине — тап и прокрутка ленты. */
-const SCRUB_BAND = 36;
+/** Только узкая полоса у кольца перематывает по кругу; остальная площадь прокручивает ленту. */
+const SCRUB_BAND = 12;
 /** Сдвиг пальца, после которого касание у кольца — перемотка, а не тап. */
 const SCRUB_SLOP = 6;
 /** Как часто показывать кадр под пальцем при перемотке. */
@@ -285,6 +285,7 @@ function ActiveVideoNote({
       {/* TextureView: обычный SurfaceView скругление не режет — кружок был бы квадратом. */}
       <VideoView
         player={player}
+        pointerEvents="none"
         style={StyleSheet.absoluteFill}
         contentFit="cover"
         nativeControls={false}

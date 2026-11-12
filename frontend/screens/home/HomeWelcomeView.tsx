@@ -30,6 +30,7 @@ import {
   type AvatarDustSource,
 } from './AvatarDust';
 import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
+import { PHONE_AVATAR_REFERENCE_WIDTH, usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
@@ -111,6 +112,8 @@ let welcomeRevealPlayedThisSession = false;
 const PHONE_SPLIT_AVATAR_RATIO = 0.36;
 /** Центр радара (фото + рамка + тонкий круг) чуть меньше доли диска. */
 const SEARCH_CENTER_AVATAR_SCALE = 0.9;
+const SEARCH_PHONE_AVATAR_SCALE = 0.909;
+const SEARCH_WIDE_PHONE_AVATAR_SCALE = 0.9212;
 /** Лёгкий оптический подъём CTA над нижней навигацией в портрете. */
 const SEARCH_CTA_PORTRAIT_LIFT = 16;
 
@@ -327,7 +330,7 @@ function HomeWelcomeViewInner({
    */
   const nickFont = useNickDigitalFont();
   const nickText = String(centerProfile.savedNick || '').trim();
-  const nickFontSize = isTabletLayout ? 42 : compactLayout || shortPhone ? 28 : 34;
+  const nickFontSize = isTabletLayout ? 42 : compactLayout || shortPhone ? 28 : 32;
   const nickLineH = Math.round(nickFontSize * 1.25);
   const nickGap = isTabletLayout ? 16 : 10;
   const showNick = !!nickText && !splitStage && !tightStage;
@@ -388,12 +391,15 @@ function HomeWelcomeViewInner({
    */
   const welcomeAvatarGeometry = (() => {
     if (!isTabletLayout) {
-      const phone = welcomePhoneAvatarMetrics(Math.min(stageWidth, stageHeight));
+      const shortSide = Math.min(stageWidth, stageHeight);
+      const largePhone = usesLargePhoneAvatar(shortSide);
+      const phone = welcomePhoneAvatarMetrics(largePhone ? PHONE_AVATAR_REFERENCE_WIDTH : shortSide);
+      const avatarScale = largePhone ? SEARCH_WIDE_PHONE_AVATAR_SCALE : SEARCH_PHONE_AVATAR_SCALE;
       // Landscape: радар ниже, и аватар вертикали занимал почти весь диск — кольцам
       // не оставалось места. Здесь аватар — доля радара, как пропорция в вертикали.
       const k =
         (splitStage ? (radarSize * PHONE_SPLIT_AVATAR_RATIO) / phone.outer : 1) *
-        SEARCH_CENTER_AVATAR_SCALE;
+        avatarScale;
       return {
         base: Math.round(phone.base * k),
         avatarSize: Math.round(phone.outer * k),

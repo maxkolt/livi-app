@@ -29,7 +29,8 @@ export function useChatScroll(
     return {
       maintainVisibleContentPosition: VISIBLE_CONTENT_POSITION,
       scrollEventThrottle: 16,
-      onTouchStart: () => controller.beginTouch(),
+      // Capture before video notes stop bubbling touches to the outside-pause handler.
+      onStartShouldSetResponderCapture: () => { controller.beginTouch(); return false; },
       onTouchEnd: () => controller.endTouch(),
       onTouchCancel: () => controller.cancelTouch(),
       onScroll: (e: NativeSyntheticEvent<NativeScrollEvent>) => controller.onScroll(distance(e)),

@@ -78,7 +78,7 @@ it.each([true, false])('does not flash the latest bubble during the first touch 
   const hook = useChatScroll({ current: nativeList as unknown as FlatList<ChatListRow> }, 'peer', inverted, jest.fn());
   mockFocusEffect();
   const list = hook.listScrollProps;
-  list.onTouchStart();
+  expect(list.onStartShouldSetResponderCapture()).toBe(false);
   list.onLayout();
   list.onContentSizeChange();
   hook.scrollToBottom();

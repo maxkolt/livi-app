@@ -18,15 +18,16 @@ import {
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import type { HomeStyles } from './styles';
 import { useUserActiveFrame } from '../../utils/cosmetics';
+import { isLocalAvatarUri } from './selfAvatarDisplay';
 
 
 function isDirectAvatarUri(uri: string): boolean {
-  return !!uri && (/^data:image\//i.test(uri) || /^https?:\/\//i.test(uri));
+  return !!uri && (isLocalAvatarUri(uri) || /^data:image\//i.test(uri) || /^https?:\/\//i.test(uri));
 }
 
 /**
- * У пользователя есть фото: версия на сервере или готовая ссылка. Локальный
- * файл только что выбранного фото сюда не входит — он ещё загружается.
+ * Серверный аватар или уже выбранное фото. Пока загрузка идёт, Поиск показывает
+ * тот же локальный файл, который пользователь только что увидел в Профиле.
  */
 export function hasProfilePhoto(avatarUri: string, myAvatarVer: number): boolean {
   return (!!getCurrentUserId() && myAvatarVer > 0) || isDirectAvatarUri(avatarUri);
@@ -130,7 +131,7 @@ function HomeCenterProfileInner({
   // Предпочитаем file: — иначе после splash props прыгают file→data и ExpoImage
   // перезагружается (логи: uriKind data при displayKind file, size 120→114).
   const centerAvatarUri = (() => {
-    if (isLocalPreview) return resolvedAvatarUri || avatarUri || undefined;
+    if (isLocalAvatarUri(avatarUri)) return avatarUri.trim();
     const candidates = [
       myFullAvatarUri,
       resolvedAvatarReady ? resolvedAvatarUri : '',
@@ -213,7 +214,7 @@ function HomeCenterProfileInner({
     myUserId && activeFrameId
       ? ''
       : isLocalPreview
-        ? resolvedAvatarUri || avatarUri
+        ? avatarUri
         : myUserId && myAvatarVer > 0
           ? ''
           : hasDirectAvatarUri && resolvedAvatarReady

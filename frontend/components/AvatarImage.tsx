@@ -43,7 +43,6 @@ function pickSearchAvatarUri(
   }
   const locked = key ? searchAvatarFileByKey.get(key) || '' : '';
   if (locked && (!next || /^data:/i.test(next))) return locked;
-  if (prev && /^file:/i.test(prev) && next && /^data:/i.test(next)) return prev;
   return next || prev || locked;
 }
 
@@ -144,11 +143,14 @@ const AvatarImage = memo<AvatarImageProps>(({
   displayHidden,
 }) => {
   const fileLockKey = searchAvatarFileKey(userId, avatarVer);
-  const initialUri = pickSearchAvatarUri(fileLockKey, propsUri || '', '');
-  const willFetchFromCache = !initialUri && !!(userId && avatarVer && avatarVer > 0);
-  const [uri, setUri] = useState<string>(initialUri);
-  // true с первого кадра, если ждём кэш — иначе буква мелькает до useEffect.
-  const [loading, setLoading] = useState(willFetchFromCache);
+  const identity = `${userId || ''}:v${avatarVer || 0}`;
+  const [cached, setCached] = useState({ identity, uri: '', loading: true });
+  // Read direct props on this render. A state value from the previous version
+  // must not be resolved and remembered under the new identity.
+  const uri = pickSearchAvatarUri(fileLockKey, propsUri || '', '') ||
+    (cached.identity === identity ? cached.uri : '');
+  const loading = !uri && !!(userId && avatarVer && avatarVer > 0) &&
+    (cached.identity !== identity || cached.loading);
   const hookFrameId = useUserActiveFrame(userId);
   // undefined = проп не передан, решает хук. Пустая строка/null = «рамки нет».
   const activeFrameId = frameId !== undefined ? frameId || '' : hookFrameId;
@@ -169,8 +171,6 @@ const AvatarImage = memo<AvatarImageProps>(({
     // Не вытесняем уже показанный file: сырым data: — иначе uriKind прыгает
     // и Glide/ExpoImage перезагружает кадр после splash.
     if (propsUri) {
-      setUri((prev) => pickSearchAvatarUri(fileLockKey, propsUri, prev));
-      setLoading(false);
       return;
     }
 
@@ -178,56 +178,51 @@ const AvatarImage = memo<AvatarImageProps>(({
     if (userId && avatarVer && avatarVer > 0) {
       const lockedFile = fileLockKey ? searchAvatarFileByKey.get(fileLockKey) : '';
       if (lockedFile) {
-        setUri(lockedFile);
-        setLoading(false);
+        setCached({ identity, uri: lockedFile, loading: false });
         return;
       }
-      setLoading(true);
+      setCached({ identity, uri: '', loading: true });
       (async () => {
         try {
           // Пытаемся загрузить миниатюру (для списков друзей)
           const cachedUri = await getAvatarUri(userId, avatarVer || 0, true);
           if (alive) {
             const next = pickSearchAvatarUri(fileLockKey, cachedUri || '', '');
-            setUri(next);
+            setCached({ identity, uri: next, loading: false });
             // При ver>0 и пустом кэше не снимаем «ожидание» буквой — URI скоро придёт с родителя.
-            setLoading(false);
           }
         } catch (e) {
           console.warn('[AvatarImage] error loading avatar:', e);
           if (alive) {
-            setUri('');
-            setLoading(false);
+            setCached({ identity, uri: '', loading: false });
           }
         }
       })();
     } else {
       // Нет userId или avatarVer - показываем плейсхолдер
-      setUri('');
-      setLoading(false);
+      setCached({ identity, uri: '', loading: false });
     }
 
     return () => {
       alive = false;
     };
-  }, [userId, avatarVer, propsUri, fileLockKey]);
+  }, [userId, avatarVer, propsUri, fileLockKey, identity]);
 
   const [resolvedUri, resolvedReady] = useResolvedImageUri(uri);
-  const lastGoodDisplayRef = useRef('');
-  useEffect(() => {
-    lastGoodDisplayRef.current = '';
-  }, [userId, avatarVer]);
+  const lastGoodDisplayRef = useRef({ identity, uri: '' });
   if (resolvedReady && resolvedUri) {
-    lastGoodDisplayRef.current = resolvedUri;
+    lastGoodDisplayRef.current = { identity, uri: resolvedUri };
     rememberSearchAvatarFile(fileLockKey, resolvedUri);
   }
+  const lastGoodDisplay = lastGoodDisplayRef.current.identity === identity
+    ? lastGoodDisplayRef.current.uri : '';
   const displayUri =
     pickSearchAvatarUri(
       fileLockKey,
       (resolvedReady && resolvedUri) || '',
-      lastGoodDisplayRef.current || (uri && !/^data:/i.test(uri) ? uri : ''),
+      lastGoodDisplay || (uri && !/^data:/i.test(uri) ? uri : ''),
     ) ||
-    lastGoodDisplayRef.current ||
+    lastGoodDisplay ||
     (uri && !/^data:/i.test(uri) ? uri : '');
 
   /**

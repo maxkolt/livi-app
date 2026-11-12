@@ -1,5 +1,5 @@
 import { logger } from "../../utils/logger";
-import { applyRemoteFrameChange } from '../../utils/cosmetics';
+import { applyRemoteFrameChange, refreshObservedUserFrames } from '../../utils/cosmetics';
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { applyMissedFromReauth } from "./missedCalls";
@@ -149,6 +149,7 @@ export function onWelcomePresence(cb: (data: WelcomePresencePayload) => void): (
 }
 
 socket.on("connect", () => {
+  refreshObservedUserFrames();
   welcomeConnectionGeneration += 1;
   shared.hasConnectedEver = true;
   shared.lastPresenceUpdateKey = null;

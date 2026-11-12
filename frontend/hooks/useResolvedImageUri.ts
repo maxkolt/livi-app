@@ -25,31 +25,26 @@ function initialResolved(uri: string): { resolved: string; ready: boolean } {
  */
 export function useResolvedImageUri(uri: string): [resolvedUri: string, ready: boolean] {
   const needsResolve = Platform.OS === 'android' && isDataUri(uri);
-  const [resolved, setResolved] = useState(() => initialResolved(uri).resolved);
-  const [ready, setReady] = useState(() => initialResolved(uri).ready);
+  const [result, setResult] = useState(() => ({ source: uri, ...initialResolved(uri) }));
 
   useEffect(() => {
     if (!uri) {
-      setResolved('');
-      setReady(true);
+      setResult({ source: uri, resolved: '', ready: true });
       return;
     }
     if (!needsResolve) {
-      setResolved(uri);
-      setReady(true);
+      setResult({ source: uri, resolved: uri, ready: true });
       return;
     }
     const cached = peekResolvedDataUriCache(uri);
     if (cached) {
-      setResolved(cached);
-      setReady(true);
+      setResult({ source: uri, resolved: cached, ready: true });
       return;
     }
     let alive = true;
     resolveDataUriForAndroid(uri).then((fileUri) => {
       if (alive) {
-        setResolved(fileUri);
-        setReady(true);
+        setResult({ source: uri, resolved: fileUri, ready: true });
       }
     });
     return () => {
@@ -57,5 +52,9 @@ export function useResolvedImageUri(uri: string): [resolvedUri: string, ready: b
     };
   }, [uri, needsResolve]);
 
-  return [resolved, ready];
+  // Effects run after render: the previous file must never be reported as ready
+  // for a new data URI, or AvatarImage will cache it under the new avatar version.
+  const immediate = initialResolved(uri);
+  if (immediate.ready) return [immediate.resolved, true];
+  return [result.resolved, result.source === uri && result.ready];
 }

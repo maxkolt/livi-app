@@ -77,6 +77,7 @@ import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import { resolveDataUriForAndroid } from '../utils/dataUriToFileUri';
 import { ChatMessageItem } from './chat/ChatMessageItem';
+import { ChatAttachmentIcon } from './chat/ChatAttachmentIcon';
 import { ChatSelectionRow } from './chat/ChatSelectionRow';
 import { ChatComposerContextBar } from './chat/ChatComposerContextBar';
 import { AppOverlay, useOverlayBackHandler } from '../components/AppOverlay';
@@ -134,6 +135,7 @@ import { useChatClear } from './chat/useChatClear';
 import { useChatHeader } from './chat/useChatHeader';
 import { useChatLongPressMessage } from './chat/useChatLongPressMessage';
 import { ChatMessagePreviewFit } from './chat/ChatMessagePreviewFit';
+import { chatVideoMenuLayout } from './chat/chatVideoMenuLayout';
 import {
   getAndroidImeLiftCacheDp,
   setAndroidImeLiftCacheDp,
@@ -3008,7 +3010,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
             marginRight={12}
           >
-            <Ionicons name="image" size={28} color={COMPOSER_BUTTON_ICON} />
+            <ChatAttachmentIcon size={28} color={COMPOSER_BUTTON_ICON} />
           </ChatRoundButton>
         )}
 
@@ -4358,12 +4360,16 @@ export default function ChatScreen({ route, navigation }: Props) {
               ? Math.ceil((SHEET_REACTIONS_ALL.length + 1) / (MSG_REACTIONS_COLLAPSED + 1))
               : 1;
             const pillH = pillRows * msgReactionCell + 10;
-            const listMaxH = msgActionsLandscape
+            const keyboardVideoPreview = selectedMessage?.type === 'video_note' && (keyboardVisible || androidImeInset > 0);
+            const videoPreviewLayout = !msgActionsLandscape && keyboardVideoPreview
+              ? chatVideoMenuLayout(msgActionsStackH, pillH, msgActionsBlockGap, rows.length * rowHeight + 10 + (isRead ? rowHeight + 2 : 0))
+              : null;
+            const listMaxH = videoPreviewLayout?.listMaxHeight ?? (msgActionsLandscape
               ? msgActionsStackH
               : Math.max(
                   160,
                   msgActionsStackH - pillH - msgActionsBlockGap * 2 - MSG_ACTIONS_PREVIEW_MIN_H,
-                );
+                ));
 
             // Реакции: строка эмодзи и стрелка, которая раскрывает все.
             const reactionsRadius = msgReactionsExpanded ? 22 : (msgReactionCell + 8) / 2;
@@ -4467,7 +4473,9 @@ export default function ChatScreen({ route, navigation }: Props) {
                   // список тянулся на всю высоту с пустотой под пунктами.
                   style={{ flexGrow: 0, flexShrink: 1 }}
                   contentContainerStyle={{ flexGrow: 0, paddingVertical: 4 }}
-                  showsVerticalScrollIndicator={false}
+                  showsVerticalScrollIndicator
+                  persistentScrollbar
+                  fadingEdgeLength={12}
                   bounces={false}
                 >
                   {rows.map((row) => (
@@ -4554,6 +4562,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                         maxHeight={msgActionsStackH - pillH - msgActionsBlockGap}
                         contentWidth={previewRenderW}
                         widthScale={previewWidthScale}
+                        minScale={keyboardVideoPreview ? 0 : 0.3}
                       >
                         {previewRow}
                       </ChatMessagePreviewFit>
@@ -4588,7 +4597,11 @@ export default function ChatScreen({ route, navigation }: Props) {
                   marginVertical: msgActionsBlockGap,
                 }}
               >
-                {previewRow}
+                {videoPreviewLayout ? (
+                  <ChatMessagePreviewFit maxHeight={videoPreviewLayout.previewMaxHeight} contentWidth={chatLayoutW} minScale={0}>
+                    {previewRow}
+                  </ChatMessagePreviewFit>
+                ) : previewRow}
               </View>
 
               {actionsList}
