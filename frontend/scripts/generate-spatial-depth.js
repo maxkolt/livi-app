@@ -11,7 +11,8 @@
  *   spatial_stage_planes.png — план каждого пикселя слоя (k · PLANE_STEP, 0 — нет), ½ размера;
  *   spatial_stage_tiles.png  — какие планы есть рядом с плиткой TILE px (биты · TILE_BIT_STEP):
  *                              шейдер проверяет только их.
- * В покое фон + слой = исходная картинка. Ещё пишутся spatial_stage.png (картинка целиком —
+ * В покое фон + слой = сцена без REMOVED_GROUPS и REMOVED_DETAIL_RECTS, с переносами ELEMENT_OFFSETS.
+ * Ещё пишутся spatial_stage.png (картинка целиком —
  * Android 12 и ниже сдвигает её одним планом) и размытая копия для стеклянных блоков
  * (SpatialGlassView): они показывают её кусок под собой, а не размывают сцену на каждом кадре.
  *
@@ -77,6 +78,7 @@ const SEEDS = [
     at: [UPPER_CUBE.cx, UPPER_CUBE.cy].map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
     plane: PLANE.icons,
   },
+  { name: 'dot-cube-top-right', at: [1090, 284], plane: PLANE.icons },
   { name: 'mic', at: [1264, 954], plane: PLANE.icons },
   // Камера — ниже и наклонена к кубу (build-spatial-stage-hq.js): точка внутри её корпуса.
   { name: 'camera', at: [176, 1398], plane: PLANE.icons },
@@ -102,6 +104,27 @@ const GROUPS = [
   // Карта — шире: линии через океаны тоже уходят с ней.
   { name: 'map', rect: [270, 730, 1170, 1300], plane: PLANE.map, close: 64 },
 ];
+
+/** Убранные графики и точка справа от верхнего куба заменяются ровной подложкой. */
+const REMOVED_GROUPS = new Set(['chart-left', 'chart-right', 'dot-cube-top-right']);
+/** Детали общего компонента списка слева: две точки и две строки после пробела. */
+const REMOVED_DETAIL_RECTS = [
+  [184, 1052, 209, 1076],
+  [212, 1052, 237, 1076],
+  [0, 962, 245, 1012],
+];
+/** Переносы в пикселях исходника: микрофон ниже; облако и нижний куб меняются местами. */
+const CUBE_RIGHT_OFFSET = 52;
+const CUBE_BUBBLE_SWAP = [
+  Math.round((LOWER_CUBE.cx - HEADER_BUBBLE.cx) * 1440 / SOURCE_WIDTH),
+  Math.round((LOWER_CUBE.cy - HEADER_BUBBLE.cy) * 1440 / SOURCE_WIDTH),
+];
+const ELEMENT_OFFSETS = {
+  mic: [0, 312],
+  'cube-top': [96, -24],
+  'cube-bottom': [-CUBE_BUBBLE_SWAP[0] - 32, -CUBE_BUBBLE_SWAP[1]],
+  bubble: [CUBE_BUBBLE_SWAP[0] + CUBE_RIGHT_OFFSET, CUBE_BUBBLE_SWAP[1] + 96],
+};
 
 /** Частицы по радиусу ядра, px: мельче — дальше. */
 function particlePlane(radius) {
@@ -490,6 +513,72 @@ async function main() {
   const { planeOf, stats, why } = assignPlanes(elements, w, h);
   const { weight, labels } = elements;
 
+  // Удаляем цельные именованные элементы, а не прямоугольники: камера рядом
+  // с левым графиком, соты и остальные части сцены сохраняются пиксель в пиксель.
+  let removedPixels = 0;
+  for (let i = 0; i < labels.length; i++) {
+    if (!REMOVED_GROUPS.has(why[labels[i]])) continue;
+    for (let c = 0; c < 3; c++) data[i * 4 + c] = BACKGROUND[c];
+    labels[i] = 0;
+    removedPixels++;
+  }
+  for (const [x0, y0, x1, y1] of REMOVED_DETAIL_RECTS) {
+    for (let y = y0; y < y1; y++) for (let x = x0; x < x1; x++) {
+      const i = y * w + x;
+      for (let c = 0; c < 3; c++) data[i * 4 + c] = BACKGROUND[c];
+      labels[i] = 0;
+      weight[i] = 0;
+      removedPixels++;
+    }
+  }
+  for (let label = 1; label < why.length; label++) {
+    if (REMOVED_GROUPS.has(why[label])) planeOf[label] = 0;
+  }
+  console.log(`removed elements: ${removedPixels} pixels`);
+
+  // Сначала сохраняем все элементы, затем очищаем исходные места и переносим:
+  // это позволяет обменять их местами, не затерев один элемент другим.
+  const movedLabels = new Set(Object.keys(ELEMENT_OFFSETS).map(name => why.indexOf(name)));
+  const moves = Object.entries(ELEMENT_OFFSETS).map(([name, [dx, dy]]) => {
+    const label = why.indexOf(name);
+    if (label < 1) throw new Error(`missing element ${name}`);
+    const pixels = [];
+    for (let i = 0; i < labels.length; i++) {
+      if (labels[i] !== label) continue;
+      const x = i % w, y = Math.floor(i / w);
+      const to = (y + dy) * w + x + dx;
+      if (x + dx < 0 || x + dx >= w || y + dy < 0 || y + dy >= h
+        || (labels[to] && !movedLabels.has(labels[to]) && planeOf[labels[to]] !== PLANE.deep)) {
+        throw new Error(`offset ${name} at [${x + dx}, ${y + dy}] overlaps ${why[labels[to]] || 'scene edge'}`);
+      }
+      pixels.push({ from: i, to, rgb: Array.from(data.subarray(i * 4, i * 4 + 3)), weight: weight[i] });
+    }
+    return { name, dx, dy, label, pixels };
+  });
+  for (const { pixels } of moves) {
+    for (const { from } of pixels) {
+      for (let c = 0; c < 3; c++) data[from * 4 + c] = BACKGROUND[c];
+      labels[from] = 0;
+      weight[from] = 0;
+      lum[from] = 0.2126 * BACKGROUND[0] + 0.7152 * BACKGROUND[1] + 0.0722 * BACKGROUND[2];
+    }
+  }
+  for (const { name, dx, dy, label, pixels } of moves) {
+    for (const pixel of pixels) {
+      // Цифры дальнего плана сохраняются под прозрачными промежутками значка,
+      // как при переносе элементов в relayout-spatial-header.js.
+      if (pixel.rgb.every((v, c) => v === BACKGROUND[c])) continue;
+      for (let c = 0; c < 3; c++) {
+        data[pixel.to * 4 + c] = Math.max(0, Math.min(255,
+          data[pixel.to * 4 + c] + pixel.rgb[c] - BACKGROUND[c]));
+      }
+      labels[pixel.to] = label;
+      weight[pixel.to] = Math.max(weight[pixel.to], pixel.weight);
+      lum[pixel.to] = 0.2126 * data[pixel.to * 4] + 0.7152 * data[pixel.to * 4 + 1] + 0.0722 * data[pixel.to * 4 + 2];
+    }
+    console.log(`moved ${name}: [${dx}, ${dy}], ${pixels.length} pixels`);
+  }
+
   const plate = new Jimp(w, h, Jimp.rgbaToInt(...BACKGROUND, 255));
   await plate.writeAsync(OUT_PLATE);
   // PNG сохраняет и однотонную подложку, и контуры без повторного JPEG-сжатия.
@@ -552,7 +641,8 @@ async function main() {
   }
   writeGray(OUT_TILES, tw, th, (i) => tiles[i] * TILE_BIT_STEP);
 
-  fs.copyFileSync(HQ, OUT_IMAGE);
+  // Полная и размытая копии получают ту же очистку, что слои Android 13+.
+  await hq.writeAsync(OUT_IMAGE);
   const small = hq.clone().resize(BLUR_WIDTH, Jimp.AUTO, Jimp.RESIZE_BICUBIC);
   const { width: bw, height: bh, data: bd } = small.bitmap;
   for (let c = 0; c < 3; c++) {

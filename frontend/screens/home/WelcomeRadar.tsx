@@ -26,6 +26,8 @@ type WelcomeRadarProps = {
   size: number;
   /** Видимый диаметр аватара в центре — от него начинается шкала и луч. */
   avatarSize?: number;
+  /** Уменьшенный аватар крупного телефона: более плотные свободные кольца. */
+  balanceRanges?: boolean;
   /** false — вкладка «Поиск» скрыта: луч стоит, кадры не считаются. */
   active?: boolean;
   /** Первый непустой Skia-кадр собран на UI-потоке. */
@@ -45,7 +47,7 @@ function useAppActive(): boolean {
   return appActive;
 }
 
-export function WelcomeRadar({ size, avatarSize, active = true, onReady, children }: WelcomeRadarProps) {
+export function WelcomeRadar({ size, avatarSize, balanceRanges = false, active = true, onReady, children }: WelcomeRadarProps) {
   /**
    * Размер целиком задаёт родитель. Своего onLayout здесь нет намеренно.
    *
@@ -76,7 +78,7 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
   useEffect(() => {
     let payload: RadarPayload | null = null;
     try {
-      payload = prepareRadarPayload(geometry, PixelRatio.get());
+      payload = prepareRadarPayload(geometry, PixelRatio.get(), balanceRanges);
     } catch (e) {
       logger.warn('[welcome-radar] static layer failed', { error: String((e as Error)?.message ?? e) });
     }
@@ -90,7 +92,7 @@ export function WelcomeRadar({ size, avatarSize, active = true, onReady, childre
       // После замены пустой Picture ждём, пока Skia реально отрисует кадр на экране.
       runOnJS(reportReady)();
     })(payload);
-  }, [geometry, picture, reportReady, scene]);
+  }, [balanceRanges, geometry, picture, reportReady, scene]);
 
   useEffect(
     () => () => {

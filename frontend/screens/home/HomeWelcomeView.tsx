@@ -537,6 +537,7 @@ function HomeWelcomeViewInner({
             <WelcomeRadar
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
+              balanceRanges={!isTabletLayout && usesLargePhoneAvatar(Math.min(stageWidth, stageHeight))}
               onReady={onRadarReady}
             >
               {showRadarAvatar ? (

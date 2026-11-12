@@ -73,6 +73,17 @@ const CHAT_BUBBLE_IN = 'rgba(51, 59, 71, 0.98)';
 const CHAT_BUBBLE_OUT = 'rgba(49, 70, 85, 0.99)';
 const CHAT_BUBBLE_BORDER = 'rgba(255,255,255,0.12)';
 
+type ChatBackgroundSlide =
+  | (ChatBackgroundItem & { available: true })
+  | { key: string; available: false };
+
+const CHAT_BACKGROUND_SLIDES: ChatBackgroundSlide[] = [
+  ...CHAT_BACKGROUND_CATALOG.map(item => ({ ...item, available: true as const })),
+  { key: 'background-coming-soon-1', available: false },
+  { key: 'background-coming-soon-2', available: false },
+  { key: 'background-coming-soon-3', available: false },
+];
+
 function withAlpha(hex: string, alpha: number): string {
   const value = hex.replace('#', '');
   if (!/^[0-9a-fA-F]{6}$/.test(value)) return `rgba(255,255,255,${alpha})`;
@@ -88,7 +99,7 @@ function ChatBackgroundCard({
   height,
   onLoad,
 }: {
-  item: ChatBackgroundItem;
+  item: ChatBackgroundSlide;
   width: number;
   height: number;
   onLoad?: () => void;
@@ -96,19 +107,29 @@ function ChatBackgroundCard({
   return (
     <View style={styles.cardShadow}>
       <View style={[styles.backgroundCard, { width, height, borderRadius: Math.round(height * 0.16) }]}>
-        <ExpoImage
-          source={item.source}
-          style={StyleSheet.absoluteFillObject}
-          contentFit="cover"
-          cachePolicy="memory-disk"
-          onLoad={onLoad}
-        />
-        <LinearGradient
-          colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.24)']}
-          style={StyleSheet.absoluteFillObject}
-        />
-        <View style={[styles.chatBubble, styles.chatBubbleLeft]} />
-        <View style={[styles.chatBubble, styles.chatBubbleRight]} />
+        {item.available ? (
+          <>
+            <ExpoImage
+              source={item.source}
+              style={StyleSheet.absoluteFillObject}
+              contentFit="cover"
+              cachePolicy="memory-disk"
+              onLoad={onLoad}
+            />
+            <LinearGradient
+              colors={['rgba(0,0,0,0.02)', 'rgba(0,0,0,0.24)']}
+              style={StyleSheet.absoluteFillObject}
+            />
+            <View style={[styles.chatBubble, styles.chatBubbleLeft]} />
+            <View style={[styles.chatBubble, styles.chatBubbleRight]} />
+          </>
+        ) : (
+          <View pointerEvents="none" style={styles.lockedOverlay}>
+            <View style={styles.frameLockBadge}>
+              <MaterialCommunityIcons name="lock" size={Math.round(height * 0.25)} color={CROWN_GOLD} />
+            </View>
+          </View>
+        )}
       </View>
     </View>
   );
@@ -135,7 +156,7 @@ function FrameCoverCard({
         onLoad={onLoad}
       />
       {!item.available ? (
-        <View pointerEvents="none" style={[styles.frameLockedOverlay, { borderRadius: size / 2 }]}>
+        <View pointerEvents="none" style={[styles.lockedOverlay, { borderRadius: size / 2 }]}>
           <View style={styles.frameLockBadge}>
             <MaterialCommunityIcons name="lock" size={Math.round(size * 0.25)} color={CROWN_GOLD} />
           </View>
@@ -461,7 +482,7 @@ function FramesStoreContent({
   if (purchaseNotice) lastPurchaseNoticeRef.current = purchaseNotice;
   const shownNotice = purchaseNotice ?? lastPurchaseNoticeRef.current;
   const entitlements = useCosmetics();
-  const activeBackground = CHAT_BACKGROUND_CATALOG[activeBackgroundIndex] ?? CHAT_BACKGROUND_CATALOG[0];
+  const activeBackground = CHAT_BACKGROUND_SLIDES[activeBackgroundIndex] ?? CHAT_BACKGROUND_SLIDES[0];
   const activeFrame = FRAME_CATALOG[activeFrameIndex] ?? FRAME_CATALOG[0];
 
   useEffect(() => {
@@ -559,23 +580,25 @@ function FramesStoreContent({
   const frameCoverflowAnimation = useCallback(
     (value: number) => {
       'worklet';
+      // Круги теряют ширину сильнее карточек: шаг считаем от диаметра,
+      // чтобы соседние рамки оставались видны за центральным аватаром.
       const translateX = interpolate(
         value,
         [-3, -2, -1, 0, 1, 2, 3],
         [
-          -framePageWidth * 2.1,
-          -framePageWidth * 1.35,
-          -framePageWidth * 0.55,
+          -frameSize * 1.65,
+          -frameSize * 1.1,
+          -frameSize * 0.6,
           0,
-          framePageWidth * 0.55,
-          framePageWidth * 1.35,
-          framePageWidth * 2.1,
+          frameSize * 0.6,
+          frameSize * 1.1,
+          frameSize * 1.65,
         ],
         Extrapolation.CLAMP,
       );
-      const rotateY = interpolate(value, [-2, -1, 0, 1, 2], [62, 58, 0, -58, -62], Extrapolation.CLAMP);
-      const scale = interpolate(value, [-2, -1, 0, 1, 2], [0.72, 0.84, 1.1, 0.84, 0.72], Extrapolation.CLAMP);
-      const opacity = interpolate(value, [-3, -2, -1, 0, 1, 2, 3], [0.2, 0.45, 0.75, 1, 0.75, 0.45, 0.2], Extrapolation.CLAMP);
+      const rotateY = interpolate(value, [-2, -1, 0, 1, 2], [54, 44, 0, -44, -54], Extrapolation.CLAMP);
+      const scale = interpolate(value, [-2, -1, 0, 1, 2], [0.74, 0.85, 1.08, 0.85, 0.74], Extrapolation.CLAMP);
+      const opacity = interpolate(value, [-3, -2, -1, 0, 1, 2, 3], [0.18, 0.45, 0.78, 1, 0.78, 0.45, 0.18], Extrapolation.CLAMP);
       const zIndex = Math.round(interpolate(value, [-2, -1, 0, 1, 2], [2, 8, 30, 8, 2], Extrapolation.CLAMP));
       return {
         transform: [{ perspective: 1000 }, { translateX }, { rotateY: `${rotateY}deg` }, { scale }],
@@ -583,13 +606,14 @@ function FramesStoreContent({
         zIndex,
       };
     },
-    [framePageWidth],
+    [frameSize],
   );
 
   if (!visible && !keepWarm) return null;
 
   const openSharedCheckout = async (kind: CosmeticKind) => {
-    if (paymentBusy || (kind === 'frame' && !activeFrame.available)) return;
+    if (paymentBusy || (kind === 'frame' && !activeFrame.available) ||
+      (kind === 'background' && !activeBackground.available)) return;
     const itemId = kind === 'background' ? activeBackground.key : activeFrame.key;
     const owned = kind === 'background'
       ? entitlements.purchasedBackgroundIds.includes(itemId)
@@ -649,7 +673,7 @@ function FramesStoreContent({
           key={`bg-${orientKey}-${backgroundPageWidth}-${backgroundCardWidth}`}
           width={backgroundPageWidth}
           height={backgroundPageHeight}
-          data={CHAT_BACKGROUND_CATALOG}
+          data={CHAT_BACKGROUND_SLIDES}
           // Смена ступени размеров или поворот пересоздают карусель — без этого
           // она вставала на первый фон, а описание оставалось от выбранного.
           defaultIndex={activeBackgroundIndex}
@@ -672,7 +696,7 @@ function FramesStoreContent({
                 minimumFontScale={0.65}
                 numberOfLines={1}
               >
-                {L(cosmeticNameKey(item.key))}
+                {L(item.available ? cosmeticNameKey(item.key) : 'storeComingSoon')}
               </FitText>
             </View>
           )}
@@ -681,26 +705,28 @@ function FramesStoreContent({
       <FlexGap {...gaps.copy} />
       <View style={[styles.selectionCopy, compact && styles.selectionCopyCompact]}>
         <FitText style={[styles.itemTitle, compact && styles.itemTitleCompact]} minimumFontScale={0.75}>
-          {L(cosmeticNameKey(activeBackground.key))}
+          {L(activeBackground.available ? cosmeticNameKey(activeBackground.key) : 'storeComingSoon')}
         </FitText>
         <AdaptiveText style={[styles.subtitle, compact && styles.subtitleCompact]} numberOfLines={compact ? 1 : 2}>
-          {L(cosmeticBlurbKey(activeBackground.key))}
+          {L(activeBackground.available ? cosmeticBlurbKey(activeBackground.key) : 'storeMoreBackgroundsSoon')}
         </AdaptiveText>
       </View>
       <FlexGap {...gaps.button} />
       <PurchaseButton
-        label={paymentBusy === 'background'
-          ? L('storeOpeningPayment')
-          : backgroundOwned
-            ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
-            : L('storeBuyBackground').replace('{price}', '99 ₽')}
-        icon="image-outline"
+        label={!activeBackground.available
+          ? L('storeComingSoon')
+          : paymentBusy === 'background'
+            ? L('storeOpeningPayment')
+            : backgroundOwned
+              ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
+              : L('storeBuyBackground').replace('{price}', '99 ₽')}
+        icon={activeBackground.available ? 'image-outline' : 'lock-outline'}
         width={buttonWidth}
         height={buttonHeight}
-        borderColor={PEARL_BORDER}
-        surfaceColor="rgba(244,240,232,0.12)"
-        contentColor="#F6F0E5"
-        disabled={paymentBusy !== null}
+        borderColor={activeBackground.available ? PEARL_BORDER : 'rgba(139,148,158,0.4)'}
+        surfaceColor={activeBackground.available ? 'rgba(244,240,232,0.12)' : 'rgba(139,148,158,0.08)'}
+        contentColor={activeBackground.available ? '#F6F0E5' : WELCOME_MUTED_TEXT}
+        disabled={!activeBackground.available || paymentBusy !== null}
         onPress={() => void openSharedCheckout('background')}
       />
     </>
@@ -943,7 +969,7 @@ const styles = StyleSheet.create({
     shadowRadius: 13,
     elevation: 9,
   },
-  frameLockedOverlay: {
+  lockedOverlay: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: 'rgba(4,8,14,0.64)',
     alignItems: 'center',
@@ -956,7 +982,12 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(219,191,130,0.48)',
     backgroundColor: 'rgba(20,25,34,0.9)',
   },
-  backgroundCard: { overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.13)' },
+  backgroundCard: {
+    overflow: 'hidden',
+    backgroundColor: SHOWCASE_AVATAR_BG,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.13)',
+  },
   chatBubble: {
     position: 'absolute',
     height: '13%',

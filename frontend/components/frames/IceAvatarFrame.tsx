@@ -141,8 +141,8 @@ function IceAvatarFrameInner({
   style,
   onReady,
 }: IceAvatarFrameProps) {
-  const side = Math.max(1, Math.round(size));
-  const hole = Math.max(1, Math.min(side, Math.round(photoSize)));
+  const side = Math.max(1, photoSize <= 64 ? size : Math.round(size));
+  const hole = Math.max(1, Math.min(side, photoSize <= 64 ? photoSize : Math.round(photoSize)));
   const inset = (side - hole) / 2;
   const effect = useMemo(() => Skia.RuntimeEffect.Make(ICE_SKSL), []);
   const ring = useBakedRing(ICE_RING, side);

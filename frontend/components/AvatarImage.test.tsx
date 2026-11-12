@@ -3,6 +3,7 @@ import React from 'react';
 const mockSlots: unknown[] = [];
 let mockCursor = 0;
 let mockEffects: Array<() => void> = [];
+let mockDensity = 2.8125;
 const mockResolve = jest.fn();
 const mockCached = new Map<string, string>();
 jest.mock('react', () => ({
@@ -33,6 +34,7 @@ jest.mock('react', () => ({
 }));
 jest.mock('react-native', () => ({
   Platform: { OS: 'android' }, View: 'View', StyleSheet: { create: (s: unknown) => s, absoluteFillObject: {} },
+  PixelRatio: { roundToNearestPixel: (value: number) => Math.round(value * mockDensity) / mockDensity },
 }));
 jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
 jest.mock('react-native-svg', () => ({ __esModule: true, default: 'Svg' }));
@@ -43,10 +45,12 @@ jest.mock('../utils/dataUriToFileUri', () => ({
 }));
 jest.mock('../utils/avatarCache', () => ({ getAvatarUri: jest.fn(async () => null) }));
 jest.mock('../utils/imageOptimization', () => ({ getAvatarImageProps: (uri: string) => ({ source: { uri } }) }));
-jest.mock('../utils/cosmeticCatalog', () => ({ getCosmeticFrame: () => null }));
+jest.mock('../utils/cosmeticCatalog', () => ({ getCosmeticFrame: (id: string) =>
+  id ? { colors: ['#ffffff', '#888888'] } : null }));
 jest.mock('../utils/cosmetics', () => ({ useUserActiveFrame: () => '' }));
 jest.mock('../utils/logger', () => ({ logger: { info: jest.fn(), warn: jest.fn() } }));
-jest.mock('./frames/FireAvatarFrame', () => ({ FireAvatarFrame: 'Frame', fireFrameOutset: () => 2 }));
+jest.mock('./frames/FireAvatarFrame', () => ({ FireAvatarFrame: 'Frame', fireFrameOutset: (size: number) =>
+  Math.max(2, Math.min(12, Math.round(Math.max(1, size) * 0.085))) }));
 jest.mock('./frames/IceAvatarFrame', () => ({ IceAvatarFrame: 'Frame' }));
 jest.mock('./frames/DiamondAvatarFrame', () => ({ DiamondAvatarFrame: 'Frame' }));
 jest.mock('./AvatarGlyph', () => ({ AvatarGlyph: 'Glyph' }));
@@ -70,6 +74,7 @@ const avatar = (id: string, version: number, uri: string) => render(() =>
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 beforeEach(() => {
+  mockDensity = 2.8125;
   mockSlots.length = 0;
   mockEffects = [];
   mockCached.clear();
@@ -134,4 +139,38 @@ it('clears a removed photo and preserves a stable file when the same image retur
   let tree;
   for (let i = 0; i < 3; i++) tree = avatar('stable', 2, '');
   expect(imageUri(tree)).toBeUndefined();
+});
+
+type FramedAvatarTree = React.ReactElement<{
+  style: Array<{ width: number; height: number }>;
+  children: React.ReactElement<{ size: number; photoSize: number; style: { left: number; top: number } }>;
+}>;
+
+it.each(['fire', 'frost', 'diamond'].flatMap(frameId =>
+  [22, 30, 34, 38, 40, 42].map(size => [frameId, size] as const),
+))('keeps the small %s frame and %s dp photo centered on physical pixels', (frameId, size) => {
+  const tree = render(() => AvatarImage({ size, frameId, uri: 'file:///small-avatar.jpg' })) as FramedAvatarTree;
+  const photo = tree.props.style[tree.props.style.length - 1];
+  const frame = tree.props.children.props;
+  expect(photo.width * mockDensity).toBeCloseTo(Math.round(size * mockDensity), 8);
+  expect(photo.height).toBe(photo.width);
+  expect(frame.photoSize).toBe(photo.width);
+  expect(frame.size * mockDensity).toBeCloseTo(Math.round(frame.size * mockDensity), 8);
+  expect(frame.style.left * mockDensity).toBeCloseTo(Math.round(frame.style.left * mockDensity), 8);
+  expect(frame.style.top).toBe(frame.style.left);
+  expect(frame.style.left + frame.size / 2).toBeCloseTo(photo.width / 2, 8);
+});
+
+it.each([2.625, 3.5, 4])('keeps a small frame centered at density %s', density => {
+  mockDensity = density;
+  const tree = render(() => AvatarImage({ size: 38, frameId: 'diamond', uri: 'file:///small-avatar.jpg' })) as FramedAvatarTree;
+  const frame = tree.props.children.props;
+  expect(frame.photoSize * density).toBeCloseTo(Math.round(38 * density), 8);
+  expect(frame.style.left * density).toBeCloseTo(Math.round(frame.style.left * density), 8);
+  expect(frame.style.left + frame.size / 2).toBeCloseTo(frame.photoSize / 2, 8);
+});
+
+it('preserves the dimensions of a large framed avatar', () => {
+  const tree = render(() => AvatarImage({ size: 121, frameSize: 141, frameId: 'fire', uri: 'file:///large-avatar.jpg' })) as FramedAvatarTree;
+  expect(tree.props.children.props).toMatchObject({ size: 141, photoSize: 121, style: { left: -10, top: -10 } });
 });

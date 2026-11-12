@@ -30,7 +30,7 @@ import {
   type ChatReadStatus,
 } from "./chatMessageIds";
 import { getMessageImageUris, CHAT_ALBUM_INSET, albumGridLayout } from "./chatAlbum";
-import { UI_ACCENT, UI_ACCENT_PRESSED } from "../home/constants";
+import { LIVI as HOME_LIVI, UI_ACCENT, UI_ACCENT_PRESSED } from "../home/constants";
 
 /** Активный чекбокс выбора — как иконки активной вкладки в navbar. */
 const SELECT_CHECK = UI_ACCENT;
@@ -954,12 +954,12 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
         );
         
       case 'read':
-        // Прочитано - две бирюзовые птички
+        // Прочитано — две зелёные галочки, как стрелки входящего звонка.
         return (
           <View style={{ flexDirection: 'row', alignItems: 'center', marginLeft: 2 }}>
             <View style={{ position: 'relative' }}>
-              <Ionicons name="checkmark" size={14} color="hsl(108, 53.10%, 35.10%)" />
-              <Ionicons name="checkmark" size={14} color="hsl(108, 53.10%, 35.10%)" style={{ position: 'absolute', left: 5, top: 0 }} />
+              <Ionicons name="checkmark" size={14} color={HOME_LIVI.green} />
+              <Ionicons name="checkmark" size={14} color={HOME_LIVI.green} style={{ position: 'absolute', left: 5, top: 0 }} />
             </View>
           </View>
         );

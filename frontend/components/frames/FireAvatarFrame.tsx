@@ -186,8 +186,9 @@ function FireAvatarFrameInner({
   style,
   onReady,
 }: FireAvatarFrameProps) {
-  const side = Math.max(1, Math.round(size));
-  const hole = Math.max(1, Math.min(side, Math.round(photoSize)));
+  // Миниатюры уже выровнены по физическим пикселям в AvatarImage.
+  const side = Math.max(1, photoSize <= 64 ? size : Math.round(size));
+  const hole = Math.max(1, Math.min(side, photoSize <= 64 ? photoSize : Math.round(photoSize)));
   const inset = (side - hole) / 2;
   const effect = useMemo(() => Skia.RuntimeEffect.Make(FIRE_SKSL), []);
   const reduceMotion = useReducedMotion();

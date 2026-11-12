@@ -82,9 +82,6 @@ import type { Friend } from './types';
 
 type ChatsFilter = 'all' | 'unread';
 
-/** Как у облака в чате (ChatMessageItem): две зелёные галочки — прочитано. */
-const CHAT_READ_TICK = 'hsl(108, 53.10%, 35.10%)';
-
 /** Статус своего последнего сообщения — слева от времени, те же значки, что в чате. */
 function ChatRowStatus({ status }: { status: ChatReadStatus }) {
   if (status === 'sending') {
@@ -100,8 +97,8 @@ function ChatRowStatus({ status }: { status: ChatReadStatus }) {
   if (status === 'read') {
     return (
       <View style={[styles.rowStatus, styles.rowStatusRead]}>
-        <Ionicons name="checkmark" size={14} color={CHAT_READ_TICK} />
-        <Ionicons name="checkmark" size={14} color={CHAT_READ_TICK} style={styles.rowStatusSecondTick} />
+        <Ionicons name="checkmark" size={14} color={LIVI.green} />
+        <Ionicons name="checkmark" size={14} color={LIVI.green} style={styles.rowStatusSecondTick} />
       </View>
     );
   }

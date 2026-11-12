@@ -5729,9 +5729,12 @@ const handleClearNick = useCallback(async () => {
       style={{ flex: 1, backgroundColor: HOME_NAV_BG }}
       onLayout={onHomeRootLayout}
     >
-      {/* Сцена за стеклом (SpatialDepth): под стеклом шапок и навбара она же, размытая. */}
+      {/* Под нижней навигацией остаются основной фон и нижняя полоса сот. */}
       <BlurSourceFill sourceId={HOME_BLUR_BG_SOURCE}>
-        <SpatialStageBackground enabled={!showFliqTab} />
+        <SpatialStageBackground
+          enabled={!showFliqTab}
+          clearBottomHeight={tabBarH + GLASS_DOCK_TOP_PAD}
+        />
       </BlurSourceFill>
       <HomeLayoutProvider size={homeLayoutSize}>
       <View

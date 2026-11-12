@@ -11,6 +11,7 @@ import android.graphics.ColorMatrixColorFilter
 import android.graphics.LinearGradient
 import android.graphics.Matrix
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PorterDuff
 import android.graphics.PorterDuffXfermode
 import android.graphics.RadialGradient
@@ -619,6 +620,9 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
   private var geometryKey = ""
   private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
   private val fallbackPaint = Paint().apply { color = Color.rgb(37, 43, 52) }
+  private var clearBottomHeight = 0f
+  private val dockClip = Path()
+  private val honeycombRect = RectF()
   private var scene: Any? = null
   private var blurPx = -1f
   /** Пересчитанные под текущий экран фон и элементы; null — ещё считаются. */
@@ -648,6 +652,13 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
   fun setActive(value: Boolean) {
     active = value
     updateDriver()
+  }
+
+  fun setClearBottomHeightDp(value: Float) {
+    val next = PixelUtil.toPixelFromDIP(value.coerceAtLeast(0f))
+    if (next == clearBottomHeight) return
+    clearBottomHeight = next
+    invalidate()
   }
 
   /** Наклон, с которым сцена нарисована: по нему стекло над ней берёт свой кусок. */
@@ -781,6 +792,37 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
       return
     }
     updateGeometry(img)
+    val restore = canvas.save()
+    try {
+      if (clearBottomHeight > 0f) {
+        val top = (height - clearBottomHeight).coerceAtLeast(0f)
+        canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), fallbackPaint)
+        dockClip.reset()
+        dockClip.fillType = Path.FillType.EVEN_ODD
+        dockClip.addRect(0f, 0f, width.toFloat(), height.toFloat(), Path.Direction.CW)
+        dockClip.addRect(0f, top, width.toFloat(), height.toFloat(), Path.Direction.CW)
+        // Область сот — та же, что GROUPS.honeycomb в generate-spatial-depth.js.
+        // Проецируем её матрицей сцены и сдвигаем вместе с дальним планом.
+        val sourceScale = img.width / 1440f
+        honeycombRect.set(0f, 1820f * sourceScale, 270f * sourceScale, 2180f * sourceScale)
+        imageMatrix.mapRect(honeycombRect)
+        val shift = if (layered) planeShift[0] else (farShift + nearShift) / 2f
+        val snap = layered && sharp != null && sharpLayers != null
+        val dx = tiltX * shift
+        val dy = tiltY * shift
+        honeycombRect.offset(if (snap) round(dx) else dx, if (snap) round(dy) else dy)
+        if (honeycombRect.intersect(0f, top, width.toFloat(), height.toFloat())) {
+          dockClip.addRect(honeycombRect, Path.Direction.CW)
+        }
+        canvas.clipPath(dockClip)
+      }
+      drawScene(canvas, img)
+    } finally {
+      canvas.restoreToCount(restore)
+    }
+  }
+
+  private fun drawScene(canvas: Canvas, img: Bitmap) {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
       val lay = layers
       val pl = planes
@@ -1292,6 +1334,9 @@ class SpatialBackgroundViewManager : SimpleViewManager<SpatialBackgroundView>() 
 
   @ReactProp(name = "active", defaultBoolean = false)
   fun setActive(view: SpatialBackgroundView, value: Boolean) = view.setActive(value)
+
+  @ReactProp(name = "clearBottomHeight", defaultFloat = 0f)
+  fun setClearBottomHeight(view: SpatialBackgroundView, value: Float) = view.setClearBottomHeightDp(value)
 }
 
 class SpatialGlassViewManager : SimpleViewManager<SpatialGlassView>() {

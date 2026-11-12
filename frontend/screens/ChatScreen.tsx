@@ -166,6 +166,7 @@ import {
 import { GLASS_AVAILABLE, GlassFill, StageGradient } from './home/WelcomeStageBackground';
 import { BlurSourceFill, type BackdropSources } from '../components/BackdropBlur';
 import {
+  LIVI as HOME_LIVI,
   HOME_NAV_BG,
   WELCOME_GLASS_RIM,
   WELCOME_POPUP_ACCENT,
@@ -240,8 +241,6 @@ type Props = { route: { params?: RouteParams }; navigation: NativeStackNavigatio
 
 /** Сколько реакций видно в свёрнутой строке меню сообщения (остальные — по стрелке). */
 const MSG_REACTIONS_COLLAPSED = 5;
-/** Как галочки «прочитано» в облаке сообщения. */
-const CHAT_READ_TICK_COLOR = 'hsl(108, 53.10%, 35.10%)';
 /** Компактная шапка чата: контент ближе к системной строке, как в Telegram. */
 const CHAT_HEADER_H = 48;
 const CHAT_HEADER_TOP_PADDING = 6 + APP_TOP_CONTENT_GAP;
@@ -347,7 +346,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     titan: (theme.colors.titan || theme.colors.onSurfaceVariant) as string,
     text: theme.colors.onSurfaceVariant as string,
     white: theme.colors.onSurface as string,
-    green: '#2ECC71',
+    green: HOME_LIVI.green,
     red: '#FF5A67',
     presenceGreen: isDark ? '#2ECC71' : '#28A85E',
     presenceRed: isDark ? '#FF5A67' : '#E64E59',
@@ -4458,7 +4457,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                       <Ionicons
                         name="checkmark-done"
                         size={actionIconSize - 2}
-                        color={CHAT_READ_TICK_COLOR}
+                        color={LIVI.green}
                         style={{ marginRight: iconGap - 4 }}
                       />
                       <Text style={{ color: WELCOME_MUTED_TEXT, fontSize: actionFontSize - 1 }} numberOfLines={1}>

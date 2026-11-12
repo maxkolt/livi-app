@@ -1,6 +1,6 @@
 // components/AvatarImage.tsx
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
-import { StyleSheet, View, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
+import { PixelRatio, StyleSheet, View, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
@@ -66,16 +66,10 @@ const ACTIVE_FRAME_RING_MAX = 5;
  * диаметра держит пропорцию, а границы не дают рамке пропасть на крошечных
  * аватарах и превратиться в бублик на крупных.
  *
- * Целое значение принципиально: дробные размеры SVG и раскладка округляют
- * по-разному, и кольцо переставало совпадать с краем фотографии.
- *
- * Один источник для всех экранов. Раньше «Профиль» брал константу 2.5, а
- * «Поиск» считал по формуле от орбит и получал ~4.5 — одна и та же купленная
- * рамка выглядела по-разному в двух местах.
- *
- * Границы целые не случайно: outerSize = photoSize + ringWidth × 2, и дробная
- * толщина (те же 1.8) вернула бы дробный размер контейнера — ровно то, с чего
- * начиналось расхождение кольца с краем фотографии.
+ * Это предпочтительная толщина в dp. На маленьком аватаре окончательные
+ * диаметр фото и вынос рамки дополнительно выравниваются по физическим
+ * пикселям: целые dp на дробной плотности Android сами по себе не совпадают
+ * с пиксельной сеткой.
  */
 function activeFrameRingWidth(avatarSize: number): number {
   const raw = Math.round(avatarSize) * ACTIVE_FRAME_RING_RATIO;
@@ -262,18 +256,19 @@ const AvatarImage = memo<AvatarImageProps>(({
   const isIceFrame = activeFrameId === 'frost';
   const isDiamondFrame = activeFrameId === 'diamond';
   const isLiveFrame = isFireFrame || isIceFrame || isDiamondFrame;
-  /**
-   * Вся геометрия в целых dp. Дробные размеры (приходило 120.99882…) SVG и
-   * раскладка округляют по-разному, и кольцо переставало совпадать с краем
-   * фотографии на доли пикселя, которые складывались в заметное смещение.
-   */
-  const photoSize = Math.round(size);
+  // На миниатюрах целые dp дают дробные физические пиксели. Android округляет
+  // фото и рамку отдельно: центр съезжает до 1 px. Округляем диаметр фото и
+  // каждый вынос рамки заранее, чтобы их центры совпадали после раскладки.
+  const alignSmallFrame = hasActiveFrame && Math.round(size) <= 64;
+  const photoSize = alignSmallFrame ? PixelRatio.roundToNearestPixel(Math.round(size)) : Math.round(size);
   const preferredOutset = activeFrameOutset(photoSize, activeFrameId);
   const calculatedOuterSize = hasActiveFrame ? photoSize + preferredOutset * 2 : photoSize;
-  const outerSize = hasActiveFrame && frameSize
+  const requestedOuterSize = hasActiveFrame && frameSize
     ? Math.max(photoSize, Math.round(frameSize))
     : calculatedOuterSize;
-  const frameOutset = hasActiveFrame ? (outerSize - photoSize) / 2 : 0;
+  const requestedOutset = hasActiveFrame ? (requestedOuterSize - photoSize) / 2 : 0;
+  const frameOutset = alignSmallFrame ? PixelRatio.roundToNearestPixel(requestedOutset) : requestedOutset;
+  const outerSize = hasActiveFrame ? photoSize + frameOutset * 2 : photoSize;
   const avatarRadius = photoSize / 2;
 
   useEffect(() => {

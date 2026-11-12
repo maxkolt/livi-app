@@ -137,6 +137,24 @@ export function radarFittedAvatarSize(size: number, avatarSize: number): number 
   return Math.round(2 * g.rIn - INNER_RING_STROKE * g.u);
 }
 
+/** Свободные кольца: центральный круг и внешний обод остаются на своих местах. */
+export function radarRangeRadii(g: RadarGeometry, balanceRanges = false): number[] {
+  const { a, rIn, rDisc, u } = g;
+  const ranges = a > 0 ? 3 : 4;
+  const s0 = fisheyeSource(rIn / rDisc, LENS_K);
+  let firstStep = 1 / ranges;
+  if (balanceRanges && a > 0) {
+    // После уменьшения аватара на крупных телефонах первая полоса стала шире.
+    // Ограничиваем её ширину, а остаток делим под той же линзой до края шкалы.
+    const firstRadius = Math.min(rDisc, rIn + 28 * u);
+    firstStep = Math.min(firstStep, (fisheyeSource(firstRadius / rDisc, LENS_K) - s0) / (1 - s0));
+  }
+  return Array.from({ length: ranges - 1 }, (_, i) => {
+    const step = firstStep + ((1 - firstStep) * i) / (ranges - 1);
+    return rDisc * fisheyeScreen(s0 + (1 - s0) * step, LENS_K);
+  });
+}
+
 function color(hex: string, alpha: number): SkColor {
   'worklet';
   const n = parseInt(hex.slice(1), 16);
@@ -299,16 +317,12 @@ function drawTerrain(canvas: SkCanvas, g: RadarGeometry): void {
 }
 
 /** Стекло с ободом: кольца дальности, перекрестие, шкала, кромка. Не двигается. */
-function drawBezel(canvas: SkCanvas, g: RadarGeometry): void {
-  const { cx, cy, u, a, rIn, rDisc } = g;
+function drawBezel(canvas: SkCanvas, g: RadarGeometry, balanceRanges: boolean): void {
+  const { cx, cy, u, rIn, rDisc } = g;
   const center = Skia.Point(cx, cy);
 
   const rangePaint = strokePaint(0.7 * u, color(HUD, 0.22));
-  // Без аватара круг весь свободен — колец дальности на одно больше.
-  const ranges = a > 0 ? 3 : 4;
-  const s0 = fisheyeSource(rIn / rDisc, LENS_K);
-  for (let k = 1; k < ranges; k++) {
-    const r = rDisc * fisheyeScreen(s0 + ((1 - s0) * k) / ranges, LENS_K);
+  for (const r of radarRangeRadii(g, balanceRanges)) {
     canvas.drawCircle(cx, cy, r, rangePaint);
   }
 
@@ -380,7 +394,7 @@ export type RadarPayload = {
 };
 
 /** JS-поток: всё, что не меняется от кадра к кадру. */
-export function prepareRadarPayload(g: RadarGeometry, pd: number): RadarPayload | null {
+export function prepareRadarPayload(g: RadarGeometry, pd: number, balanceRanges = false): RadarPayload | null {
   const px = Math.max(1, Math.ceil(g.size * pd));
   const surface = Skia.Surface.Make(px, px);
   if (!surface) return null;
@@ -395,7 +409,7 @@ export function prepareRadarPayload(g: RadarGeometry, pd: number): RadarPayload 
   return {
     g,
     terrain: snapshot(drawTerrain),
-    image: snapshot(drawBezel),
+    image: snapshot((canvas, geometry) => drawBezel(canvas, geometry, balanceRanges)),
     dashRing: recordDashRing(g),
   };
 }
