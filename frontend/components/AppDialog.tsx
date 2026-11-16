@@ -134,7 +134,8 @@ export function AppDialogButton({
   disabled,
   busy,
   stretch = true,
-}: AppDialogAction & { stretch?: boolean }) {
+  icon,
+}: AppDialogAction & { stretch?: boolean; icon?: React.ReactNode }) {
   const inactive = !!disabled || !!busy;
   // Главное действие подписано как ник над радаром: Exo 2 Medium, тот же цвет и разрядка.
   const nickFont = useNickDigitalFont();
@@ -142,12 +143,14 @@ export function AppDialogButton({
     <Pressable
       onPress={onPress}
       disabled={inactive}
+      hitSlop={icon ? 6 : undefined}
       accessibilityRole="button"
       accessibilityLabel={accessibilityLabel || label}
       accessibilityState={{ disabled: inactive, busy: !!busy }}
       style={({ pressed }) => [
         styles.button,
         stretch && styles.buttonStretch,
+        !!icon && styles.buttonIcon,
         variant === 'danger'
           ? [styles.buttonDanger, pressed && styles.buttonDangerPressed]
           : variant === 'primary'
@@ -159,7 +162,7 @@ export function AppDialogButton({
     >
       {busy ? (
         <ActivityIndicator size="small" color={WELCOME_HEADER_TITLE} />
-      ) : (
+      ) : icon || (
         <FitText
           style={[
             styles.buttonLabel,
@@ -302,6 +305,13 @@ const styles = StyleSheet.create({
   },
   buttonStretch: {
     flex: 1,
+  },
+  buttonIcon: {
+    width: 44,
+    height: 44,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+    borderRadius: 22,
   },
   buttonCancel: {
     backgroundColor: 'rgba(255,255,255,0.06)',

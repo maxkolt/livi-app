@@ -9,6 +9,7 @@ jest.mock('react-native', () => ({ StyleSheet: { create: (value: unknown) => val
 jest.mock('react-native-gesture-handler/ReanimatedSwipeable', () => ({ __esModule: true, default: 'Swipeable' }));
 jest.mock('react-native-reanimated', () => ({ __esModule: true, default: { View: 'AnimatedView' }, useAnimatedStyle: (fn: () => object) => fn() }));
 jest.mock('../../components/AppDialog', () => ({ AppDialogButton: 'AppDialogButton' }));
+jest.mock('@expo/vector-icons', () => ({ MaterialCommunityIcons: 'Icon' }));
 jest.mock('./constants', () => ({ WELCOME_GLASS_SURFACE: '#2E3540' }));
 import { CosmeticSwipeRow } from './CosmeticSwipeRow';
 
@@ -33,6 +34,7 @@ it('reveals the shared danger button after a swipe and closes the row before con
   const { panel, button } = render();
   expect(panel.props).toMatchObject({ pointerEvents: 'auto', accessibilityElementsHidden: false });
   expect(button.props).toMatchObject({ label: 'Удалить', variant: 'danger', stretch: false, disabled: false });
+  expect(button.props.icon.props.name).toBe('trash-can-outline');
   button.props.onPress();
   expect(mockHandle.close).toHaveBeenCalledTimes(1);
   expect(remove).toHaveBeenCalledTimes(1);

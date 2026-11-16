@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { StyleSheet } from 'react-native';
 import Swipeable, { type SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import Animated, { useAnimatedStyle, type SharedValue } from 'react-native-reanimated';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { AppDialogButton } from '../../components/AppDialog';
 import { WELCOME_GLASS_SURFACE } from './constants';
 
@@ -20,7 +21,8 @@ function DeleteAction({ progress, revealed, disabled, label, accessibilityLabel,
     accessibilityElementsHidden={!revealed}
     importantForAccessibility={revealed ? 'auto' : 'no-hide-descendants'}>
     <AppDialogButton label={label} accessibilityLabel={accessibilityLabel}
-      variant="danger" stretch={false} disabled={disabled || !revealed} onPress={onPress} />
+      variant="danger" stretch={false} disabled={disabled || !revealed} onPress={onPress}
+      icon={<MaterialCommunityIcons name="trash-can-outline" size={22} color="#FF939D" />} />
   </Animated.View>;
 }
 
@@ -55,5 +57,5 @@ export function CosmeticSwipeRow({ children, deleteLabel, accessibilityLabel, di
 
 const styles = StyleSheet.create({
   content: { backgroundColor: WELCOME_GLASS_SURFACE },
-  action: { width: 124, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
+  action: { width: 72, paddingHorizontal: 10, alignItems: 'center', justifyContent: 'center' },
 });
