@@ -159,3 +159,13 @@ if (fs.existsSync(devLauncherTsconfig)) {
     console.warn('[apply-patches] engine.io-client RN offline fix:', e.message);
   }
 })();
+
+// Patched image-size exports a named function; Metro 0.82 expects the old callable export.
+{
+  const fs = require('fs');
+  const file = require('path').join(__dirname, '../node_modules/metro/src/Assets.js');
+  if (fs.existsSync(file)) {
+    const source = fs.readFileSync(file, 'utf8');
+    fs.writeFileSync(file, source.replace('const getImageSize = require("image-size").imageSize;', 'const getImageSize = require("image-size");').replace('const getImageSize = require("image-size");', 'const imageSize = require("image-size").imageSize;\nconst getImageSize = input => imageSize(typeof input === "string" ? require("fs").readFileSync(input) : input);'));
+  }
+}

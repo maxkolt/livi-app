@@ -4,6 +4,8 @@ export type UserID = string;
 
 export interface SocketData {
   userId?: UserID;
+  verifiedInstallId?: string;
+  verifiedInstallSecretHash?: string;
   nick?: string;
   partnerSid?: string | null;
   roomId?: string;
@@ -28,7 +30,7 @@ export interface ClusterEvents {
 export type BackendServer = Server<DefaultEventsMap, DefaultEventsMap, ClusterEvents, SocketData>;
 
 export type InstallHandshake = {
-  auth?: { installId?: unknown };
+  auth?: { installId?: unknown; installSecret?: unknown };
   query?: { installId?: unknown };
 };
 

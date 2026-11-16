@@ -600,6 +600,7 @@ function FramesStoreContent({
           key={`bg-${orientKey}-${backgroundPageWidth}-${backgroundCardWidth}`}
           pageWidth={backgroundPageWidth}
           spacing={backgroundPageWidth * 0.58} secondSpacing={backgroundPageWidth * 1.35}
+          thirdSpacing={backgroundPageWidth * 2.15} tilt={54}
           height={backgroundPageHeight}
           data={CHAT_BACKGROUND_SLIDES}
           // Смена ступени размеров или поворот пересоздают карусель — без этого
@@ -670,7 +671,7 @@ function FramesStoreContent({
         <StoreCarousel
           key={`frame-${orientKey}-${framePageWidth}-${frameSize}`}
           pageWidth={framePageWidth}
-          spacing={frameSize * 0.6} secondSpacing={frameSize * 1.1}
+          spacing={frameSize * 0.6} secondSpacing={frameSize * 1.1} thirdSpacing={frameSize * 1.65}
           height={framePageHeight}
           data={FRAME_CATALOG}
           index={activeFrameIndex}

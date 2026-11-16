@@ -114,7 +114,7 @@ export function getWelcomeOnlinePresenceSnapshot(io: Server): Promise<Snapshot> 
       const { epoch, revision } = state.snapshot;
       io.to(WELCOME_DELTA_ROOM).emit('presence:welcome:delta', { epoch, revision, upsert, removed });
       // Installed older builds keep receiving the exact snapshot contract.
-      io.except(WELCOME_DELTA_ROOM).emit('presence:welcome', state.snapshot);
+      io.to('identity:verified').except(WELCOME_DELTA_ROOM).emit('presence:welcome', state.snapshot);
     }
     state.refreshedAt = Date.now();
     state.completedVersion = requestedVersion;
@@ -150,7 +150,7 @@ export function bindWelcomeOnlinePresence(io: Server, socket: AuthedSocket): voi
   let syncing = false;
   let lastSyncAt = 0;
   const sync = async () => {
-    if (syncing || !socket.connected || Date.now() - lastSyncAt < 500) return;
+    if (!socket.data?.userId || !socket.data.verifiedInstallSecretHash || syncing || !socket.connected || Date.now() - lastSyncAt < 500) return;
     syncing = true;
     try {
       await socket.join(WELCOME_DELTA_ROOM);

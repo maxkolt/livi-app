@@ -695,3 +695,16 @@ export async function toWireEditPayload(
   const enc = await sealOutgoingText({ id: messageId, to, text });
   return enc ? { messageId, enc } : { messageId, text };
 }
+
+/** Only an already stored private chat key can authorize legacy installation enrollment. */
+export async function answerInstallMigrationChallenge(me: string, challenge: import('../../utils/installMigrationProof').InstallMigrationChallenge): Promise<string | null> {
+  if (shared.currentUserId !== me) return null;
+  let raw = await SecureStore.getItemAsync(SECRET_KEY_PREFIX + me).catch(() => null);
+  if (!raw && keyVault) raw = await keyVault.load(SECRET_KEY_PREFIX + me).catch(() => null);
+  const secret = raw ? fromBase64(raw) : null;
+  if (!secret || shared.currentUserId !== me) return null;
+  try {
+    const { openInstallMigrationProof } = await import('../../utils/installMigrationProof');
+    return openInstallMigrationProof(challenge, secret);
+  } finally { secret.fill(0); }
+}

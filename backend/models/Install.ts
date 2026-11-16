@@ -5,10 +5,8 @@ interface IInstall {
   _id: Types.ObjectId;
   installId: string;
   user: Types.ObjectId;
-  /** HMAC-хэш секрета установки (installSecret). См. utils/installSecret.ts.
-   *  Отсутствует у install-записей, созданных до внедрения этой защиты (legacy) —
-   *  в этом случае identity:attach принимает и сохраняет секрет от первого клиента,
-   *  который его пришлёт ("bootstrap"), не требуя его для уже существующих сессий. */
+  /** HMAC hash of the installation secret. Legacy rows require cryptographic
+   * ownership proof before enrollment; an identifier alone cannot set a secret. */
   installSecretHash?: string;
   /** Когда секрет был перепривязан после переустановки приложения (см. isDeviceBoundInstallId). */
   secretRotatedAt?: Date;

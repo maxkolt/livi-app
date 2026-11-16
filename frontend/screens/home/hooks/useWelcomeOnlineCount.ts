@@ -7,6 +7,7 @@ import {
 } from '../../../sockets/socket';
 import { shouldSkipHomeUiSettle } from '../../../utils/globalEvents';
 import { fetchWithTimeout } from '../../../utils/fetchWithTimeout';
+import { getInstallAuthHeaders } from '../../../utils/installId';
 import type { WelcomeBannerPeer } from '../WelcomeOnlineBanner';
 import { WelcomeOnlineRefresh } from './welcomeOnlineRefresh';
 export { formatWelcomeOnlineCount } from '../utils/welcomeOnlineLabel';
@@ -91,7 +92,7 @@ export function useWelcomeOnlineCount(enabled = true, excludeUserId?: string | n
     const controller = new WelcomeOnlineRefresh({
       load: async (signal) => {
         const request = beginWelcomePresenceRefresh();
-        const response = await fetchWithTimeout(`${API_BASE}/api/presence${request.query}`, { method: 'GET', signal }, 10_000);
+        const response = await fetchWithTimeout(`${API_BASE}/api/presence${request.query}`, { method: 'GET', signal, headers: await getInstallAuthHeaders() }, 10_000);
         if (!response.ok || signal.aborted) return null;
         const data = await response.json();
         // An old path can finish after its cancellation or after the app goes to the background.

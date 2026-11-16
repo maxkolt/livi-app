@@ -21,7 +21,7 @@ beforeEach(() => {
 });
 it('revalidates only the existing installation and account', async () => {
   expect(await restore()).toBe(true);
-  expect(mockReauth).toHaveBeenCalledWith('reauth', { userId: 'me' }, 6000, 0);
+  expect(mockReauth).toHaveBeenCalledWith('reauth', { userId: 'me', installSecret: 'test-install-secret' }, 6000, 0);
   expect(mockAttach).toHaveBeenCalledWith({ installId: 'existing-install', installSecret: 'test-install-secret' });
 });
 it('deduplicates concurrent HTTP repairs for the same account', async () => {

@@ -5,6 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import mongoose from 'mongoose';
 import multer from 'multer';
+import crypto from 'crypto';
 import { checkRateLimit } from '../utils/rateLimit';
 
 const router = Router();
@@ -89,7 +90,7 @@ function extensionForMimeType(mimeType: string): string {
 }
 
 function createUploadFileName(mimeType: string): string {
-  return `${Date.now()}_${Math.random().toString(36).slice(2, 9)}.${extensionForMimeType(mimeType)}`;
+  return `${crypto.randomBytes(24).toString('hex')}.${extensionForMimeType(mimeType)}`;
 }
 
 async function authenticateUpload(req: express.Request, res: express.Response, rateLimitKey: string, maxRequests: number): Promise<string | null> {

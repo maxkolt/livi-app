@@ -1,4 +1,5 @@
 // backend/routes/app-settings.ts
+import { matchesSecret } from '../utils/adminAuth';
 import { Router, Request } from 'express';
 import mongoose from 'mongoose';
 import AppConfig from '../models/AppConfig';
@@ -6,12 +7,6 @@ import AppConfig from '../models/AppConfig';
 const r = Router();
 
 // Cloudinary больше не используется, аватары хранятся в MongoDB
-
-// Stream key тоже может быть в публичной переменной (для фронта) или в серверной
-const streamApiKey =
-  process.env.EXPO_PUBLIC_STREAM_KEY ||
-  process.env.STREAM_API_KEY ||
-  '';
 
 // Fallback из env (если в БД ещё не задано или БД недоступна)
 const latestAppVersionEnv = (process.env.APP_LATEST_VERSION || process.env.LATEST_APP_VERSION || '').trim();
@@ -25,11 +20,11 @@ const APP_UPDATE_SECRET = (process.env.APP_UPDATE_SECRET || process.env.ADMIN_SE
 function isAuthorized(req: Request): boolean {
   if (!APP_UPDATE_SECRET) return false;
   const key = (req.headers['x-admin-key'] as string)?.trim();
-  if (key && key === APP_UPDATE_SECRET) return true;
+  if (matchesSecret(key, APP_UPDATE_SECRET)) return true;
   const auth = (req.headers.authorization || '').trim();
   if (auth.toLowerCase().startsWith('bearer ')) {
     const token = auth.slice(7).trim();
-    if (token === APP_UPDATE_SECRET) return true;
+    if (matchesSecret(token, APP_UPDATE_SECRET)) return true;
   }
   return false;
 }
@@ -50,7 +45,6 @@ r.get('/app-settings', async (_req, res) => {
   }
   res.json({
     ok: true,
-    streamApiKey,
     ...(latestAppVersion ? { latestAppVersion } : {}),
   });
 });

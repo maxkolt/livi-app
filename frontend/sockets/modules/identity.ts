@@ -19,12 +19,16 @@ async function identityAttach(payload: {
   installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
 }) {
-  const response = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
+  const response = await emitAck<{ ok: boolean; userId?: string; error?: string; legacyMigrationRequired?: boolean }>(
     "identity:attach",
     payload,
   );
   // Установка привязана (и после переустановки секрет уже перепривязан) — отчёт Play Integrity в фоне.
   if (response?.ok) {
+    if (response.legacyMigrationRequired && response.userId) {
+      const migrationUserId = response.userId;
+      setTimeout(() => { void import('../../utils/migrateLegacyInstall').then(m => m.migrateLegacyInstall(migrationUserId)).catch(() => {}); }, 0);
+    }
     void import("../../utils/playIntegrity").then((m) => m.reportInstallIntegrityIfDue()).catch(() => {});
   }
   return response;
@@ -149,23 +153,9 @@ async function createUserInternal(): Promise<string | null> {
         return null;
       }
     } catch (e) {
-      console.warn("[createUser] Failed to check user existence, clearing local userId:", e);
-      clearCurrentUserId();
+      console.warn("[createUser] Failed to verify account; preserving local identity:", e);
+      return null;
     }
-  }
-
-  // Очищаем старый userId и все локальные данные из AsyncStorage
-  try {
-    await AsyncStorage.removeItem("userId");
-    // актуальные ключи
-    await AsyncStorage.removeItem("livi.profile.v1");
-    await AsyncStorage.removeItem("profile_draft_v1");
-    // legacy keys (на случай старых версий)
-    await AsyncStorage.removeItem("profile");
-    await AsyncStorage.removeItem("livi.home.draft.v1");
-    console.log("[createUser] Cleared old userId and all local data from AsyncStorage");
-  } catch (e) {
-    console.warn("[createUser] Failed to clear AsyncStorage:", e);
   }
 
   let installId = await getInstallId();
@@ -241,32 +231,12 @@ async function createUserInternal(): Promise<string | null> {
         }
       }
 
-      // installId занят прошлой установкой этого же устройства, а её installSecret удалён вместе
-      // с приложением (SecureStore исключён из бэкапа намеренно). Доказать владение нечем, и
-      // повторять с тем же id бессмысленно — на Android он выводится из ANDROID_ID и переживает
-      // переустановку, поэтому все 5 попыток получали бы тот же отказ, а пользователь оставался
-      // бы без возможности даже завести новый аккаунт. Уходим на случайный installId.
-      if (response?.error === "unauthorized") {
-        // Тот же отказ приходит, если SecureStore временно не отдал секрет. Стереть привязку
-        // в этом случае значит потерять живой аккаунт, поэтому меняем installId только когда
-        // секрет реально прочитан (значит отвергнут именно он) и первая попытка уже провалилась.
-        // Сервер сам перепривязывает установку, выведенную из ANDROID_ID (см. isDeviceBoundInstallId),
-        // поэтому отказ здесь означает либо старый бэкенд, либо исчерпанный лимит ротаций. Даём
-        // несколько попыток: смена installId — это потеря аккаунта, к ней переходим в последнюю очередь.
-        const secretReadOk = typeof installSecret === "string" && installSecret.length >= 16;
-        if (!secretReadOk || attempt < 4) {
-          console.warn("[createUser] attach unauthorized — retrying before touching installId", {
-            attempt,
-            secretReadOk,
-          });
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-          continue;
-        }
-        console.warn("[createUser] attach rejected (installId belongs to a previous install) — switching to a fresh random installId");
-        const { regenerateRandomInstallId } = await import("../../utils/installId");
-        installId = await regenerateRandomInstallId();
-        clearCurrentUserId();
-        continue;
+      // A rejected secret requires verified recovery; preserve the current identity.
+      if (response?.error === "unauthorized" || response?.error === "account_recovery_required" || response?.error === "install_secret_required") {
+        // Never erase an existing identity or silently create a replacement
+        // account after a security rejection. Its data requires verified recovery.
+        console.warn('[createUser] account proof rejected; retaining local identity');
+        return null;
       }
 
       // КРИТИЧНО: Если БД недоступна, не бросаем ошибку сразу - ждем и повторяем

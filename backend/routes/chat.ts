@@ -1,4 +1,4 @@
-import type { ErrorDetails } from '../utils/runtimeTypes';
+import type { AuthenticatedRequest, ErrorDetails } from '../utils/runtimeTypes';
 import { Router } from 'express';
 import mongoose from 'mongoose';
 import User from '../models/User';
@@ -9,6 +9,10 @@ const isOid = (s?: string) => !!s && mongoose.Types.ObjectId.isValid(String(s));
 
 export default function createChatRouter() {
   const router = Router();
+  router.use((req, res, next) => {
+    if (!(req as AuthenticatedRequest).userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
+    next();
+  });
 
   // GET /chat/token?userId=...
   router.get('/token', async (req, res) => {
@@ -30,6 +34,7 @@ export default function createChatRouter() {
   router.post('/ensure-dm', async (req, res) => {
     try {
       const { meId, peerId } = req.body || {};
+      if (String(meId) !== (req as AuthenticatedRequest).userId) return res.status(403).json({ ok: false, error: 'forbidden' });
 
       if (!isOid(meId) || !isOid(peerId) || String(meId) === String(peerId)) {
         return res.status(400).json({ ok: false, error: 'bad_ids' });

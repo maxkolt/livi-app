@@ -19,8 +19,8 @@ import { auditNickChange } from '../utils/profileNickAudit';
 import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence';
 import { bindWelcomeOnlinePresence } from '../utils/welcomeOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
-import { hashInstallSecret, verifyInstallSecret, isPlausibleInstallSecret, isDeviceBoundInstallId } from '../utils/installSecret';
-import { checkRateLimit } from '../utils/rateLimit';
+import { hasVerifiedSocketInstall } from '../utils/socketInstallAuth';
+import { hashInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL, verifyInstallSecret, isPlausibleInstallSecret, needsInstallSecretRehash } from '../utils/installSecret';
 import { collectUploadedMediaNames, deleteUnreferencedUploadedMedia } from '../utils/uploadedMedia';
 import { UPLOADS_MEDIA_DIR } from '../routes/upload';
 
@@ -60,8 +60,9 @@ export async function bindUser(io: Server, sock: AuthedSocket, userId: string) {
   }
 
   // Присоединяем к комнате пользователя
-  try { 
-    sock.join(`u:${canonical}`); 
+  try {
+    sock.join(`u:${canonical}`);
+    sock.join('identity:verified');
     // room join ok
   } catch (error) {
     console.error(`❌ Failed to join room u:${canonical}:`, error);
@@ -97,7 +98,7 @@ export async function bindUser(io: Server, sock: AuthedSocket, userId: string) {
     offlineChatClearedNotifications.forEach((notification) => {
       sock.emit('message:chat_cleared', notification);
     });
-    
+
     // delivered
   } else {
     // none
@@ -124,7 +125,7 @@ async function broadcastProfileToFriends(io: Server, userId: string) {
   }
   const u = await User.findById(userId).select('nick avatar avatarVer avatarThumbB64').lean();
   if (!u) return;
-  
+
   // Теперь avatar - просто маркер, avatarVer - версия для кеша
   const rawAvatar = String(u?.avatar || '');
   const avatarVer = u?.avatarVer || 0;
@@ -176,8 +177,8 @@ export default function registerIdentitySockets(io: Server) {
     sock.on('disconnect', (reason) => {
       const userId = sock.data?.userId;
       if (userId) {
-        try { 
-          sock.leave(`u:${userId}`); 
+        try {
+          sock.leave(`u:${userId}`);
           // left room
         } catch (error) {
           console.error(`❌ Failed to leave room u:${userId}:`, error);
@@ -190,12 +191,13 @@ export default function registerIdentitySockets(io: Server) {
     /* -------- identity:attach --------
        Привязка installId -> user + "мягкое" обновление профиля.
        ВАЖНО: апдейтим ТОЛЬКО поля, которые пришли в payload.profile. */
-    sock.on('identity:attach', async (payload: AttachPayload, ack?: IdentityAck<{ userId: string }>) => {
+    sock.on('identity:attach', async (payload: AttachPayload, ack?: IdentityAck<{ userId: string; legacyMigrationRequired?: boolean }>) => {
       const installId = String(payload?.installId || '').trim();
       const cacheKey = `${installId}_${sock.id}`;
-      
+
       try {
-        if (!installId) return ack?.({ ok: false, error: 'no_installId' });
+        if (!installId || installId.length > 200) return ack?.({ ok: false, error: 'no_installId' });
+        if (!isPlausibleInstallSecret(payload?.installSecret) && !allowLegacyInstallAuth()) return ack?.({ ok: false, error: 'install_secret_required' });
 
         // Защита от дублирования запросов
         const now = Date.now();
@@ -223,69 +225,20 @@ export default function registerIdentitySockets(io: Server) {
         if (inst) {
           const userId = String(inst.user);
 
-          // SECURITY: если для этого install уже сохранён секрет — требуем его совпадения.
-          // Без этой проверки знания/подбора одного installId было достаточно, чтобы
-          // привязать чужую сессию к своему сокету (полный захват аккаунта).
-          const storedInstallSecretHash = inst.installSecretHash;
-          if (storedInstallSecretHash) {
-            if (!verifyInstallSecret(payload?.installSecret, storedInstallSecretHash)) {
-              // Переустановка приложения: installId выведен из ANDROID_ID и вернулся тем же,
-              // а секрет утерян вместе с ключом AndroidKeyStore. Без ротации установка навсегда
-              // занята мёртвой привязкой, и пользователь теряет друзей, переписки и покупки.
-              // Доказательством владения здесь служит сам id: ANDROID_ID недоступен другим
-              // приложениям. Для случайных installId ротация запрещена — там нужен секрет.
-              const canRotate =
-                isDeviceBoundInstallId(installId) && isPlausibleInstallSecret(payload?.installSecret);
-              const rotateLimit = canRotate
-                ? await checkRateLimit(`install_secret_rotate:${installId}`, 5, 24 * 60 * 60_000, {
-                    sensitive: true,
-                  })
-                : null;
-              if (canRotate && rotateLimit?.ok) {
-                try {
-                  await Install.updateOne(
-                    { installId },
-                    {
-                      $set: {
-                        installSecretHash: hashInstallSecret(payload!.installSecret as string),
-                        secretRotatedAt: new Date(),
-                      },
-                    }
-                  );
-                  // Аудит: ротация меняет владельца установки, такое должно быть видно в логах.
-                  console.warn(
-                    `[identity] installSecret ROTATED for device-bound install=${installId} user=${userId} (reinstall recovery)`
-                  );
-                } catch (e: unknown) {
-                  console.warn(`[identity] failed to rotate installSecret for install=${installId}:`, (e as { message?: string } | null)?.message);
-                  ack?.({ ok: false, error: 'unauthorized' });
-                  setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-                  return;
-                }
-              } else {
-                console.warn(
-                  `[identity] attach REJECTED: invalid/missing installSecret for install=${installId}` +
-                    (canRotate ? ' (rotation rate limit exceeded)' : '')
-                );
-                ack?.({ ok: false, error: 'unauthorized' });
-                setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
-                return;
-              }
-            }
-          } else if (isPlausibleInstallSecret(payload?.installSecret)) {
-            // Legacy install без секрета — принимаем и сохраняем секрет от первого клиента,
-            // который его пришлёт ("bootstrap"); дальше для этого install он уже обязателен.
-            try {
-              await Install.updateOne(
-                { installId },
-                { $set: { installSecretHash: hashInstallSecret(payload!.installSecret as string) } }
-              );
-            } catch (e: unknown) {
-              console.warn(`[identity] failed to bootstrap installSecret for install=${installId}:`, (e as { message?: string } | null)?.message);
-            }
-          } else {
-            console.warn(`[identity] attach ALLOWED without installSecret (legacy client, install=${installId}) — update app to close this window`);
+          // An identifier is not proof of ownership, even after reinstall.
+          if ((!inst.installSecretHash && !allowLegacyInstallAuth()) || (inst.installSecretHash && !verifyInstallSecret(payload?.installSecret, inst.installSecretHash))) {
+            ack?.({ ok: false, error: inst.installSecretHash ? 'unauthorized' : 'account_recovery_required' });
+            setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
+            return;
           }
+          if (inst.installSecretHash && needsInstallSecretRehash(inst.installSecretHash)) {
+            const upgraded = hashInstallSecret(payload!.installSecret as string);
+            const saved = await Install.updateOne({ _id: inst._id, installSecretHash: inst.installSecretHash }, { $set: { installSecretHash: upgraded } });
+            if (!saved.modifiedCount) return ack?.({ ok: false, error: 'unauthorized' });
+            inst.installSecretHash = upgraded;
+          }
+          sock.data.verifiedInstallId = installId;
+          sock.data.verifiedInstallSecretHash = inst.installSecretHash || LEGACY_INSTALL_SEAL;
 
           console.log(`[identity] Install found for ${installId}, checking user: ${userId}`);
           const exists = await User.exists({ _id: userId });
@@ -312,6 +265,8 @@ export default function registerIdentitySockets(io: Server) {
               friendsCount: newUser.friends?.length || 0,
               dbName: mongoose.connection.db?.databaseName
             });
+            sock.data.verifiedInstallId = installId;
+            sock.data.verifiedInstallSecretHash = inst.installSecretHash || LEGACY_INSTALL_SEAL;
             await bindUser(io, sock, String(newUserId));
             ack?.({ ok: true, userId: String(newUserId) });
             setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
@@ -339,10 +294,12 @@ export default function registerIdentitySockets(io: Server) {
             broadcastProfileToFriends(io, userId).catch(() => {});
           }
           await bindUser(io, sock, userId);
-          ack?.({ ok: true, userId });
+          ack?.({ ok: true, userId, legacyMigrationRequired: !inst.installSecretHash });
           setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
           return;
         }
+
+        if (!isPlausibleInstallSecret(payload?.installSecret)) return ack?.({ ok: false, error: 'install_secret_required' });
 
         // 2) install нет — создаём user + install атомарно
         // ВАЖНО: создаём ПУСТОГО пользователя, игнорируем входящий profile
@@ -393,7 +350,7 @@ export default function registerIdentitySockets(io: Server) {
             dbName: mongoose.connection.db?.databaseName,
             collection: 'users'
           });
-          
+
           // Дополнительная проверка - считаем пользователей после создания
           const totalUsers = await User.countDocuments();
           console.log(`[identity] 📊 Total users in database after creation: ${totalUsers}`);
@@ -405,12 +362,14 @@ export default function registerIdentitySockets(io: Server) {
         } else {
           try { await work(); }
           catch (e) {
-            try { await Install.deleteOne({ installId }); } catch {}
+            try { await Install.deleteOne({ installId, user: newUserId }); } catch {}
             try { await User.deleteOne({ _id: newUserId }); } catch {}
             throw e;
           }
         }
 
+        sock.data.verifiedInstallId = installId;
+        sock.data.verifiedInstallSecretHash = hashInstallSecret(payload!.installSecret as string);
         await bindUser(io, sock, String(newUserId));
         ack?.({ ok: true, userId: String(newUserId) });
 
@@ -465,6 +424,10 @@ export default function registerIdentitySockets(io: Server) {
 
         const inst = await Install.findOne({ installId: id }).lean();
         const userId = inst && inst.user ? String(inst.user) : '';
+        if (!inst?.installSecretHash || !hasVerifiedSocketInstall(sock, inst) || sock.data.userId !== userId) {
+          return ack?.({ ok: false, error: 'unauthorized' });
+        }
+
         if (!userId) return ack?.({ ok: false, error: 'not_found' });
 
         // Список друзей нужно снять ДО разрыва связей: после удаления сообщать будет некому,
@@ -501,7 +464,7 @@ export default function registerIdentitySockets(io: Server) {
 
         const work = async (s?: ClientSession) => {
           const opt = s ? { session: s } : undefined;
-          
+
           // FriendRequest больше не используется - удаляем только из друзей
           await User.updateMany(
             { friends: userId },

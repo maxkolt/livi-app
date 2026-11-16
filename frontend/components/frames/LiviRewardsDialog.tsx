@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Keyboard, Pressable, Share, StyleSheet, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -15,6 +15,13 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
   const [text, setText] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [editingFeedback, setEditingFeedback] = useState(false);
+  const busyRef = useRef(false);
+  useEffect(() => {
+    if (!visible) setEditingFeedback(false);
+    const subscription = Keyboard.addListener('keyboardDidHide', () => setEditingFeedback(false));
+    return () => subscription.remove();
+  }, [visible]);
   const L = (key: string) => t(key, lang);
   const share = async () => {
     if (!userId) return;
@@ -27,28 +34,33 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
     }
   };
   const submit = async () => {
-    if (busy || !wallet || text.trim().length < 20) return;
+    if (busyRef.current || !wallet || text.trim().length < 20) return;
+    busyRef.current = true;
     setBusy(true); setError('');
     try {
       await submitCosmeticFeedback(text.trim());
       setText(''); Keyboard.dismiss();
     } catch { setError(L('rewardsErrorText')); }
-    finally { setBusy(false); }
+    finally { busyRef.current = false; setBusy(false); }
   };
   return <AppDialogModal
     visible={visible}
     onRequestClose={() => { Keyboard.dismiss(); onClose(); }}
     title={L('rewardsTitle')}
-    message={L('rewardsIntro')}
+    message={editingFeedback ? undefined : L('rewardsIntro')}
     icon={<MaterialCommunityIcons name="star-four-points" size={24} color={CROWN_GOLD} />}
-    actions={[{ label: L('storeClose'), onPress: () => { Keyboard.dismiss(); onClose(); }, variant: 'cancel' }]}
+    actions={[
+      { label: L('storeClose'), onPress: () => { Keyboard.dismiss(); onClose(); }, variant: 'cancel', disabled: busy },
+      ...(!wallet?.feedbackSubmitted ? [{ label: L('rewardsFeedbackSend'), onPress: () => void submit(),
+        variant: 'primary' as const, disabled: !wallet || text.trim().length < 20, busy }] : []),
+    ]}
   >
     <View style={styles.body}>
-      {wallet && targetPrice && targetPrice > wallet.balance ? <View style={styles.card}>
+      {!editingFeedback && wallet && targetPrice && targetPrice > wallet.balance ? <View style={styles.card}>
         <Text style={styles.title}>{L('rewardsInsufficient')}</Text>
         <Text style={styles.gift}>{L('rewardsNeed').replace('{points}', formatLiviPoints(targetPrice - wallet.balance, lang))}</Text>
       </View> : null}
-      <View style={styles.card}>
+      {!editingFeedback && <View style={styles.card}>
         <MaterialCommunityIcons name="account-multiple-plus-outline" size={26} color={UI_ACCENT} />
         <Text style={styles.title}>{L('rewardsInviteTitle')}</Text>
         <Text style={styles.copy}>{L('rewardsInviteRule').replace('{points}', formatLiviPoints(wallet?.invitePoints ?? 10, lang))}</Text>
@@ -56,7 +68,7 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
         <Pressable accessibilityRole="button" disabled={!userId} onPress={() => void share()} style={({ pressed }) => [styles.button, pressed && styles.pressed]}>
           <Text style={styles.buttonText}>{L('rewardsShare')}</Text>
         </Pressable>
-      </View>
+      </View>}
       <View style={styles.card}>
         <MaterialCommunityIcons name="gift-outline" size={26} color={CROWN_GOLD} />
         <Text style={styles.title}>{L('rewardsFeedbackTitle')}</Text>
@@ -64,18 +76,15 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
           <Text style={styles.copy}>{L('rewardsFeedbackDone')}</Text>
           <Text style={styles.gift}>{L(wallet.feedbackGiftAvailable ? 'rewardsGiftReady' : 'rewardsGiftUsed')}</Text>
         </> : <>
-          <Text style={styles.copy}>{L('rewardsFeedbackRule')}</Text>
+          {!editingFeedback && <Text style={styles.copy}>{L('rewardsFeedbackRule')}</Text>}
           <TextInput
             value={text} onChangeText={setText} multiline maxLength={2000}
             editable={!busy} placeholder={L('rewardsFeedbackPlaceholder')}
+            onFocus={() => setEditingFeedback(true)} onBlur={() => setEditingFeedback(false)}
             placeholderTextColor={WELCOME_MUTED_TEXT} style={styles.input}
             accessibilityLabel={L('rewardsFeedbackTitle')} textAlignVertical="top"
           />
           <Text style={styles.counter}>{L('rewardsFeedbackCount').replace('{count}', String(text.trim().length))}</Text>
-          <Pressable accessibilityRole="button" disabled={busy || !wallet || text.trim().length < 20}
-            onPress={() => void submit()} style={({ pressed }) => [styles.button, (busy || !wallet || text.trim().length < 20) && styles.disabled, pressed && styles.pressed]}>
-            <Text style={styles.buttonText}>{L(busy ? 'rewardsSending' : 'rewardsFeedbackSend')}</Text>
-          </Pressable>
         </>}
       </View>
       {error ? <Text accessibilityRole="alert" style={styles.error}>{error}</Text> : null}

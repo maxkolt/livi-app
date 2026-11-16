@@ -53,6 +53,7 @@ jest.mock('../../../sockets/socket', () => ({
   refreshWelcomePresenceSnapshot: () => mockSync(),
 }));
 jest.mock('../../../utils/globalEvents', () => ({ shouldSkipHomeUiSettle: () => mockSkip }));
+jest.mock('../../../utils/installId', () => ({ getInstallAuthHeaders: async () => ({'x-install-id':'test-install','x-install-secret':'test-secret'}) }));
 jest.mock('../../../utils/fetchWithTimeout', () => ({ fetchWithTimeout: (...args: unknown[]) => mockFetch(...args) }));
 jest.mock('../../../utils/i18n', () => ({}));
 import { useWelcomeOnlineCount } from './useWelcomeOnlineCount';
@@ -78,6 +79,7 @@ it('fetches the first number even during a UI transition and accepts later socke
   mockSkip = true;
   MountWelcomeOnlineCount(); await flush();
   expect(mockSlots[0]).toBe(1);
+  expect(mockFetch.mock.calls[0][1].headers).toEqual({'x-install-id':'test-install','x-install-secret':'test-secret'});
   mockPresence({ ok: true, list: ['me'] });
   expect(mockSlots[0]).toBe(0);
 });

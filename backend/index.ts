@@ -1,3 +1,4 @@
+import './utils/safeConsole';
 import type { AuthenticatedRequest, ErrorDetails } from './utils/runtimeTypes';
 // backend/index.ts
 import { callAcceptedE2eeField, decideCallE2ee, parseCallE2eeDeclaration, type CallE2eeDecision } from './utils/callE2ee';
@@ -25,6 +26,7 @@ import avatarRouter from './routes/avatar';
 import messagesRouter from './routes/messages';
 import moderationRouter from './routes/moderation';
 import cosmeticsRouter from './routes/cosmetics';
+import installMigrationRouter from './routes/installMigration';
 import fliqRouter from './routes/fliq';
 import integrityRouter from './routes/integrity';
 import releaseDiagnosticsRouter from './routes/release-diagnostics';
@@ -40,7 +42,7 @@ import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import { beginFriendBusyNotification } from './utils/friendBusyPresence';
 import User, { type UserRecord } from './models/User';
 import Install from './models/Install';
-import { decideHttpInstallAuth, verifyInstallSecret } from './utils/installSecret';
+import { assertInstallSecretConfiguration, decideHttpInstallAuth, verifyInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL } from './utils/installSecret';
 import { attachCallKeepAlive, deliverCallKeepAlive, getCallKeepAliveStats, type CallKeepAliveAuth } from './utils/callKeepAlive';
 import MissedCall from './models/MissedCall';
 import { getPendingMissedCalls, type MissedCallDelivery } from './sockets/missedCallDelivery';
@@ -117,6 +119,9 @@ import { areFriendsCached, getFriendIds, getFriendIdsForUsers } from './utils/fr
 import { isSocketIoRedisAdapterActive, setupSocketIoRedisAdapter } from './utils/socketIoRedisAdapter';
 import { getWelcomeOnlinePresenceSnapshot } from './utils/welcomeOnlinePresence';
 import { createRequestBodyParsers } from './utils/requestBodyParsers';
+import { securityHeaders } from './utils/httpSecurity';
+import { hasVerifiedSocketInstall, socketInstallCredentials } from './utils/socketInstallAuth';
+import { matchesSecret, isAdminRequest } from './utils/adminAuth';
 import { attachMongoMatchProfile, MATCH_PROFILE_ENABLED } from './utils/matchPerformance';
 import { attachLiveKitSignalProxy } from './utils/livekitSignalProxy';
 
@@ -130,7 +135,7 @@ type LeanUser = {
 
 type ProfileFields = Pick<UserRecord, 'nick' | 'avatar' | 'avatarVer' | 'avatarB64' | 'avatarThumbB64'>;
 type ProfileAck = (result: { ok: boolean; profile?: Partial<ProfileFields>; error?: string }) => void;
-type ReauthAck = (result: { ok: boolean; userId?: string; missed?: MissedCallDelivery[]; error?: string }) => void;
+type ReauthAck = (result: { ok: boolean; userId?: string; missed?: MissedCallDelivery[]; legacyMigrationRequired?: boolean; error?: string }) => void;
 type SocketPresenceData = Pick<AuthedSocket['data'], 'inCall' | 'busy' | 'roomId' | 'partnerSid'>;
 
 /* ========= ENV ========= */
@@ -211,7 +216,10 @@ const normalizeMongoObjectId = (s: string) => {
 const isMongoReady = () => mongoose.connection.readyState === 1;
 
 /* ========= App / HTTP / IO ========= */
+assertInstallSecretConfiguration();
 const app = express();
+app.disable('x-powered-by');
+app.use(securityHeaders);
 
 // Resolve backend public directory robustly for:
 // - dev (running from backend/ via ts-node)
@@ -268,7 +276,6 @@ app.use(
 // Legacy base64 media upload owns a smaller route-local JSON limit; large media must use multipart streaming.
 const bodyParsers = createRequestBodyParsers();
 app.use(bodyParsers.json);
-app.use('/chat', createChatRouter());
 app.use(bodyParsers.urlencoded);
 
 const HTTP_INSTALL_SECRET_REQUIRED = String(process.env.HTTP_INSTALL_SECRET_REQUIRED || '').trim() === '1';
@@ -321,6 +328,8 @@ app.use(async (req, _res, next) => {
   } catch {}
   next();
 });
+
+app.use('/chat', createChatRouter());
 
 /* ========= Создаём HTTP + Socket.IO ========= */
 const server = http.createServer(app);
@@ -395,23 +404,24 @@ app.get('/health', (_req, res) =>
 );
 
 // Capacity: только при CAPACITY_METRICS_ENABLED=1. В проде — 404.
-app.get('/metrics', (_req, res) => {
-  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+app.get('/metrics', (req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled() || !isAdminRequest(req)) return res.status(404).end();
   res.set('Content-Type', 'text/plain; charset=utf-8');
   res.send(capacityMetrics.getPrometheusText());
 });
 
-app.get('/api/capacity/stats', (_req, res) => {
-  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+app.get('/api/capacity/stats', (req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled() || !isAdminRequest(req)) return res.status(404).end();
   res.json(capacityMetrics.getStats());
 });
 
-app.get('/api/capacity/random-state', async (_req, res) => {
-  if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
+app.get('/api/capacity/random-state', async (req, res) => {
+  if (!capacityMetrics.isCapacityMetricsEnabled() || !isAdminRequest(req)) return res.status(404).end();
   res.json(auditRandomPairs(io, await queueStore.getWaitingQueue()));
 });
 
 app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
+  if (!(req as AuthenticatedRequest).userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   if (!capacityMetrics.isCapacityMetricsEnabled()) return res.status(404).end();
   try {
     const body = req.body || {};
@@ -524,6 +534,7 @@ app.use('/api', moderationRouter);
 // Роутам нужен io, чтобы разослать друзьям смену косметики без перезапуска приложения.
 app.set('io', io);
 app.use('/api', cosmeticsRouter);
+app.use('/api', installMigrationRouter);
 app.use('/api', fliqRouter);
 app.use('/api', integrityRouter);
 app.use('/api', releaseDiagnosticsRouter);
@@ -531,6 +542,7 @@ app.use('/api', releaseDiagnosticsRouter);
 // Stream utility убран - больше не используется
 
 app.post('/chat/ensure-dm', async (req, res) => {
+  if (!(req as AuthenticatedRequest).userId || (req as AuthenticatedRequest).userId !== String(req.body?.meId || '')) return res.status(403).json({ ok: false, error: 'forbidden' });
   try {
     const meId = String(req.body?.meId ?? '').trim();
     const peerId = String(req.body?.peerId ?? '').trim();
@@ -580,7 +592,7 @@ app.get('/api/turn-credentials', async (_req, res) => {
   try {
     const req = _req as express.Request & { userId?: string; installId?: string };
     const installId = String(req.installId || '').trim();
-    if (!installId) {
+    if (!installId || !(req as AuthenticatedRequest).userId) {
       logger.warn('[TURN] Unauthorized TURN credentials request, returning STUN only', {
         hasInstallId: !!installId,
       });
@@ -867,6 +879,7 @@ function unbindUser(sock: AuthedSocket) {
   if (uid) {
     try {
       sock.leave(`u:${String(uid)}`);
+      sock.leave('identity:verified');
     } catch {}
   }
 }
@@ -915,9 +928,9 @@ async function resolveCalleeSocketForAccept(
     const installId = String(rawInstallId || '').trim();
     if (!installId || !isMongoReady()) return undefined;
 
-    const inst = await Install.findOne({ installId }).select('user').lean();
+    const inst = await Install.findOne({ installId }).select('user installId installSecretHash').lean();
     const mapped = inst?.user ? normalizeMongoObjectId(String((inst).user)) : '';
-    if (!mapped || mapped !== linkB) return undefined;
+    if (!inst || !mapped || mapped !== linkB || !hasVerifiedSocketInstall(sock, inst)) return undefined;
 
     // bindUserIdentity sets data.userId + joins u:room synchronously before first await.
     await bindUserIdentity(io, sock, mapped);
@@ -1495,7 +1508,7 @@ async function authenticateCallKeepAlive(req: http.IncomingMessage): Promise<Cal
   const userId = inst?.user ? normalizeMongoObjectId(String(inst.user)) : '';
   if (!userId || !isOid(userId)) return null;
   // Без секрета — только установки, ещё не мигрировавшие на installSecret (как в HTTP-роутах).
-  if (inst?.installSecretHash && !verifyInstallSecret(header('x-install-secret'), inst.installSecretHash)) {
+  if (!(inst && !inst.installSecretHash && allowLegacyInstallAuth()) && !verifyInstallSecret(header('x-install-secret'), inst?.installSecretHash)) {
     return null;
   }
   return { userId, installId };
@@ -2731,22 +2744,21 @@ async function saveMissedCall(calleeId: string, callerId: string, callerNick: st
  *  identity:attach с секретом) — требуем совпадения заголовка x-install-secret.
  *  Закрывает возможность дёрнуть decline/cancel по чужому/угаданному installId
  *  (см. deep link + native HTTP пути из IncomingCallActivity/LiviOutgoingCallService).
- *  Fail-open только на инфраструктурной ошибке (Mongo недоступна) — не блокируем
- *  весь call-flow из-за временного сбоя БД. */
+ *  При недоступной БД запрос отклоняется: владение установкой не подтверждено. */
 async function verifyInstallSecretForSensitiveCallAction(
   req: express.Request,
   installId: string | undefined | null
 ): Promise<boolean> {
-  if (!installId) return true;
+  if (!installId) return false;
   try {
     const inst = await Install.findOne({ installId }).select('installSecretHash').lean();
     const storedHash = (inst)?.installSecretHash as string | undefined;
-    if (!storedHash) return true; // legacy install, ещё не мигрировал на installSecret
+    if (!storedHash) return allowLegacyInstallAuth();
     const provided = req.header('x-install-secret');
     return verifyInstallSecret(provided, storedHash);
   } catch (e: unknown) {
-    logger.warn('[installSecret] verify failed (http), failing open', { error: (e as ErrorDetails)?.message });
-    return true;
+    logger.warn('[installSecret] verify failed (http), rejecting request', { error: (e as ErrorDetails)?.message });
+    return false;
   }
 }
 
@@ -3161,9 +3173,7 @@ app.post('/api/calls/cancel', async (req, res) => {
 });
 
 function hasObservabilityAccess(req: express.Request): boolean {
-  if (!CALL_OBSERVABILITY_API_KEY) return true;
-  const key = String(req.header('x-observability-key') || '').trim();
-  return key.length > 0 && key === CALL_OBSERVABILITY_API_KEY;
+  return matchesSecret(req.header('x-observability-key'), CALL_OBSERVABILITY_API_KEY);
 }
 
 app.get('/api/calls/metrics', async (req, res) => {
@@ -3237,6 +3247,19 @@ app.post('/api/calls/provider-delivered', (req, res) => {
 
 /* ========= Socket.IO ========= */
 io.on('connection', async (sock: AuthedSocket) => {
+  sock.use((packet, next) => {
+    if (packet.length === 1 || packet[1] == null) packet[1] = {};
+    if (sock.data.verifiedInstallSecretHash === LEGACY_INSTALL_SEAL &&
+        ['identity:wipeMe', 'e2e:publish', 'e2e:disable', 'e2e:enable'].includes(packet[0])) {
+      const ack = packet[packet.length - 1];
+      if (typeof ack === 'function') ack({ ok: false, error: 'account_proof_required' });
+      return;
+    }
+    if (['identity:attach', 'reauth', 'whoami', 'user:exists'].includes(packet[0]) ||
+        (sock.data.verifiedInstallId && sock.data.verifiedInstallSecretHash && sock.data.userId)) return next();
+    const ack = packet[packet.length - 1];
+    if (typeof ack === 'function') ack({ ok: false, error: 'unauthorized' });
+  });
   capacityMetrics.recordSocketConnected();
   sock.on('disconnect', (reason) => capacityMetrics.recordSocketDisconnected(reason));
   sock.on('whoami', (payload?: unknown, ack?: (result: { _id: string | null }) => void) => {
@@ -3256,7 +3279,7 @@ io.on('connection', async (sock: AuthedSocket) => {
   });
 
   // Обработчик события reauth для мягкой переавторизации
-  sock.on('reauth', async (payload: { userId?: unknown } | null | undefined, ack?: ReauthAck) => {
+  sock.on('reauth', async (payload: { userId?: unknown; installSecret?: unknown } | null | undefined, ack?: ReauthAck) => {
     try {
       // SECURITY: do NOT trust client-provided userId. Re-authenticate by installId -> user mapping.
       const hs: InstallHandshake = sock.handshake || {};
@@ -3276,8 +3299,17 @@ io.on('connection', async (sock: AuthedSocket) => {
         return ack?.({ ok: false, error: 'database_unavailable' });
       }
 
-      const inst = await Install.findOne({ installId }).select('user').lean();
+      const inst = await Install.findOne({ installId }).select('user installId installSecretHash').lean();
       const mappedUserId = inst?.user ? String((inst).user) : '';
+      const providedSecret = typeof payload?.installSecret === 'string' ? payload.installSecret : socketInstallCredentials(sock).secret;
+      if (inst && !hasVerifiedSocketInstall(sock, inst, providedSecret)) {
+        // Existing clients recover through identity:attach, which already sends the secret.
+        return ack?.({ ok: false, error: providedSecret ? 'unauthorized' : 'not_found' });
+      }
+      if (inst) {
+        sock.data.verifiedInstallId = inst.installId;
+        sock.data.verifiedInstallSecretHash = inst.installSecretHash || LEGACY_INSTALL_SEAL;
+      }
       if (!isOid(mappedUserId)) {
         logger.warn('[auth] Reauth failed: install not found', { installId, socketId: sock.id });
         return ack?.({ ok: false, error: 'not_found' });
@@ -3338,14 +3370,14 @@ io.on('connection', async (sock: AuthedSocket) => {
       } catch (e: unknown) {
         logger.warn('[reauth] fetch missed failed', { error: (e as ErrorDetails)?.message });
       }
-      ack?.({ ok: true, userId: mappedUserId, missed });
+      ack?.({ ok: true, userId: mappedUserId, missed, legacyMigrationRequired: !inst?.installSecretHash });
     } catch (e) {
       logger.error('Reauth error', { error: (e as ErrorDetails)?.message || String(e) });
       ack?.({ ok: false, error: 'server_error' });
     }
   });
 
-  // SECURITY: restore auth ONLY by installId mapping (do NOT trust handshake userId)
+  // Restore a socket only after verifying its installation secret.
   const hs: InstallHandshake = sock.handshake || {};
   const rawInstallId =
     (typeof hs.auth?.installId === 'string' && hs.auth.installId) ||
@@ -3358,9 +3390,11 @@ io.on('connection', async (sock: AuthedSocket) => {
     if (rawInstallId.trim()) {
       try {
         const inst = (await Install.findOne({ installId: rawInstallId.trim() })
-          .select('user')
-          .lean()) as { user?: mongoose.Types.ObjectId } | null;
-        if (inst?.user && isOid(String(inst.user)) && (await User.exists({ _id: String(inst.user) }))) {
+          .select('user installId installSecretHash')
+          .lean());
+        if (inst?.user && hasVerifiedSocketInstall(sock, inst) && isOid(String(inst.user)) && (await User.exists({ _id: String(inst.user) }))) {
+          sock.data.verifiedInstallId = inst.installId;
+          sock.data.verifiedInstallSecretHash = inst.installSecretHash || LEGACY_INSTALL_SEAL;
           bindUid = String(inst.user);
         }
       } catch (e) {
@@ -5262,6 +5296,7 @@ registerMessageSockets(io);
 /* ========= REST presence ========= */
 /** Онлайн в приложении (не только друзья): id + nick + avatarVer для welcome-баннера. */
 app.get('/api/presence', async (req, res) => {
+  if (!(req as AuthenticatedRequest).userId) return res.status(401).json({ ok: false, error: 'unauthorized' });
   try {
     const snapshot = await getWelcomeOnlinePresenceSnapshot(io);
     if (req.query.epoch === snapshot.epoch && String(req.query.revision) === String(snapshot.revision)) {

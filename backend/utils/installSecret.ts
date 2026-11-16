@@ -4,46 +4,41 @@
 // Сервер хранит только HMAC-хэш. Без этого секрета простое знание/подбор installId
 // достаточно для получения чужой сессии (см. security review) — этот модуль закрывает дыру.
 import crypto from 'crypto';
-import { logger } from './logger';
 
 const PEPPER = String(process.env.INSTALL_SECRET_PEPPER || '').trim();
 const DEV_FALLBACK_PEPPER = 'livi-dev-only-pepper-do-not-use-in-production';
 
-let warnedMissingPepper = false;
-function effectivePepper(): string {
-  if (PEPPER) return PEPPER;
-  if (!warnedMissingPepper) {
-    warnedMissingPepper = true;
-    logger.warn(
-      '[installSecret] INSTALL_SECRET_PEPPER is not set — falling back to a fixed dev pepper. ' +
-      'Set INSTALL_SECRET_PEPPER (long random string) in the backend environment for production.'
-    );
+export function assertInstallSecretConfiguration(): void {
+  if (process.env.NODE_ENV === 'production' && PEPPER.length < 32) {
+    throw new Error('INSTALL_SECRET_PEPPER must contain at least 32 characters');
   }
-  return DEV_FALLBACK_PEPPER;
 }
 
-/** Хэширует installSecret для хранения в Install.installSecretHash. */
+function digest(secret: string, pepper: string): string {
+  return crypto.createHmac('sha256', pepper).update(secret).digest('hex');
+}
+function sameHash(a: string, b: string): boolean {
+  if (!/^[a-f0-9]{64}$/i.test(a) || !/^[a-f0-9]{64}$/i.test(b)) return false;
+  return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
+}
+
+/** Temporary opt-in compatibility while old owners migrate with cryptographic proof. */
+export function allowLegacyInstallAuth(): boolean { return process.env.INSTALL_AUTH_MODE === 'legacy-migration'; }
+export const LEGACY_INSTALL_SEAL = 'legacy-migration';
+
+/** Versioned hashes never use the legacy pepper. */
 export function hashInstallSecret(secret: string): string {
-  return crypto
-    .createHmac('sha256', effectivePepper())
-    .update(String(secret || ''))
-    .digest('hex');
+  assertInstallSecretConfiguration();
+  return 'v1:' + digest(String(secret), PEPPER || DEV_FALLBACK_PEPPER);
 }
-
-/** Таймсейф-проверка присланного секрета против сохранённого хэша. */
+export function needsInstallSecretRehash(hash: string): boolean { return !hash.startsWith('v1:'); }
 export function verifyInstallSecret(secret: string | undefined | null, storedHash: string | undefined | null): boolean {
-  const s = String(secret || '');
-  const h = String(storedHash || '');
-  if (!s || !h) return false;
-  const candidate = hashInstallSecret(s);
-  try {
-    const a = Buffer.from(candidate, 'hex');
-    const b = Buffer.from(h, 'hex');
-    if (a.length !== b.length) return false;
-    return crypto.timingSafeEqual(a, b);
-  } catch {
-    return false;
-  }
+  if (!isPlausibleInstallSecret(secret) || typeof storedHash !== 'string') return false;
+  if (storedHash.startsWith('v1:')) return sameHash(digest(secret, PEPPER || DEV_FALLBACK_PEPPER), storedHash.slice(3));
+  // Transition only for previously stored, unversioned hashes. The high-entropy
+  // original secret is still mandatory; successful auth upgrades the hash.
+  return sameHash(digest(secret, PEPPER || DEV_FALLBACK_PEPPER), storedHash) ||
+    sameHash(digest(secret, DEV_FALLBACK_PEPPER), storedHash);
 }
 
 /** Простая проверка формата: не пустой, разумной длины (клиент шлёт hex/base64 случайных байт). */
@@ -51,47 +46,23 @@ export function isPlausibleInstallSecret(secret: unknown): secret is string {
   return typeof secret === 'string' && secret.length >= 16 && secret.length <= 512;
 }
 
-/**
- * installId, выведенный из аппаратного идентификатора устройства (Android SSAID).
- *
- * Такой id клиент восстанавливает после переустановки приложения, а installSecret — нет:
- * expo-secure-store шифрует значение ключом из AndroidKeyStore, а ключ удаляется вместе с
- * приложением, поэтому секрет не переживает удаление даже через резервное копирование.
- * Для этих id сервер разрешает ротацию секрета — иначе установка навсегда занята мёртвой
- * привязкой и пользователь теряет друзей, переписки и покупки после переустановки.
- *
- * Владение самим значением и есть доказательство: ANDROID_ID выдаётся по паре
- * (подпись приложения + пользователь устройства), другим приложениям недоступен и нигде
- * не показывается. Для случайных installId ротация по-прежнему запрещена.
- */
-export function isDeviceBoundInstallId(installId: unknown): boolean {
-  const id = String(installId || '');
-  return /^inst_android_[A-Za-z0-9]{8,}$/.test(id);
-}
-
 export type HttpInstallAuthDecision = {
-  /** allow — секрет верный; legacy — установка без обязательного секрета; reject — не пускать. */
-  result: 'allow' | 'legacy' | 'reject';
+  /** allow — секрет верный; reject — не пускать. */
+  result: 'allow' | 'reject';
   /** Первый верный секрет по HTTP: с этого момента для установки он обязателен. */
   markHttpSecretSeen: boolean;
 };
 
-/**
- * Авторизация HTTP-запроса по x-install-id. Раньше одного installId хватало для любого REST,
- * а он светится в логах и ссылках. Старые сборки секрет по HTTP не шлют, поэтому он обязателен,
- * когда установка уже присылала его по HTTP (клиент обновлён) или включён режим requireAll
- * (HTTP_INSTALL_SECRET_REQUIRED=1 — когда старые сборки сойдут на нет).
- */
+/** Every authenticated HTTP request must prove ownership, including legacy records. */
 export function decideHttpInstallAuth(input: {
   storedHash?: string | null;
   providedSecret?: string | null;
   httpSecretSeen: boolean;
   requireAll: boolean;
 }): HttpInstallAuthDecision {
-  if (!input.storedHash) return { result: 'legacy', markHttpSecretSeen: false };
-  if (input.providedSecret && verifyInstallSecret(input.providedSecret, input.storedHash)) {
+  if (!input.storedHash && !input.requireAll && allowLegacyInstallAuth()) return { result: 'allow', markHttpSecretSeen: false };
+  if (verifyInstallSecret(input.providedSecret, input.storedHash)) {
     return { result: 'allow', markHttpSecretSeen: !input.httpSecretSeen };
   }
-  const required = input.requireAll || input.httpSecretSeen;
-  return { result: required ? 'reject' : 'legacy', markHttpSecretSeen: false };
+  return { result: 'reject', markHttpSecretSeen: false };
 }

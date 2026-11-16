@@ -1,3 +1,4 @@
+import { redactLogValue } from './redactLog';
 // Metadata is serialized as-is, including Error instances and raw thrown values.
 type LogMeta = unknown;
 
@@ -18,9 +19,9 @@ function ts() {
 function fmt(meta?: LogMeta) {
   if (!meta) return '';
   try {
-    return ' ' + JSON.stringify(meta);
+    return ' ' + JSON.stringify(redactLogValue(meta));
   } catch {
-    return ' ' + String(meta);
+    return ' [Unserializable]';
   }
 }
 
@@ -28,22 +29,22 @@ export const logger = {
   debug(message: string, meta?: LogMeta) {
     if (currentLevel > levels.debug) return;
     // eslint-disable-next-line no-console
-    console.log(`[${ts()}] [debug] ${message}${fmt(meta)}`);
+    console.log(`[${ts()}] [debug] ${redactLogValue(message)}${fmt(meta)}`);
   },
   info(message: string, meta?: LogMeta) {
     if (currentLevel > levels.info) return;
     // eslint-disable-next-line no-console
-    console.log(`[${ts()}] [info] ${message}${fmt(meta)}`);
+    console.log(`[${ts()}] [info] ${redactLogValue(message)}${fmt(meta)}`);
   },
   warn(message: string, meta?: LogMeta) {
     if (currentLevel > levels.warn) return;
     // eslint-disable-next-line no-console
-    console.warn(`[${ts()}] [warn] ${message}${fmt(meta)}`);
+    console.warn(`[${ts()}] [warn] ${redactLogValue(message)}${fmt(meta)}`);
   },
   error(message: string, meta?: LogMeta) {
     if (currentLevel > levels.error) return;
     // eslint-disable-next-line no-console
-    console.error(`[${ts()}] [error] ${message}${fmt(meta)}`);
+    console.error(`[${ts()}] [error] ${redactLogValue(message)}${fmt(meta)}`);
   },
 };
 

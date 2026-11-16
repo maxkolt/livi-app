@@ -1,3 +1,4 @@
+import { redactLogValue } from './redactLog';
 /**
  * Кольцевой буфер последних событий пуша для отладки.
  * GET /api/debug/push-log возвращает эти записи (чтобы проверить FCM vs Expo при звонке).
@@ -16,7 +17,7 @@ export function pushLog(event: string, payload?: Record<string, unknown>): void 
   const entry: PushLogEntry = {
     ts: new Date().toISOString(),
     event,
-    ...(payload ? { payload } : {}),
+    ...(payload ? { payload: redactLogValue(payload) as Record<string, unknown> } : {}),
   };
   buffer.push(entry);
   if (buffer.length > MAX_ENTRIES) buffer.shift();

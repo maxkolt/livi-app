@@ -7,8 +7,8 @@ module.exports = function (api) {
     ],
     env: {
       production: {
-        // В production убираем console.log/info/debug, но оставляем warn/error
-        plugins: [['transform-remove-console', { exclude: ['error', 'warn'] }]],
+        // No raw device logs in release; privacy-filtered diagnostics remain opt-in.
+        plugins: [['transform-remove-console', { exclude: [] }]],
       },
     },
   };

@@ -82,26 +82,11 @@ describe('createUser после переустановки приложения'
     jest.restoreAllMocks();
   });
 
-  it('при unauthorized переходит на случайный installId и заводит аккаунт', async () => {
-    // Смена installId — крайняя мера, поэтому сначала несколько повторов с тем же id.
-    attachResponses.push(
-      { ok: false, error: 'unauthorized' },
-      { ok: false, error: 'unauthorized' },
-      { ok: false, error: 'unauthorized' },
-      { ok: false, error: 'unauthorized' },
-      { ok: true, userId: USER_ID },
-    );
-
+  it('при неверном секрете сохраняет аккаунт и не создаёт замену', async () => {
+    attachResponses.push({ ok: false, error: 'unauthorized' });
     const { createUser } = await import('./identity');
-    const result = await createUser();
-
-    expect(regenerateRandomInstallIdMock).toHaveBeenCalledTimes(1);
-    expect(result).toBe(USER_ID);
-
-    // Последняя попытка ушла уже с новым идентификатором, а не с выведенным из ANDROID_ID.
-    const attachCalls = emitAckMock.mock.calls.filter((c) => c[0] === 'identity:attach');
-    const lastPayload = attachCalls[attachCalls.length - 1]?.[1] as { installId?: string } | undefined;
-    expect(lastPayload?.installId).toBe('inst_fresh_random');
+    expect(await createUser()).toBeNull();
+    expect(regenerateRandomInstallIdMock).not.toHaveBeenCalled();
   });
 
   it('не трогает installId, пока секрет не удалось прочитать', async () => {

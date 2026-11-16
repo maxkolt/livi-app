@@ -8,7 +8,7 @@ export type MissedCallDelivery = {
 };
 
 export type SocketReauthResponse = {
-  ok: boolean;
+  ok: boolean; legacyMigrationRequired?: boolean;
   userId?: string;
   error?: string;
   missed?: MissedCallDelivery[];

@@ -16,7 +16,7 @@ export function restoreHttpInstallAuth(): Promise<boolean> {
       // Reauth verifies that this installation still maps to the existing user.
       // A missing/deleted account must not enter identity:attach's creation path.
       const { emitAck } = await import('../sockets/modules/emit');
-      const mapped = await emitAck<{ ok: boolean; userId?: string }>('reauth', { userId }, 6000, 0);
+      const mapped = await emitAck<{ ok: boolean; userId?: string }>('reauth', { userId, installSecret }, 6000, 0);
       if (!mapped?.ok || mapped.userId !== userId || getCurrentUserId() !== userId) return false;
       const { attachIdentity } = await import('../sockets/modules/identity');
       if (getCurrentUserId() !== userId) return false;

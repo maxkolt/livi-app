@@ -1,7 +1,7 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import { AppState, NativeModules, Platform } from "react-native";
-import { getInstallId } from "../../utils/installId";
+import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { prewarmApiConnections } from "../../utils/warmConnections";
 import {
@@ -257,9 +257,9 @@ export async function applyAuthAndConnect() {
 
   shared.connectAttemptPromise = (async () => {
     try {
-      const installId = await getInstallId();
+      const [installId, installSecret] = await Promise.all([getInstallId(), getInstallSecret()]);
 
-      socket.auth = { installId, ...(shared.currentUserId ? { userId: shared.currentUserId } : {}) };
+      socket.auth = { installId, installSecret, ...(shared.currentUserId ? { userId: shared.currentUserId } : {}) };
 
       // Если realtime сейчас сознательно поставлен на паузу, не стартуем новый connect().
       // Иначе при фоне/блокировке экрана можно словить шумный xhr poll error от уже отмененного запроса.

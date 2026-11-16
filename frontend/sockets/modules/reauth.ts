@@ -1,3 +1,4 @@
+import { getInstallSecret } from '../../utils/installId';
 import { shared } from "./shared";
 import type { SocketReauthResponse } from "./types";
 import { REAUTH_FRESH_MS } from "./reauthConstants";
@@ -16,9 +17,11 @@ export async function emitReauthDeduped(
 
   const p = (async (): Promise<SocketReauthResponse> => {
     try {
-      const res = await emitAck<SocketReauthResponse>("reauth", { userId: uid }, timeoutMs, retries);
+      const installSecret = await getInstallSecret();
+      const res = await emitAck<SocketReauthResponse>("reauth", { userId: uid, installSecret }, timeoutMs, retries);
       if (res?.ok) {
         shared.lastSuccessfulReauthAt = Date.now();
+        if (res.legacyMigrationRequired) void import('../../utils/migrateLegacyInstall').then(m => m.migrateLegacyInstall(uid)).catch(() => {});
         // Also drain native history after identity becomes available, even without server backlog.
         applyMissedFromReauth(res).catch(() => {});
       }

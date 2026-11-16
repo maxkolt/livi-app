@@ -32,7 +32,7 @@ function setFramesStoreOpen(open: boolean) {
 }
 
 /**
- * Витрина Legendary (только __DEV__).
+ * Витрина Legendary для всех сборок.
  * Native carousels can be prepared while hidden and have no active frame animations.
  * Rebuild a hidden store after rotation, before the next entrance.
  */
@@ -48,7 +48,7 @@ export function FramesStoreHost({ warmEnabled, userId }: { warmEnabled: boolean;
     };
   }, []);
   useEffect(() => {
-    if (!__DEV__ || !warmEnabled) return;
+    if (!warmEnabled) return;
     // Home has looping animations, so InteractionManager alone can wait forever.
     const fallback = setTimeout(() => setWarm(true), 500);
     const task = InteractionManager.runAfterInteractions(() => { clearTimeout(fallback); setWarm(true); });
@@ -57,53 +57,30 @@ export function FramesStoreHost({ warmEnabled, userId }: { warmEnabled: boolean;
   useEffect(() => {
     if (!open) setLayoutKey(`${width}-${height}`);
   }, [open, width, height]);
-  if (!__DEV__) return null;
   if (!open && !warm) return null;
   return <FramesStoreModal key={layoutKey} visible={open} keepWarm myUserId={userId} onClose={() => setOpen(false)} />;
 }
 
-/** Корона в welcome chrome. Витрина Legendary — только в __DEV__; в релизе некликабельный декор. */
+/** Корона открывает Legendary в development и release. */
 function WelcomeCrownButtonInner({ compact, large, small, surface }: WelcomeCrownButtonProps) {
   const lang = useLang((state) => state.lang);
   const btnSize = small ? 32 : compact ? 36 : large ? 44 : 40;
   const iconSize = small ? 18 : compact ? 20 : large ? 24 : 22;
-  const btnStyle = [
-    styles.btn,
-    { width: btnSize, height: btnSize, borderRadius: btnSize / 2 },
-    surface ? { backgroundColor: surface } : null,
-    WELCOME_CHROME_BTN_SHADOW_IOS,
-  ];
-
-  const icon = (
-    <>
-      <WelcomeFloatShadow radius={btnSize / 2} {...WELCOME_CHROME_BTN_SHADOW} />
-      <MaterialCommunityIcons name="crown" size={iconSize} color={CROWN_GOLD} />
-    </>
-  );
-
-  if (!__DEV__) {
-    return (
-      <View
-        pointerEvents="none"
-        accessibilityElementsHidden
-        importantForAccessibility="no-hide-descendants"
-        style={btnStyle}
-      >
-        {icon}
-      </View>
-    );
-  }
-
+  const circle = { width: btnSize, height: btnSize, borderRadius: btnSize / 2 };
   return (
-    <Pressable
-      onPress={() => setFramesStoreOpen(true)}
-      hitSlop={8}
-      accessibilityRole="button"
-      accessibilityLabel={t('storeShowcaseA11y', lang)}
-      style={({ pressed }) => [btnStyle, pressed && styles.btnPressed]}
-    >
-      {icon}
-    </Pressable>
+    <View collapsable={false} style={[circle, WELCOME_CHROME_BTN_SHADOW_IOS]}>
+      <WelcomeFloatShadow radius={btnSize / 2} {...WELCOME_CHROME_BTN_SHADOW} />
+      <Pressable
+        onPress={() => setFramesStoreOpen(true)}
+        hitSlop={8}
+        accessibilityRole="button"
+        accessibilityLabel={t('storeShowcaseA11y', lang)}
+        android_ripple={{ color: 'rgba(255,255,255,0.08)', borderless: false, radius: btnSize / 2 }}
+        style={({ pressed }) => [styles.btn, circle, surface ? { backgroundColor: surface } : null, pressed && styles.btnPressed]}
+      >
+        <MaterialCommunityIcons name="crown" size={iconSize} color={CROWN_GOLD} />
+      </Pressable>
+    </View>
   );
 }
 
@@ -114,7 +91,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: WELCOME_TAB_BLOCK_SURFACE,
-    overflow: 'visible',
+    overflow: 'hidden',
   },
   btnPressed: {
     opacity: 0.88,

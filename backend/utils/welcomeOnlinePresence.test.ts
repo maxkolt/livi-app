@@ -11,7 +11,8 @@ import type { AuthedSocket } from '../sockets/types';
 function makeIo() {
   const delta = jest.fn();
   const legacy = jest.fn();
-  const io = { to: jest.fn(() => ({ emit: delta })), except: jest.fn(() => ({ emit: legacy })) };
+  const except = jest.fn(() => ({ emit: legacy }));
+  const io = { to: jest.fn(() => ({ emit: delta, except })), except };
   return { io: io as unknown as Server, delta, legacy };
 }
 
@@ -29,6 +30,7 @@ describe('welcome presence bandwidth and compatibility', () => {
     await getWelcomeOnlinePresenceSnapshot(io);
     expect(delta).toHaveBeenCalledTimes(1);
     expect(legacy).toHaveBeenCalledTimes(1);
+    expect(io.to).toHaveBeenCalledWith('identity:verified');
     expect(io.except).toHaveBeenCalledWith(WELCOME_DELTA_ROOM);
     expect(legacy.mock.calls[0][1].list.map((p: { id: string }) => p.id)).toEqual(['a', 'b']);
   });
@@ -63,7 +65,7 @@ describe('welcome presence bandwidth and compatibility', () => {
 
   it('joins the delta room only for clients announcing the capability', async () => {
     const { io } = makeIo();
-    const socket = { connected: true, handshake: { query: { caps: 'offline_ack,welcome_delta' } },
+    const socket = { data: {userId:'verified',verifiedInstallSecretHash:'verified'}, connected: true, handshake: { query: { caps: 'offline_ack,welcome_delta' } },
       join: jest.fn(), on: jest.fn(), emit: jest.fn() };
     bindWelcomeOnlinePresence(io, socket as unknown as AuthedSocket);
     await jest.advanceTimersByTimeAsync(0);
@@ -74,4 +76,13 @@ describe('welcome presence bandwidth and compatibility', () => {
     bindWelcomeOnlinePresence(io, socket as unknown as AuthedSocket);
     expect(socket.join).not.toHaveBeenCalled();
   });
+});
+
+it('does not send the initial presence snapshot to an unauthenticated socket', async () => {
+  const { io } = makeIo();
+  const socket = { data: {}, connected: true, handshake: { query: { caps: 'welcome_delta' } }, join: jest.fn(), on: jest.fn(), emit: jest.fn() };
+  bindWelcomeOnlinePresence(io, socket as unknown as AuthedSocket);
+  await Promise.resolve();
+  expect(socket.join).not.toHaveBeenCalled();
+  expect(socket.emit).not.toHaveBeenCalled();
 });

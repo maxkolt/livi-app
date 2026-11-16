@@ -6,9 +6,9 @@ const SECRET = 'a'.repeat(64);
 const storedHash = hashInstallSecret(SECRET);
 
 describe('HTTP install auth', () => {
-  it('lets installs without a stored secret through as legacy', () => {
+  it('rejects installs without a stored secret', () => {
     expect(decideHttpInstallAuth({ storedHash: undefined, providedSecret: null, httpSecretSeen: false, requireAll: true }))
-      .toEqual({ result: 'legacy', markHttpSecretSeen: false });
+      .toEqual({ result: 'reject', markHttpSecretSeen: false });
   });
 
   it('accepts the right secret and remembers that this install sends it', () => {
@@ -18,9 +18,9 @@ describe('HTTP install auth', () => {
       .toEqual({ result: 'allow', markHttpSecretSeen: false });
   });
 
-  it('keeps old builds working until the install has sent a secret over HTTP', () => {
+  it('requires the secret even before the first authenticated HTTP request', () => {
     expect(decideHttpInstallAuth({ storedHash, providedSecret: undefined, httpSecretSeen: false, requireAll: false }).result)
-      .toBe('legacy');
+      .toBe('reject');
   });
 
   it('rejects a missing or wrong secret once the install is updated', () => {
@@ -34,4 +34,13 @@ describe('HTTP install auth', () => {
     expect(decideHttpInstallAuth({ storedHash, providedSecret: undefined, httpSecretSeen: false, requireAll: true }).result)
       .toBe('reject');
   });
+});
+
+it('supports explicitly staged legacy compatibility without weakening protected records', () => {
+  process.env.INSTALL_AUTH_MODE = 'legacy-migration';
+  try {
+    expect(decideHttpInstallAuth({ storedHash: undefined, providedSecret: null, httpSecretSeen: false, requireAll: false })).toEqual({ result: 'allow', markHttpSecretSeen: false });
+    expect(decideHttpInstallAuth({ storedHash: undefined, providedSecret: null, httpSecretSeen: false, requireAll: true }).result).toBe('reject');
+    expect(decideHttpInstallAuth({ storedHash, providedSecret: null, httpSecretSeen: false, requireAll: false }).result).toBe('reject');
+  } finally { delete process.env.INSTALL_AUTH_MODE; }
 });

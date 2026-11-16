@@ -117,3 +117,10 @@ yarn-error.log*
 tmp/
 temp/
 *.tmp
+
+# All environment variants are private; only explicit examples are publishable.
+.env.*
+!.env.example
+!.env.*.example
+*.p12
+*.pfx

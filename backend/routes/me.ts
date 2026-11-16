@@ -1,4 +1,5 @@
 // backend/routes/me.ts
+import { isAdminRequest } from '../utils/adminAuth';
 import { Router, type Request } from 'express';
 import UserModel from '../models/User';
 import mongoose from 'mongoose';
@@ -376,7 +377,8 @@ router.post('/push-test', async (req: ProfileRequest, res) => {
  * DEBUG: последние события пуша (sendCallPushToRecipient, FCM/Expo, token registered).
  * Для отладки входящего звонка: после теста вызови GET /api/debug/push-log и проверь, был ли "call push sent via FCM" или "sending via Expo".
  */
-router.get('/debug/push-log', (_req, res) => {
+router.get('/debug/push-log', (req, res) => {
+  if (!isAdminRequest(req)) return res.status(404).json({ ok: false, error: 'not_found' });
   try {
     return res.json({ ok: true, entries: getPushLog() });
   } catch (e) {
