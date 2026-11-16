@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
-import Animated, { runOnJS, useAnimatedStyle, withTiming } from 'react-native-reanimated';
+import Animated, { cancelAnimation, runOnJS, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { AppDialogButton } from '../../components/AppDialog';
@@ -20,34 +20,58 @@ export function CosmeticSwipeRow({ children, deleteLabel, accessibilityLabel, di
   const callbacks = useRef({ disabled, onDelete, onReveal, onClose });
   callbacks.current = { disabled, onDelete, onReveal, onClose };
   const handle = useRef<CosmeticSwipeHandle | null>(null);
-  const changeMode = useCallback((next: boolean) => {
-    if (callbacks.current.disabled || mode.current === next) return;
+  const progress = useSharedValue(0);
+  const dragOrigin = useSharedValue(0);
+  const settledOpen = useSharedValue(false);
+  const changeMode = useCallback((next: boolean, animate = true) => {
+    if (callbacks.current.disabled) return;
+    if (animate) {
+      settledOpen.value = next;
+      progress.value = withTiming(next ? 1 : 0, { duration: 160 });
+    }
+    if (mode.current === next) return;
     mode.current = next;
     setRevealed(next);
     if (handle.current) {
       if (next) callbacks.current.onReveal(handle.current);
       else callbacks.current.onClose(handle.current);
     }
-  }, []);
+  }, [progress, settledOpen]);
   if (!handle.current) handle.current = { close: () => changeMode(false) };
   const pan = useMemo(() => Gesture.Pan()
     .enabled(!disabled)
     .activeOffsetX([-12, 12])
     .failOffsetY([-16, 16])
+    .onStart(() => {
+      cancelAnimation(progress);
+      dragOrigin.value = progress.value;
+    })
+    .onUpdate(event => {
+      progress.value = Math.max(0, Math.min(1, dragOrigin.value - event.translationX / 96));
+    })
     .onEnd(event => {
-      if (event.translationX < -28) runOnJS(changeMode)(true);
-      else if (event.translationX > 28) runOnJS(changeMode)(false);
-    }), [disabled, changeMode]);
-  const tintMotion = useAnimatedStyle(() => ({ opacity: withTiming(revealed ? 1 : 0, { duration: 160 }) }));
-  const contentMotion = useAnimatedStyle(() => ({ opacity: withTiming(revealed ? 0 : 1, { duration: 120 }) }));
+      const next = event.translationX < -28 ? true : event.translationX > 28 ? false : settledOpen.value;
+      settledOpen.value = next;
+      progress.value = withTiming(next ? 1 : 0, { duration: 160 });
+      runOnJS(changeMode)(next, false);
+    })
+    .onFinalize((_event, success) => {
+      if (!success) progress.value = withTiming(settledOpen.value ? 1 : 0, { duration: 160 });
+    }), [disabled, changeMode, dragOrigin, progress, settledOpen]);
+  const borderMotion = useAnimatedStyle(() => ({ borderColor: `rgba(255,90,103,${progress.value * 0.14})` }));
+  const tintMotion = useAnimatedStyle(() => ({ opacity: progress.value }));
+  const contentMotion = useAnimatedStyle(() => ({
+    opacity: 1 - progress.value,
+    transform: [{ translateX: -48 * progress.value }],
+  }));
   const actionMotion = useAnimatedStyle(() => ({
-    opacity: withTiming(revealed ? 1 : 0, { duration: 140 }),
-    transform: [{ translateX: withTiming(revealed ? 0 : 10, { duration: 140 }) }],
+    opacity: progress.value,
+    transform: [{ translateX: (1 - progress.value) * 16 }],
   }));
   return <GestureDetector gesture={pan}>
-    <View collapsable={false} style={[styles.shell, revealed && styles.deleting]}>
+    <Animated.View collapsable={false} style={[styles.shell, borderMotion]}>
       <Animated.View pointerEvents="none" style={[StyleSheet.absoluteFillObject, tintMotion]}>
-        <LinearGradient colors={['rgba(255,90,103,0.025)', 'rgba(255,90,103,0.07)', 'rgba(255,90,103,0.13)']}
+        <LinearGradient colors={['rgba(255,90,103,0.02)', 'rgba(255,90,103,0.045)', 'rgba(255,90,103,0.085)']}
           start={{ x: 0, y: 0.5 }} end={{ x: 1, y: 0.5 }} style={StyleSheet.absoluteFillObject} />
       </Animated.View>
       <Animated.View style={contentMotion} pointerEvents={revealed ? 'none' : 'auto'}
@@ -69,12 +93,11 @@ export function CosmeticSwipeRow({ children, deleteLabel, accessibilityLabel, di
             callbacks.current.onDelete();
           }} />
       </Animated.View>
-    </View>
+    </Animated.View>
   </GestureDetector>;
 }
 
 const styles = StyleSheet.create({
   shell: { backgroundColor: WELCOME_GLASS_SURFACE, borderWidth: StyleSheet.hairlineWidth, borderColor: 'transparent' },
-  deleting: { borderColor: 'rgba(255,90,103,0.22)' },
   actions: { ...StyleSheet.absoluteFillObject, paddingHorizontal: 12, alignItems: 'flex-end', justifyContent: 'center' },
 });

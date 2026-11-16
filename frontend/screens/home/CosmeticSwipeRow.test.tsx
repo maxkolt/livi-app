@@ -4,6 +4,7 @@ let mockRefs: Array<{ current: any }> = [];
 const mockGesture = {
   enabled: jest.fn().mockReturnThis(), activeOffsetX: jest.fn().mockReturnThis(),
   failOffsetY: jest.fn().mockReturnThis(), onEnd: jest.fn().mockReturnThis(),
+  onStart: jest.fn().mockReturnThis(), onUpdate: jest.fn().mockReturnThis(), onFinalize: jest.fn().mockReturnThis(),
 };
 jest.mock('react', () => ({
   ...jest.requireActual('react'),
@@ -14,7 +15,12 @@ jest.mock('react', () => ({
 }));
 jest.mock('react-native', () => ({ View: 'View', Pressable: 'Pressable', StyleSheet: { create: (value: unknown) => value, absoluteFillObject: {}, hairlineWidth: 1 } }));
 jest.mock('react-native-gesture-handler', () => ({ GestureDetector: 'GestureDetector', Gesture: { Pan: () => mockGesture } }));
-jest.mock('react-native-reanimated', () => ({ __esModule: true, default: { View: 'AnimatedView' }, useAnimatedStyle: (fn: () => object) => fn(), withTiming: (value: number) => value, runOnJS: (fn: unknown) => fn }));
+jest.mock('react-native-reanimated', () => ({
+  __esModule: true, default: { View: 'AnimatedView' },
+  useSharedValue: (initial: unknown) => (mockRefs[mockRefCursor++] ||= { current: { value: initial } }).current,
+  useAnimatedStyle: (fn: () => object) => fn(), withTiming: (value: number) => value,
+  cancelAnimation: jest.fn(), runOnJS: (fn: unknown) => fn,
+}));
 jest.mock('expo-linear-gradient', () => ({ LinearGradient: 'Gradient' }));
 jest.mock('../../components/AppDialog', () => ({ AppDialogButton: 'AppDialogButton' }));
 jest.mock('@expo/vector-icons', () => ({ MaterialCommunityIcons: 'Icon' }));
@@ -70,4 +76,29 @@ it('ignores short drags and disables gestures and actions while busy', () => {
   button.props.onPress(); swipe(80);
   expect(remove).not.toHaveBeenCalled();
   expect(mockRevealed).toBe(true);
+});
+it('follows the finger in both directions before release without enabling deletion', () => {
+  render();
+  mockGesture.onStart.mock.calls.at(-1)![0]();
+  mockGesture.onUpdate.mock.calls.at(-1)![0]({ translationX: -48 });
+  const halfway = render();
+  expect(halfway.content.props.style).toMatchObject({ opacity: 0.5, transform: [{ translateX: -24 }] });
+  expect(halfway.tint.props.style[1].opacity).toBe(0.5);
+  expect(halfway.button.props.disabled).toBe(true);
+  mockGesture.onUpdate.mock.calls.at(-1)![0]({ translationX: -24 });
+  expect(render().content.props.style.opacity).toBe(0.75);
+  expect(reveal).not.toHaveBeenCalled();
+  mockGesture.onFinalize.mock.calls.at(-1)![0]({}, false);
+  expect(render().content.props.style.opacity).toBe(1);
+  expect(remove).not.toHaveBeenCalled();
+});
+it('restores the open state when a closing drag is cancelled, then accepts another swipe', () => {
+  render(); swipe(-80); render();
+  mockGesture.onStart.mock.calls.at(-1)![0]();
+  mockGesture.onUpdate.mock.calls.at(-1)![0]({ translationX: 48 });
+  expect(render().content.props.style.opacity).toBe(0.5);
+  mockGesture.onFinalize.mock.calls.at(-1)![0]({}, false);
+  expect(render().content.props.style.opacity).toBe(0);
+  swipe(80); expect(render().content.props.style.opacity).toBe(1);
+  swipe(-80); expect(render().button.props.disabled).toBe(false);
 });
