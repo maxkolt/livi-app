@@ -46,7 +46,7 @@ Uploaded media remains accessible by its media URL; this is not attachment end-t
 
 ## Deployment
 
-Prepared as an atomic, manifest-verified release with fresh production dependencies, private environment preservation, backup/rollback of source, dist, node_modules and .env, and Mongo/Redis/adapter health checks. Deployment evidence is added after the actual server verification. The public latest-app-version setting stays at 211 until 212 is actually published.
+Deployed as an atomic, manifest-verified release with fresh production dependencies, private environment preservation, backup/rollback of source, dist, node_modules and .env, and Mongo/Redis/adapter health checks. The public latest-app-version setting stays at 211 until 212 is actually published.
 
 
 ## Notification entry follow-up
@@ -77,3 +77,11 @@ Final native build evidence: 606 Gradle tasks, successful in 39 seconds. No APK 
 
 
 The production dependency preparation exposed Multer 1.x's vendor deprecation/security warning even though npm audit returned zero findings. The [maintainer advisory](https://github.com/expressjs/multer/security/advisories/GHSA-wc9g-mqfw-jrwm) and [Multer 2.5 release](https://github.com/expressjs/multer/releases/tag/v2.5.0) were checked; multipart parsing was upgraded to 2.5.0 with compatible types. Five real HTTP tests exercise disk upload byte preservation, random URL format, authentication, MIME rejection, malformed multipart and crafted field-name handling while keeping the next request operational. The complete backend run now passes 37 suites / 301 tests. Test uploads are removed after the isolated test server closes.
+
+## Final deployment verification
+
+Release b7e4f3e11ae4f4a2cd7975882aa3b8e2a7bd108b was deployed at 2026-11-16 22:58:12 UTC (2026-11-17 01:58:12 Moscow). Rollback backup: /opt/backend/backup-release-b7e4f3e11-20261116T225812Z. No calls, media participants, queue entries or random-chat pairs were active before replacement. All 268 deployed source/dist manifest checksums were verified again after restart. livi-backend is active with NRestarts=0; public health reports Mongo=1, Redis=ready and Socket.IO Redis adapter=true. Multer 2.5.0 is installed.
+
+The existing A35 client uploaded a dedicated 68-byte PNG through the actual authenticated multipart endpoint, receiving HTTP 200 and a 48-hex random filename. The server file's SHA256 matched the fixture before deleting that exact QA upload; the device fixture was also removed. No chat message or profile media was created. The final server passed the same authenticated/negative HTTP and Socket.IO checks documented above; feedbackSubmitted=true and one owned background were preserved.
+
+Server environment permissions are 0600. INSTALL_AUTH_MODE remains legacy-migration and HTTP_INSTALL_SECRET_REQUIRED remains 0, as explicitly requested. The production pepper remains on the server. The Android notification source and tests are pushed, but final native first-frame acceptance on A35 is still pending permission to build/install a test APK; no packaging or install is implied by this server deployment.
