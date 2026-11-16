@@ -28,7 +28,7 @@ Legacy sessions cannot delete the account or replace the chat ownership key befo
 
 ## Verification
 
-- Backend: 36 suites / 296 tests, including isolated real MongoDB ownership/migration cases. Production data was not used for integration tests.
+- Backend: 37 suites / 301 tests, including isolated real MongoDB ownership/migration cases. Production data was not used for integration tests.
 - Frontend: 135 suites / 1332 tests.
 - TypeScript, ESLint and backend compilation pass.
 - Android production Hermes/asset export passes. No active backend environment secret was found in the generated bundle.
@@ -74,3 +74,6 @@ Production negative Socket.IO check from the A35: a connection supplied only the
 
 
 Final native build evidence: 606 Gradle tasks, successful in 39 seconds. No APK or AAB packaging/install was performed. The user was asked whether an updated debug APK may be built/installed on A35 for final native acceptance; that preference has not yet been answered. The old dev APK remains version 211. The new production source is configured for versionCode 212.
+
+
+The production dependency preparation exposed Multer 1.x's vendor deprecation/security warning even though npm audit returned zero findings. The [maintainer advisory](https://github.com/expressjs/multer/security/advisories/GHSA-wc9g-mqfw-jrwm) and [Multer 2.5 release](https://github.com/expressjs/multer/releases/tag/v2.5.0) were checked; multipart parsing was upgraded to 2.5.0 with compatible types. Five real HTTP tests exercise disk upload byte preservation, random URL format, authentication, MIME rejection, malformed multipart and crafted field-name handling while keeping the next request operational. The complete backend run now passes 37 suites / 301 tests. Test uploads are removed after the isolated test server closes.
