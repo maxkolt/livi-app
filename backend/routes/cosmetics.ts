@@ -183,16 +183,18 @@ router.patch('/cosmetics/active', async (req, res) => {
 
   const purchaseField = kind === 'frame' ? 'purchasedFrameIds' : 'purchasedBackgroundIds';
   const activeField = kind === 'frame' ? 'activeFrameId' : 'activeBackgroundId';
-  const user = await UserModel.findById(userId)
-    .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
-    .lean();
-  if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-  const owned = Array.isArray((user)[purchaseField]) ? (user)[purchaseField].map(String) : [];
-  if (itemId && !owned.includes(itemId)) return res.status(403).json({ ok: false, error: 'not_owned' });
-
-  const updated = await UserModel.findByIdAndUpdate(userId, { $set: { [activeField]: itemId } }, { new: true })
+  // Ownership is checked by the same write: a concurrent deletion cannot leave
+  // an active frame/background that no longer belongs to this user.
+  const updated = await UserModel.findOneAndUpdate(
+    { _id: userId, ...(itemId ? { [purchaseField]: itemId } : {}) },
+    { $set: { [activeField]: itemId } }, { new: true },
+  )
     .select(COSMETIC_FIELDS)
     .lean();
+  if (!updated) {
+    const exists = await UserModel.exists({ _id: userId });
+    return res.status(exists ? 403 : 404).json({ ok: false, error: exists ? 'not_owned' : 'user_not_found' });
+  }
 
   // Рамка видна другим людям, поэтому её смену надо разослать сразу.
   // Без этого друзья увидят новую рамку только когда протухнет их пятиминутный

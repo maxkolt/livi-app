@@ -175,4 +175,43 @@ suite('LiVi rewards with real MongoDB atomic updates and HTTP routes', () => {
     expect(result.status).toBe(200);
     expect(result.body.entitlements.activeFrameId).toBe('diamond');
   });
+  it.each(['frame', 'background'] as const)('deletes an active %s completely without refunding points or gifts', async kind => {
+    const itemId = kind === 'frame' ? 'fire' : 'poetry';
+    const owned = kind === 'frame' ? 'purchasedFrameIds' : 'purchasedBackgroundIds';
+    const active = kind === 'frame' ? 'activeFrameId' : 'activeBackgroundId';
+    await User.updateOne({ _id: userId }, { $set: { [owned]: [itemId], [active]: itemId, liviPoints: 20, feedbackGiftAvailable: false } });
+    const result = await http('/cosmetics/owned', { kind, itemId }, userId, 'DELETE');
+    expect(result.status).toBe(200);
+    expect(result.body.entitlements).toMatchObject({ [owned]: [], [active]: '', rewards: { balance: 20, feedbackGiftAvailable: false } });
+    expect((await http('/cosmetics/active', { kind, itemId }, userId, 'PATCH')).status).toBe(403);
+    expect((await http('/cosmetics/owned', { kind, itemId }, userId, 'DELETE')).status).toBe(200);
+  });
+  it('keeps the active item when deleting another owned item and permits a new purchase later', async () => {
+    await User.updateOne({ _id: userId }, { $set: { purchasedFrameIds: ['fire', 'diamond'], activeFrameId: 'diamond', liviPoints: 100 } });
+    const deleted = await http('/cosmetics/owned', { kind: 'frame', itemId: 'fire' }, userId, 'DELETE');
+    expect(deleted.body.entitlements).toMatchObject({ purchasedFrameIds: ['diamond'], activeFrameId: 'diamond' });
+    const redeemed = await http('/cosmetics/redeem', { kind: 'frame', itemId: 'fire' });
+    expect(redeemed.status).toBe(200);
+    expect(redeemed.body.entitlements).toMatchObject({ purchasedFrameIds: ['diamond', 'fire'], activeFrameId: 'fire', rewards: { balance: 0 } });
+  });
+  it('does not reactivate a deleted item when application and deletion race', async () => {
+    for (let i = 0; i < 12; i++) {
+      await User.updateOne({ _id: userId }, { $set: { purchasedBackgroundIds: ['poetry'], activeBackgroundId: '' } });
+      await Promise.all([
+        http('/cosmetics/active', { kind: 'background', itemId: 'poetry' }, userId, 'PATCH'),
+        http('/cosmetics/owned', { kind: 'background', itemId: 'poetry' }, userId, 'DELETE'),
+      ]);
+      const user = await User.findById(userId).lean();
+      expect(user).toMatchObject({ purchasedBackgroundIds: [], activeBackgroundId: '' });
+    }
+  });
+  it('requires authentication and valid input to delete, and never deletes another user’s collection', async () => {
+    const other = String((await User.create({ purchasedFrameIds: ['fire'], activeFrameId: 'fire' }))._id);
+    const body = { kind: 'frame', itemId: 'fire', userId: other };
+    expect((await http('/cosmetics/owned', body, null, 'DELETE')).status).toBe(401);
+    expect((await http('/cosmetics/owned', { kind: 'bad', itemId: 'fire' }, userId, 'DELETE')).status).toBe(400);
+    expect((await http('/cosmetics/owned', body, userId, 'DELETE')).status).toBe(200);
+    expect(await User.findById(other).lean()).toMatchObject({ purchasedFrameIds: ['fire'], activeFrameId: 'fire' });
+  });
+
 });
