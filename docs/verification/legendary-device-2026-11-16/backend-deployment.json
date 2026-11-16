@@ -1,0 +1,54 @@
+{
+  "deployed": true,
+  "commit": "b96693b683129331ae41014b936981581609c76b",
+  "branch": "main",
+  "deployedAt": "20261116T205148Z",
+  "backup": "/opt/backend/backup-release-b96693b68-20261116T205148Z",
+  "unrelatedEnvironmentUnchanged": true,
+  "removedSettings": [
+    "YUKASSA_SHOP_ID",
+    "YUKASSA_SECRET_KEY",
+    "YUKASSA_RETURN_URL",
+    "INTELLECTMONEY_ESHOP_ID",
+    "INTELLECTMONEY_SECRET_KEY",
+    "INTELLECTMONEY_CURRENCY",
+    "PUBLIC_BASE_URL"
+  ],
+  "removedSourceFiles": [
+    ".env.payments.example",
+    "docs/intellectmoney.md",
+    "models/CosmeticPurchase.ts",
+    "models/IntellectMoneyPurchase.ts",
+    "routes/intellectMoneyCosmetics.test.ts",
+    "routes/intellectMoneyCosmetics.ts",
+    "utils/intellectMoney.test.ts",
+    "utils/intellectMoney.ts"
+  ],
+  "dependenciesUnchanged": true,
+  "preDeployActivity": {
+    "rooms": 0,
+    "participants": 0,
+    "queue": 0,
+    "paired": 0
+  },
+  "health": {
+    "ok": true,
+    "mongo": 1,
+    "socketIoRedisAdapter": true,
+    "rateLimit": {
+      "redisConfigured": true,
+      "redisStatus": "ready",
+      "sensitiveFallbackMode": "bounded_memory",
+      "memoryKeys": 0,
+      "memoryMaxKeys": 20000,
+      "redisFallbackCount": 0,
+      "failClosedCount": 0,
+      "lastRedisFallbackAt": 0,
+      "lastRedisFallbackReason": ""
+    },
+    "callKeepAlive": {
+      "users": 0,
+      "sockets": 0
+    }
+  }
+}

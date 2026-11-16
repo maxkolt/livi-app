@@ -135,7 +135,8 @@ export function AppDialogButton({
   busy,
   stretch = true,
   icon,
-}: AppDialogAction & { stretch?: boolean; icon?: React.ReactNode }) {
+  iconSize = 44,
+}: AppDialogAction & { stretch?: boolean; icon?: React.ReactNode; iconSize?: number }) {
   const inactive = !!disabled || !!busy;
   // Главное действие подписано как ник над радаром: Exo 2 Medium, тот же цвет и разрядка.
   const nickFont = useNickDigitalFont();
@@ -150,7 +151,7 @@ export function AppDialogButton({
       style={({ pressed }) => [
         styles.button,
         stretch && styles.buttonStretch,
-        !!icon && styles.buttonIcon,
+        !!icon && [styles.buttonIcon, { width: iconSize, height: iconSize, minHeight: iconSize, borderRadius: iconSize / 2 }],
         variant === 'danger'
           ? [styles.buttonDanger, pressed && styles.buttonDangerPressed]
           : variant === 'primary'
@@ -307,11 +308,8 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   buttonIcon: {
-    width: 44,
-    height: 44,
     paddingVertical: 0,
     paddingHorizontal: 0,
-    borderRadius: 22,
   },
   buttonCancel: {
     backgroundColor: 'rgba(255,255,255,0.06)',

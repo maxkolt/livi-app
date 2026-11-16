@@ -1,0 +1,44 @@
+Full frontend: Test Suites: 130 passed, 130 total
+Tests:       1312 passed, 1312 total
+Snapshots:   0 total
+Time:        10.638 s, estimated 11 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+Full backend with isolated LOCAL MongoDB:
+Test Suites: 31 passed, 31 total
+Tests:       265 passed, 265 total
+Snapshots:   0 total
+Time:        12.408 s, estimated 39 s
+Ran all test suites.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+Final compact UI focused checks:
+
+> frontend@1.0.0 test:ci
+> NODE_ENV=test jest --ci --runInBand --watchman=false CosmeticSwipeRow PurchasesManagementPanel
+
+PASS screens/home/PurchasesManagementPanel.test.tsx
+PASS screens/home/CosmeticSwipeRow.test.tsx
+
+Test Suites: 2 passed, 2 total
+Tests:       10 passed, 10 total
+Snapshots:   0 total
+Time:        0.36 s, estimated 1 s
+Ran all test suites matching /CosmeticSwipeRow|PurchasesManagementPanel/i.
+Force exiting Jest: Have you considered using `--detectOpenHandles` to detect async operations that kept running after all tests finished?
+
+TypeScript:
+
+> frontend@1.0.0 typecheck
+> tsc --noEmit
+
+
+Production Android export:
+
+_expo/static/js/android/index-0cc6618e6bbb6b0b0cd5cc8c64ddbd0e.hbc (11.6 MB)
+
+› Files (1):
+metadata.json (6.1 kB)
+
+Exported: dist-legendary-compact
