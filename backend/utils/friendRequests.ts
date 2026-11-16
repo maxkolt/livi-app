@@ -2,6 +2,7 @@
 import mongoose from 'mongoose';
 import User from '../models/User';
 import { areFriendsCached } from './friendshipUtils';
+import { recordInviteAttribution } from './liviRewards';
 
 /**
  * Входящие заявки в друзья — для страницы «Заявки» в приложении.
@@ -75,5 +76,6 @@ export async function listIncomingFriendRequests(
 export async function markInviteFriendRequest(me: string, inviterId: string): Promise<void> {
   if (!isOid(me) || !isOid(inviterId) || String(me) === String(inviterId)) return;
   if (await areFriendsCached(me, inviterId)) return;
+  await recordInviteAttribution(me, inviterId);
   await (User).updateOne({ _id: me }, { $addToSet: { friendRequests: inviterId } });
 }

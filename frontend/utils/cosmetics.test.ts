@@ -266,3 +266,57 @@ it.each([true, false])('bounds failed HTTP auth repair and preserves the saved s
   expect(mockFetch).toHaveBeenCalledTimes(restored ? 3 : 2);
   expect(ReadCosmetics()).toMatchObject(initial);
 });
+
+it('keeps a redeemed balance when an older wallet read arrives later', async () => {
+  const initial = { activeFrameId: '', activeBackgroundId: '', rewards: { balance: 100, invitedCount: 10, feedbackSubmitted: false, feedbackGiftAvailable: false, invitePoints: 10, prices: { background: 50, frame: 100 } } };
+  let finishRead!: (value: unknown) => void;
+  mockFetch.mockImplementation((_url, init) => init?.method === 'POST'
+    ? Promise.resolve({ ok: true, json: async () => ({ ok: true, entitlements: { ...initial, purchasedFrameIds: ['fire'], activeFrameId: 'fire', rewards: { ...initial.rewards, balance: 0 } } }) })
+    : new Promise(resolve => { finishRead = resolve; }));
+  boot(); await flush();
+  const read = cosmetics.loadCosmetics(true); await flush();
+  await cosmetics.redeemCosmetic('frame', 'fire');
+  finishRead({ ok: true, json: async () => ({ ok: true, entitlements: initial }) }); await read;
+  expect(ReadCosmetics()).toMatchObject({ activeFrameId: 'fire', rewards: { balance: 0 } });
+  expect(mockFetch.mock.calls.find(([url]) => url.endsWith('/cosmetics/redeem'))?.[1].body)
+    .toBe(JSON.stringify({ kind: 'frame', itemId: 'fire', useGift: false }));
+});
+
+it('serializes feedback, gift redemption and activation without restoring a consumed gift', async () => {
+  const state = { purchasedBackgroundIds: [] as string[], activeBackgroundId: '', rewards: { balance: 0, invitedCount: 0, feedbackSubmitted: false, feedbackGiftAvailable: false, invitePoints: 10, prices: { background: 50, frame: 100 } } };
+  const pending: Array<() => void> = [];
+  mockFetch.mockImplementation((url, init) => new Promise(resolve => pending.push(() => {
+    if (url.endsWith('/feedback')) { state.rewards.feedbackSubmitted = true; state.rewards.feedbackGiftAvailable = true; }
+    if (url.endsWith('/redeem')) { state.purchasedBackgroundIds.push('poetry'); state.activeBackgroundId = 'poetry'; state.rewards.feedbackGiftAvailable = false; }
+    if (init.method === 'PATCH') state.activeBackgroundId = '';
+    resolve({ ok: true, json: async () => ({ ok: true, entitlements: { ...state, rewards: { ...state.rewards } } }) });
+  })));
+  boot(); await flush();
+  const feedback = cosmetics.submitCosmeticFeedback('A useful piece of feedback.');
+  const gift = cosmetics.redeemCosmetic('background', 'poetry', true);
+  const remove = cosmetics.setActiveCosmetic('background', '');
+  await flush(); expect(pending).toHaveLength(1);
+  pending.shift()!(); await feedback; await flush(); expect(pending).toHaveLength(1);
+  pending.shift()!(); await gift; await flush(); expect(pending).toHaveLength(1);
+  pending.shift()!(); await remove;
+  expect(ReadCosmetics()).toMatchObject({ activeBackgroundId: '', purchasedBackgroundIds: ['poetry'], rewards: { balance: 0, feedbackSubmitted: true, feedbackGiftAvailable: false } });
+});
+
+it('preserves wallet and ownership after a rejected redemption and allows a subsequent refresh', async () => {
+  const initial = { activeFrameId: '', rewards: { balance: 20, invitedCount: 2, feedbackSubmitted: false, feedbackGiftAvailable: false, invitePoints: 10, prices: { background: 50, frame: 100 } } };
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own: initial }));
+  mockFetch.mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ ok: false, error: 'insufficient_points' }) })
+    .mockResolvedValue({ ok: true, json: async () => ({ ok: true, entitlements: initial }) });
+  boot(); await flush();
+  await expect(cosmetics.redeemCosmetic('frame', 'fire')).rejects.toThrow('insufficient_points');
+  await cosmetics.loadCosmetics(true);
+  expect(ReadCosmetics()).toMatchObject({ activeFrameId: '', purchasedFrameIds: [], rewards: { balance: 20 } });
+});
+
+it('discards an incomplete wallet from disk until the server supplies a valid balance', async () => {
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own: { activeFrameId: 'fire', rewards: { balance: 100 } } }));
+  mockFetch.mockRejectedValue(new Error('offline'));
+  boot(); await flush();
+  expect(ReadCosmetics()).toMatchObject({ activeFrameId: 'fire' });
+  expect(ReadCosmetics().rewards).toBeUndefined();
+});

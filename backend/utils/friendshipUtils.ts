@@ -2,6 +2,7 @@ import mongoose from 'mongoose';
 import User, { type LeanUser } from '../models/User';
 import FriendshipMessages, { IFriendshipMessages } from '../models/FriendshipMessages';
 import FriendshipEdge from '../models/FriendshipEdge';
+import { settleInviteRewards } from './liviRewards';
 
 export type FriendListProfile = Pick<LeanUser, '_id' | 'nick' | 'avatar' | 'avatarVer' | 'avatarThumbB64'>;
 type BulkWriteFailure = {
@@ -105,6 +106,8 @@ export async function ensureFriendshipEdges(a: string, b: string): Promise<void>
   );
   clearFriendshipCache(a);
   clearFriendshipCache(b);
+  // Award after durable friendship; a later shop read repairs an interrupted credit.
+  await settleInviteRewards(a, b);
 }
 
 export async function removeFriendshipEdges(a: string, b: string): Promise<void> {

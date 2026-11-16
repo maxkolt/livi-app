@@ -7,8 +7,14 @@ import { logger } from '../utils/logger';
 import { getFriendIds } from '../utils/friendshipUtils';
 import { serializeCosmeticEntitlements as serializeEntitlements } from '../utils/cosmeticCatalog';
 import { createIntellectMoneyCosmeticsRouter } from './intellectMoneyCosmetics';
+import { createCosmeticRewardsRouter } from './cosmeticRewards';
+import { COSMETIC_FIELDS, reconcileInviteRewards, serializeRewards } from '../utils/liviRewards';
 
 const router = Router();
+// Retire creation and checkout, while fulfilling verified payments made earlier.
+router.post('/cosmetics/payments', (_req, res) => res.status(410).json({ ok: false, error: 'use_livi_points' }));
+router.get('/cosmetics/intellectmoney/checkout/:paymentId', (_req, res) => res.status(410).json({ ok: false, error: 'use_livi_points' }));
+router.use(createCosmeticRewardsRouter(broadcastFrameChange));
 router.use(createIntellectMoneyCosmeticsRouter(broadcastFrameChange));
 
 const SHOP_ID = String(process.env.YUKASSA_SHOP_ID || '').trim();
@@ -102,11 +108,13 @@ async function grantVerifiedPayment(payment: YooPayment) {
 router.get('/cosmetics/me', async (req, res) => {
   const userId = String((req as AuthenticatedRequest).userId || '').trim();
   if (!mongoose.isValidObjectId(userId)) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  await reconcileInviteRewards(userId);
   const user = await UserModel.findById(userId)
-    .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
+    .select(COSMETIC_FIELDS)
     .lean();
   if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-  return res.json({ ok: true, entitlements: serializeEntitlements(user) });
+  res.setHeader('Cache-Control', 'no-store');
+  return res.json({ ok: true, entitlements: { ...serializeEntitlements(user), rewards: serializeRewards(user) } });
 });
 
 router.get('/cosmetics/user/:userId', async (req, res) => {
@@ -183,7 +191,7 @@ router.patch('/cosmetics/active', async (req, res) => {
   if (itemId && !owned.includes(itemId)) return res.status(403).json({ ok: false, error: 'not_owned' });
 
   const updated = await UserModel.findByIdAndUpdate(userId, { $set: { [activeField]: itemId } }, { new: true })
-    .select('purchasedFrameIds purchasedBackgroundIds activeFrameId activeBackgroundId')
+    .select(COSMETIC_FIELDS)
     .lean();
 
   // Рамка видна другим людям, поэтому её смену надо разослать сразу.
@@ -193,7 +201,7 @@ router.patch('/cosmetics/active', async (req, res) => {
     void broadcastFrameChange(req, userId, itemId);
   }
 
-  return res.json({ ok: true, entitlements: serializeEntitlements(updated) });
+  return res.json({ ok: true, entitlements: { ...serializeEntitlements(updated), ...(updated ? { rewards: serializeRewards(updated) } : {}) } });
 });
 
 router.post('/cosmetics/webhook', async (req, res) => {

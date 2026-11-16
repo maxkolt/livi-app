@@ -16,6 +16,7 @@ import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
 import { emitToUser } from '../utils/emitToUser';
 import { listIncomingFriendRequests } from '../utils/friendRequests';
+import { recordInviteAttribution } from '../utils/liviRewards';
 
 type FriendAck<T extends object = object> = (result: ({ ok: true } & T) | { ok: false; error: string }) => void;
 type FriendsPayload = {
@@ -148,6 +149,7 @@ export default function registerFriendSockets(io: Server) {
         if (alreadyFriends) return ack?.({ ok: true, status: 'already' });
 
         // Сразу добавляем дружбу в отдельную коллекцию связей (без заявки)
+        await recordInviteAttribution(me, inviterId);
         await ensureFriendshipEdges(me, inviterId);
         clearFriendshipCache(me);
         clearFriendshipCache(inviterId);

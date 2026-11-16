@@ -20,6 +20,14 @@ interface IUser {
   purchasedBackgroundIds?: string[];
   activeFrameId?: string;
   activeBackgroundId?: string;
+  createdAt?: Date;
+  liviPoints?: number;
+  rewardedInviteIds?: string[];
+  referredBy?: Types.ObjectId;
+  referralAccepted?: boolean;
+  feedbackGiftAvailable?: boolean;
+  feedbackSubmittedAt?: Date;
+  feedbackText?: string;
   /** Публичный X25519-ключ сквозного шифрования чата (base64, 32 байта). Пусто — шифрование не включено. */
   e2ePublicKey?: string;
   e2eKeyUpdatedAt?: Date;
@@ -119,6 +127,14 @@ const UserSchema = new Schema<IUser>(
       default: '',
     },
 
+    liviPoints: { type: Number, default: 0, min: 0 },
+    rewardedInviteIds: { type: [String], default: [] },
+    referredBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    referralAccepted: { type: Boolean, default: false },
+    feedbackGiftAvailable: { type: Boolean, default: false },
+    feedbackSubmittedAt: { type: Date },
+    feedbackText: { type: String, select: false },
+
     e2ePublicKey: {
       type: String,
       default: '',
@@ -163,6 +179,7 @@ const UserSchema = new Schema<IUser>(
 );
 
 // Модель
+UserSchema.index({ referredBy: 1, referralAccepted: 1 });
 const UserModel: Model<IUser> =
   (models.User as Model<IUser>) || model<IUser>('User', UserSchema);
 

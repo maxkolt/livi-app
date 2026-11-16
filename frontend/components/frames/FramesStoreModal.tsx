@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { AppState, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -19,8 +19,7 @@ import { FullScreenPortal } from '../FullScreenPortal';
 import { useOrientationLayoutGuard } from '../../hooks/useOrientationLayoutGuard';
 import { OrientationCoverModal } from '../OrientationCoverModal';
 import {
-  checkCosmeticPayment,
-  createCosmeticPayment,
+  redeemCosmetic,
   loadCosmetics,
   setActiveCosmetic,
   useCosmetics,
@@ -40,6 +39,8 @@ import {
 } from '../../screens/home/constants';
 import { WelcomeStageBackground } from '../../screens/home/WelcomeStageBackground';
 import { AppDialogModal } from '../AppDialog';
+import { LiviRewardsDialog } from './LiviRewardsDialog';
+import { formatLiviPoints } from '../../utils/liviRewards';
 
 /** Под фото в рамке: пока кадр не декодирован, градиент рамки не виден сплошным кругом. */
 const SHOWCASE_AVATAR_BG = '#0B1219';
@@ -53,7 +54,7 @@ type Props = {
   myAvatarVer?: number;
   avatarUri?: string;
   nick?: string;
-  /** Единая оплата для фонов чата и рамок аватара. */
+  /** Оформление получено за баллы или в подарок. */
   onUnlock?: () => void;
   /**
    * Собрать витрину заранее и держать скрытой: открытие только показывает готовое.
@@ -391,6 +392,7 @@ function FramesStoreContent({
   keepWarm,
   onClose,
   onUnlock,
+  myUserId,
   requestCloseRef,
   onContentReady,
 }: Props & {
@@ -449,7 +451,7 @@ function FramesStoreContent({
   const pagePaddingBottom = insets.bottom + bottomGap;
   const contentHeight = Math.max(
     0,
-    windowHeight - pagePaddingTop - (headerCompact ? 34 : 42) - pagePaddingBottom,
+    windowHeight - pagePaddingTop - (headerCompact ? 34 : 42) - pagePaddingBottom - 84,
   );
   const layout = pickStoreLayout(contentHeight, landscape, tablet);
   const compact = layout.compact;
@@ -475,7 +477,12 @@ function FramesStoreContent({
   const [activeBackgroundIndex, setActiveBackgroundIndex] = useState(0);
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
   const [paymentBusy, setPaymentBusy] = useState<CosmeticKind | null>(null);
-  const [pendingPaymentId, setPendingPaymentId] = useState('');
+  const [rewardsVisible, setRewardsVisible] = useState(false);
+  const [rewardTarget, setRewardTarget] = useState<CosmeticKind | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const busyRef = useRef(false);
+  const [confirm, setConfirm] = useState<{ kind: CosmeticKind; itemId: string; useGift: boolean } | null>(null);
   const [purchaseNotice, setPurchaseNotice] = useState<PurchaseNotice | null>(null);
   // Закрытое окно ещё исчезает — держим в нём прежний текст.
   const lastPurchaseNoticeRef = useRef<PurchaseNotice | null>(null);
@@ -485,10 +492,19 @@ function FramesStoreContent({
   const activeBackground = CHAT_BACKGROUND_SLIDES[activeBackgroundIndex] ?? CHAT_BACKGROUND_SLIDES[0];
   const activeFrame = FRAME_CATALOG[activeFrameIndex] ?? FRAME_CATALOG[0];
 
+  const refreshBalance = useCallback(async () => {
+    try { await loadCosmetics(true); setLoaded(true); setLoadError(false); }
+    catch { setLoadError(true); }
+  }, []);
   useEffect(() => {
-    if (!visible) return;
-    void loadCosmetics(true).catch(() => {});
-  }, [visible]);
+    if (!visible) { setLoaded(false); setRewardsVisible(false); setConfirm(null); return; }
+    void refreshBalance();
+    const resume = AppState.addEventListener('change', state => {
+      if (state === 'active') void refreshBalance();
+    });
+    const timer = setInterval(() => void refreshBalance(), 30000);
+    return () => { resume.remove(); clearInterval(timer); };
+  }, [visible, refreshBalance]);
 
   const loadedRef = useRef({ background: false, frame: false, sent: false });
   useEffect(() => {
@@ -507,45 +523,6 @@ function FramesStoreContent({
   );
   const handleBackgroundLoad = useCallback(() => handleCardLoad('background'), [handleCardLoad]);
   const handleFrameLoad = useCallback(() => handleCardLoad('frame'), [handleCardLoad]);
-
-  const refreshPendingPayment = useCallback(async () => {
-    if (!pendingPaymentId) return;
-    try {
-      const result = await checkCosmeticPayment(pendingPaymentId);
-      if (result.status === 'succeeded') {
-        setPendingPaymentId('');
-        setPaymentBusy(null);
-        onUnlock?.();
-        setPurchaseNotice({
-          kind: 'success',
-          title: 'storePurchaseDoneTitle',
-          message: 'storePurchaseDoneText',
-        });
-      } else if (result.status === 'canceled') {
-        setPendingPaymentId('');
-        setPaymentBusy(null);
-        setPurchaseNotice({
-          kind: 'canceled',
-          title: 'storePaymentCanceledTitle',
-          message: 'storePaymentCanceledText',
-        });
-      }
-    } catch {
-      setPaymentBusy(null);
-    }
-  }, [onUnlock, pendingPaymentId]);
-
-  useEffect(() => {
-    if (!visible || !pendingPaymentId) return;
-    const subscription = AppState.addEventListener('change', (state) => {
-      if (state === 'active') void refreshPendingPayment();
-    });
-    const timer = setInterval(() => void refreshPendingPayment(), 3000);
-    return () => {
-      subscription.remove();
-      clearInterval(timer);
-    };
-  }, [pendingPaymentId, refreshPendingPayment, visible]);
 
   const backgroundCoverflowAnimation = useCallback(
     (value: number) => {
@@ -611,39 +588,50 @@ function FramesStoreContent({
 
   if (!visible && !keepWarm) return null;
 
-  const openSharedCheckout = async (kind: CosmeticKind) => {
-    if (paymentBusy || (kind === 'frame' && !activeFrame.available) ||
+  const wallet = entitlements.rewards;
+  const points = (value: number) => formatLiviPoints(value, lang);
+  const buy = async (kind: CosmeticKind) => {
+    if (busyRef.current || !loaded || !wallet || (kind === 'frame' && !activeFrame.available) ||
       (kind === 'background' && !activeBackground.available)) return;
     const itemId = kind === 'background' ? activeBackground.key : activeFrame.key;
-    const owned = kind === 'background'
-      ? entitlements.purchasedBackgroundIds.includes(itemId)
-      : entitlements.purchasedFrameIds.includes(itemId);
+    const owned = kind === 'background' ? entitlements.purchasedBackgroundIds.includes(itemId) : entitlements.purchasedFrameIds.includes(itemId);
     const activeId = kind === 'background' ? entitlements.activeBackgroundId : entitlements.activeFrameId;
-    setPaymentBusy(kind);
-    try {
-      if (owned) {
-        await setActiveCosmetic(kind, activeId === itemId ? '' : itemId);
-        return;
-      }
-      const payment = await createCosmeticPayment(kind, itemId);
-      if (payment.alreadyOwned) {
-        await setActiveCosmetic(kind, itemId);
-        return;
-      }
-      if (!payment.paymentId || !payment.confirmationUrl) throw new Error('missing_confirmation');
-      setPendingPaymentId(payment.paymentId);
-      await Linking.openURL(payment.confirmationUrl);
-    } catch {
-      setPendingPaymentId('');
-      setPurchaseNotice({
-        kind: 'error',
-        title: 'storePaymentOpenFailedTitle',
-        message: 'storePaymentOpenFailedText',
-      });
-    } finally {
-      setPaymentBusy(null);
+    if (!owned) {
+      const useGift = kind === 'background' && wallet.feedbackGiftAvailable;
+      if (!useGift && wallet.balance < wallet.prices[kind]) { setRewardTarget(kind); setRewardsVisible(true); return; }
+      setConfirm({ kind, itemId, useGift });
+      return;
     }
+    busyRef.current = true; setPaymentBusy(kind);
+    try { await setActiveCosmetic(kind, activeId === itemId ? '' : itemId); }
+    catch { setPurchaseNotice({ kind: 'error', title: 'rewardsErrorTitle', message: 'rewardsErrorText' }); }
+    finally { busyRef.current = false; setPaymentBusy(null); }
   };
+  const redeem = async () => {
+    if (!confirm || busyRef.current) return;
+    const selection = confirm;
+    busyRef.current = true; setPaymentBusy(selection.kind);
+    try {
+      await redeemCosmetic(selection.kind, selection.itemId, selection.useGift);
+      setConfirm(null); onUnlock?.();
+      setPurchaseNotice({ kind: 'success', title: 'storePurchaseDoneTitle', message: 'storePurchaseDoneText' });
+    } catch (error) {
+      setConfirm(null);
+      await refreshBalance();
+      const insufficient = error instanceof Error && error.message === 'insufficient_points';
+      if (insufficient) { setRewardTarget(selection.kind); setRewardsVisible(true); }
+      else setPurchaseNotice({ kind: 'error', title: 'rewardsErrorTitle', message: 'rewardsErrorText' });
+    } finally { busyRef.current = false; setPaymentBusy(null); }
+  };
+  const minimumPrice = Math.min(
+    ...CHAT_BACKGROUND_CATALOG.filter(item => !entitlements.purchasedBackgroundIds.includes(item.key)).map(() => wallet?.prices.background ?? 50),
+    ...FRAME_CATALOG.filter(item => item.available && !entitlements.purchasedFrameIds.includes(item.key)).map(() => wallet?.prices.frame ?? 100),
+  );
+  const remaining = Math.max(0, minimumPrice - (wallet?.balance ?? 0));
+  const progressText = loadError ? L('rewardsLoadError') : !loaded || !wallet ? L('rewardsLoading')
+    : !Number.isFinite(minimumPrice) ? L('rewardsAllOwned')
+    : wallet.feedbackGiftAvailable ? L('rewardsGiftReady')
+    : remaining === 0 ? L('rewardsReady') : L('rewardsProgress').replace('{points}', points(remaining));
 
   const backgroundOwned = entitlements.purchasedBackgroundIds.includes(activeBackground.key);
   const frameOwned = entitlements.purchasedFrameIds.includes(activeFrame.key);
@@ -652,6 +640,8 @@ function FramesStoreContent({
   const closePurchaseNotice = () => setPurchaseNotice(null);
   const handleRequestClose = () => {
     if (purchaseNotice) closePurchaseNotice();
+    else if (confirm) { if (!busyRef.current) setConfirm(null); }
+    else if (rewardsVisible) setRewardsVisible(false);
     else onClose();
   };
   // Системное «Назад» ловит обёртка снаружи — отдаём ей актуальный обработчик.
@@ -716,18 +706,18 @@ function FramesStoreContent({
         label={!activeBackground.available
           ? L('storeComingSoon')
           : paymentBusy === 'background'
-            ? L('storeOpeningPayment')
+            ? L('rewardsBusy')
             : backgroundOwned
               ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
-              : L('storeBuyBackground').replace('{price}', '99 ₽')}
+              : wallet?.feedbackGiftAvailable ? L('rewardsClaimGift') : L('storeBuyBackground').replace('{price}', wallet ? points(wallet.prices.background) : '…')}
         icon={activeBackground.available ? 'image-outline' : 'lock-outline'}
         width={buttonWidth}
         height={buttonHeight}
         borderColor={activeBackground.available ? PEARL_BORDER : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeBackground.available ? 'rgba(244,240,232,0.12)' : 'rgba(139,148,158,0.08)'}
         contentColor={activeBackground.available ? '#F6F0E5' : WELCOME_MUTED_TEXT}
-        disabled={!activeBackground.available || paymentBusy !== null}
-        onPress={() => void openSharedCheckout('background')}
+        disabled={!activeBackground.available || paymentBusy !== null || !loaded || !wallet}
+        onPress={() => void buy('background')}
       />
     </>
   );
@@ -782,18 +772,18 @@ function FramesStoreContent({
         label={!activeFrame.available
           ? L('storeComingSoon')
           : paymentBusy === 'frame'
-            ? L('storeOpeningPayment')
+            ? L('rewardsBusy')
             : frameOwned
               ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
-              : L('storeBuyFrame').replace('{price}', '199 ₽')}
+              : L('storeBuyFrame').replace('{price}', wallet ? points(wallet.prices.frame) : '…')}
         icon={activeFrame.available ? 'account-circle-outline' : 'lock-outline'}
         width={buttonWidth}
         height={buttonHeight}
         borderColor={activeFrame.available ? activeFrame.colors[1] : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeFrame.available ? withAlpha(activeFrame.colors[0], 0.12) : 'rgba(139,148,158,0.08)'}
         contentColor={activeFrame.available ? activeFrame.colors[0] : WELCOME_MUTED_TEXT}
-        disabled={!activeFrame.available || paymentBusy !== null}
-        onPress={() => void openSharedCheckout('frame')}
+        disabled={!activeFrame.available || paymentBusy !== null || !loaded || !wallet}
+        onPress={() => void buy('frame')}
       />
     </>
   );
@@ -836,6 +826,25 @@ function FramesStoreContent({
             </Pressable>
           </View>
 
+          <Pressable
+            accessibilityRole="button" accessibilityLabel={`${L('rewardsBalance')}: ${wallet ? points(wallet.balance) : '…'}. ${L('rewardsEarn')}`}
+            onPress={() => { if (loadError) void refreshBalance(); else { setRewardTarget(null); setRewardsVisible(true); } }}
+            style={({ pressed }) => [styles.wallet, pressed && styles.closeBtnPressed]}
+          >
+            <View style={styles.walletRow}>
+              <MaterialCommunityIcons name="star-four-points" size={22} color={CROWN_GOLD} />
+              <Text style={styles.walletBalance}>{wallet ? points(wallet.balance) : '…'}</Text>
+              <Text style={styles.walletEarn}>{L('rewardsEarn')}</Text>
+              <MaterialIcons name="chevron-right" size={20} color="#80D9D0" />
+            </View>
+            <Text style={[styles.walletHint, loadError && { color: '#FF8E98' }]} numberOfLines={1}>{progressText}</Text>
+            <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${wallet && Number.isFinite(minimumPrice) ? Math.min(100, wallet.balance / minimumPrice * 100) : 0}%` }]} /></View>
+          </Pressable>
+          <ScrollView
+            style={styles.lowerContent}
+            contentContainerStyle={{ flexGrow: 1, minHeight: layoutNeed(layout, landscape), paddingVertical: 4 }}
+            showsVerticalScrollIndicator={false}
+          >
           <View
             style={[
               styles.lowerContent,
@@ -865,8 +874,19 @@ function FramesStoreContent({
               </View>
             )}
           </View>
+          </ScrollView>
         </View>
 
+        <LiviRewardsDialog visible={visible && rewardsVisible} onClose={() => setRewardsVisible(false)}
+          wallet={loaded ? wallet : undefined} userId={myUserId} lang={lang} targetPrice={rewardTarget ? wallet?.prices[rewardTarget] : undefined} />
+        <AppDialogModal visible={visible && !!confirm} onRequestClose={() => { if (!busyRef.current) setConfirm(null); }}
+          title={L('rewardsConfirmTitle')}
+          message={confirm ? `${L(cosmeticNameKey(confirm.itemId))}\n${confirm.useGift ? L('rewardsConfirmGift') : L('rewardsConfirmText').replace('{points}', points(wallet?.prices[confirm.kind] ?? 0))}` : ''}
+          actions={[
+            { label: L('rewardsCancel'), onPress: () => setConfirm(null), variant: 'cancel', disabled: paymentBusy !== null },
+            { label: L('rewardsConfirm'), onPress: () => void redeem(), variant: 'primary', busy: paymentBusy !== null },
+          ]}
+        />
         <AppDialogModal
           visible={!!purchaseNotice}
           onRequestClose={closePurchaseNotice}
@@ -932,6 +952,13 @@ const styles = StyleSheet.create({
   titleCompact: { fontSize: 14 },
   closeBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   closeBtnPressed: { opacity: 0.72 },
+  wallet: { marginHorizontal: 16, marginTop: 6, marginBottom: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(128,217,208,0.25)', backgroundColor: 'rgba(8,25,30,0.74)', minHeight: 72, gap: 6 },
+  walletRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
+  walletBalance: { color: CROWN_GOLD, fontSize: 16, fontWeight: '800', flexShrink: 1 },
+  walletEarn: { color: '#80D9D0', fontSize: 12, fontWeight: '700', marginLeft: 'auto', flexShrink: 1 },
+  walletHint: { color: WELCOME_MUTED_TEXT, fontSize: 11 },
+  progressTrack: { height: 3, backgroundColor: 'rgba(128,217,208,0.12)', borderRadius: 2, overflow: 'hidden' },
+  progressFill: { height: 3, backgroundColor: '#80D9D0', borderRadius: 2 },
   lowerContent: { flex: 1, minHeight: 0 },
   sectionsLandscape: { flex: 1, minHeight: 0, flexDirection: 'row', alignItems: 'stretch' },
   // flex-end: если высоты всё же не хватит, контент уходит под шапку, а кнопка

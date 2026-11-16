@@ -13,6 +13,7 @@ import { getEffectiveBusy } from '../utils/effectiveBusy';
 import { isFriendGloballyVisibleOnline } from '../utils/friendOnlinePresence';
 import { emitToUser } from '../utils/emitToUser';
 import { listIncomingFriendRequests, markInviteFriendRequest } from '../utils/friendRequests';
+import { recordInviteAttribution } from '../utils/liviRewards';
 
 type FriendRequest = Request<Record<string, string>, unknown, {
   to?: unknown;
@@ -223,6 +224,7 @@ router.post('/friends/acceptInvite', async (req: FriendRequest, res) => {
     const alreadyFriends = await areFriendsCached(me, inviterId);
     if (alreadyFriends) return res.json({ ok: true, status: 'already' });
 
+    await recordInviteAttribution(me, inviterId);
     await ensureFriendshipEdges(me, inviterId);
 
     // remove pending requests if present

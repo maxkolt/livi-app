@@ -17,7 +17,17 @@ import { restoreHttpInstallAuth } from './restoreHttpInstallAuth';
 
 export type CosmeticKind = 'frame' | 'background';
 
+export type RewardWallet = {
+  balance: number;
+  invitedCount: number;
+  feedbackSubmitted: boolean;
+  feedbackGiftAvailable: boolean;
+  invitePoints: number;
+  prices: { background: number; frame: number };
+};
+
 type CosmeticEntitlements = {
+  rewards?: RewardWallet;
   purchasedFrameIds: string[];
   purchasedBackgroundIds: string[];
   activeFrameId: string;
@@ -216,7 +226,17 @@ export function useCosmeticsHydrated(): boolean {
   return value;
 }
 
+function validWallet(wallet?: RewardWallet): wallet is RewardWallet {
+  return !!wallet && Number.isSafeInteger(wallet.balance) && wallet.balance >= 0 &&
+    Number.isSafeInteger(wallet.invitedCount) && wallet.invitedCount >= 0 &&
+    Number.isSafeInteger(wallet.invitePoints) && wallet.invitePoints > 0 &&
+    Number.isSafeInteger(wallet.prices?.background) && wallet.prices.background > 0 &&
+    Number.isSafeInteger(wallet.prices?.frame) && wallet.prices.frame > 0 &&
+    typeof wallet.feedbackSubmitted === 'boolean' && typeof wallet.feedbackGiftAvailable === 'boolean';
+}
+
 function normalize(value: Partial<CosmeticEntitlements> | null | undefined): CosmeticEntitlements {
+  const rewards = validWallet(value?.rewards) ? value.rewards : cached.rewards;
   return {
     purchasedFrameIds: Array.isArray(value?.purchasedFrameIds) ? value!.purchasedFrameIds!.map(String) : [],
     purchasedBackgroundIds: Array.isArray(value?.purchasedBackgroundIds)
@@ -224,6 +244,7 @@ function normalize(value: Partial<CosmeticEntitlements> | null | undefined): Cos
       : [],
     activeFrameId: String(value?.activeFrameId || ''),
     activeBackgroundId: String(value?.activeBackgroundId || ''),
+    ...(rewards ? { rewards } : {}),
   };
 }
 
@@ -285,26 +306,24 @@ export async function loadCosmetics(force = false): Promise<CosmeticEntitlements
   return pending;
 }
 
-export async function createCosmeticPayment(kind: CosmeticKind, itemId: string) {
-  const json = await request('/cosmetics/payments', {
-    method: 'POST',
-    body: JSON.stringify({ kind, itemId }),
-  });
-  if (json.entitlements) publish(json.entitlements);
-  return json as {
-    ok: true;
-    alreadyOwned?: boolean;
-    paymentId?: string;
-    confirmationUrl?: string;
-    status?: string;
-    entitlements?: CosmeticEntitlements;
-  };
+/** All mutations share a queue: a late response cannot restore a spent balance. */
+function mutateCosmetics(path: string, body: object) {
+  entitlementRevision += 1;
+  activeWrites += 1;
+  const pending = writeTail.then(async () => {
+    const json = await request(path, { method: 'POST', body: JSON.stringify(body) });
+    return publish(json.entitlements);
+  }).finally(() => { activeWrites -= 1; entitlementRevision += 1; });
+  writeTail = pending.catch(() => {});
+  return pending;
 }
 
-export async function checkCosmeticPayment(paymentId: string) {
-  const json = await request(`/cosmetics/payments/${encodeURIComponent(paymentId)}`);
-  if (json.entitlements) publish(json.entitlements);
-  return json as { ok: true; status: string; entitlements?: CosmeticEntitlements };
+export function redeemCosmetic(kind: CosmeticKind, itemId: string, useGift = false) {
+  return mutateCosmetics('/cosmetics/redeem', { kind, itemId, useGift });
+}
+
+export function submitCosmeticFeedback(text: string) {
+  return mutateCosmetics('/cosmetics/feedback', { text });
 }
 
 export async function setActiveCosmetic(kind: CosmeticKind, itemId: string) {
