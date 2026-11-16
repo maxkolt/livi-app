@@ -28,8 +28,8 @@ Legacy sessions cannot delete the account or replace the chat ownership key befo
 
 ## Verification
 
-- Backend: 36 suites / 295 tests, including isolated real MongoDB ownership/migration cases. Production data was not used for integration tests.
-- Frontend: 134 suites / 1324 tests.
+- Backend: 36 suites / 296 tests, including isolated real MongoDB ownership/migration cases. Production data was not used for integration tests.
+- Frontend: 135 suites / 1332 tests.
 - TypeScript, ESLint and backend compilation pass.
 - Android production Hermes/asset export passes. No active backend environment secret was found in the generated bundle.
 - npm audit: backend 0 findings; frontend 20 moderate, 0 high/critical. Remaining findings are transitive Expo/toolchain dependencies; no forced Expo SDK upgrade was made.
@@ -47,3 +47,30 @@ Uploaded media remains accessible by its media URL; this is not attachment end-t
 ## Deployment
 
 Prepared as an atomic, manifest-verified release with fresh production dependencies, private environment preservation, backup/rollback of source, dist, node_modules and .env, and Mongo/Redis/adapter health checks. Deployment evidence is added after the actual server verification. The public latest-app-version setting stays at 211 until 212 is actually published.
+
+
+## Notification entry follow-up
+
+User-reported acceptance defects were reproduced: a warm Missed transition could expose Chats, and a cold entry had a solid dark cover. Preliminary recordings are retained only under /tmp/livi-212-notifications, because they include private chat previews; they are not committed or presented as successful final acceptance.
+
+The delivery pump now handles the native destination immediately and ignores an older asynchronous resume result after a newer tap. Unread/Missed filter snapshots and a shared destination request are published before navigation. The existing Home route is reused with pop:true; only the notification transition disables fade, and manual tab selection cancels its temporary override. Legendary closes when a notification opens Home. The 750 ms dark entry cover was removed: the destination's header/filter render directly, with local loading state while data arrives. Calls no longer claims the history is empty before its initial load finishes.
+
+Android delivers notification destinations before the React/Expo onNewIntent delegate and emits directly when already on the UI thread, avoiding another UI-queue turn. Initial notification constants are still set before React creation. Native compilation and :app:testDebugUnitTest passed; 4 JVM suites / 12 tests, no failures (PiP, Bluetooth/audio policy and network probing). JavaScript typecheck/lint and 135 suites / 1332 tests pass, including the stale resume result regression. Production export is rerun after the final changes.
+
+Final device acceptance for the new native handler requires an updated dev APK. AAB generation remains with the user. The previous installed dev client cannot establish that the changed native ordering fixes the first displayed frame.
+
+## Production checks
+
+The first security deployment is f8b742864c9927bf9c899f19c71f0e9ddf8526ab, with backup /opt/backend/backup-release-f8b742864-20261116T221549Z. No calls, media participants or waiting random-chat pairs were active during deployment. Fresh Linux production dependencies and the image-processing smoke passed. Mongo=1, Redis=ready and the Socket.IO Redis adapter=true after restart.
+
+From the authenticated A35 profile, cosmetics returned 200; a wrong secret returned 401; TURN without the original secret returned 401; guest presence=401; guest call metrics=403; debug push-log and /.env=404. Existing feedback remains submitted and the same owned background remains present. Staged migration is enabled; global strict mode is not enabled. The latest published app setting remains 211.
+
+A production-pepper transfer to local .env was rejected by automatic approval review and was not performed. Instead, development without a production pepper writes an explicit unversioned compatibility hash that production verifies and upgrades only with the original secret. Production v1 hashes still never use the development fallback. The compatibility path is covered by an isolated regression test; the production pepper remains on the server.
+
+
+The remaining cold blank interval was traced to the root font gate rendering null before AppContent. It now paints the existing branded SplashLoader while fonts load, without changing normal Home's font-before-text behavior. Notification cold starts also get a native branded window background before the JS runtime exists; it is restored to the normal stage after navigation has drawn its initial frames. Existing orientation/PiP window resets retain that startup background only for the cold notification lifetime. An already running React context does not enter this native startup path.
+
+Production negative Socket.IO check from the A35: a connection supplied only the real installation identifier and a wrong secret. whoami stayed unbound, reauth was rejected and zero protected presence/message/missed events were received. A second isolated-Mongo run with a synthetic production pepper passed both ownership/migration suites, 13 tests. No production pepper was read or copied for those tests.
+
+
+Final native build evidence: 606 Gradle tasks, successful in 39 seconds. No APK or AAB packaging/install was performed. The user was asked whether an updated debug APK may be built/installed on A35 for final native acceptance; that preference has not yet been answered. The old dev APK remains version 211. The new production source is configured for versionCode 212.

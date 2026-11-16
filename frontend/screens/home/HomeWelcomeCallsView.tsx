@@ -2,6 +2,7 @@ import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
 import React, { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   AppState,
+  ActivityIndicator,
   BackHandler,
   Keyboard,
   NativeModules,
@@ -837,7 +838,9 @@ function HomeWelcomeCallsViewInner({
               })}
               ListEmptyComponent={
                 <View style={styles.emptyWrap}>
-                  <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>
+                  {!pickMode && !historyReady
+                    ? <ActivityIndicator testID="missed-history-loading" color={UI_ACCENT} />
+                    : <AdaptiveText style={styles.emptyText}>{emptyLabel}</AdaptiveText>}
                 </View>
               }
             />

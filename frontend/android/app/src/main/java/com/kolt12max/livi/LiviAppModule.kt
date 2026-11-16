@@ -84,6 +84,12 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   )
 
   @ReactMethod
+  fun completeNotificationLaunch() {
+    val activity = currentActivity as? MainActivity ?: return
+    activity.runOnUiThread { activity.completeNotificationLaunch() }
+  }
+
+  @ReactMethod
   fun getAndClearPendingNotificationDestination(promise: Promise) {
     promise.resolve(consumePendingNotificationDestination(reactApplicationContext))
   }
@@ -4799,7 +4805,16 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       context.getSharedPreferences(PREFS_OPEN_TAB, Context.MODE_PRIVATE).edit()
         .remove(KEY_PENDING_OPEN_TAB_FRIENDS).remove(KEY_PENDING_OPEN_WELCOME_CHAT)
         .putString(KEY_PENDING_NOTIFICATION_DESTINATION, destination).apply()
-      runOnReactUiQueueIfAlive { it.emitDeviceEvent("NotificationHomeDestination", destination) }
+      // onNewIntent already runs on main. Posting to the same queue allowed
+      // resume to expose the previous pane before JS received the destination.
+      val ctx = reactContextRef
+      val leavingSystemPip = (ctx?.currentActivity as? MainActivity)?.isInPictureInPictureMode == true
+      if (!leavingSystemPip && Looper.myLooper() == Looper.getMainLooper() && ctx?.hasActiveReactInstance() == true) {
+        try { ctx.emitDeviceEvent("NotificationHomeDestination", destination) }
+        catch (e: Exception) { Log.w("LiviAppModule", "notification destination delivery failed", e) }
+      } else {
+        runOnReactUiQueueIfAlive { it.emitDeviceEvent("NotificationHomeDestination", destination) }
+      }
     }
 
     @Synchronized

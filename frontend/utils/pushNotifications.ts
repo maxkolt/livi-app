@@ -40,7 +40,7 @@ import {
   prewarmDirectCallAudioCapture,
 } from './directCallConnectPrewarm';
 import { presentFriendRequestShadeNotification } from './productShadeNotifications';
-import { notificationHomeParams, type NotificationHomeDestination } from './notificationHome';
+import { notificationHomeParams, prepareNotificationHome, type NotificationHomeDestination } from './notificationHome';
 
 const MISSED_CALLS_KEY = 'missed_calls_by_user_v1';
 /** Флаг: пользователь заходил во вкладку «Друзья» и «увидел» пропущенные — бейдж и уведомления в шторке скрываем, счётчики в приложении не трогаем. */
@@ -1334,7 +1334,7 @@ async function runWhenNavReady(
   run: (nav: ReadyNavigation) => void | Promise<void>,
   waitMs = 1200
 ): Promise<boolean> {
-  const nav = await waitForNavReady(waitMs);
+  const nav = getReadyNav() || await waitForNavReady(waitMs);
   if (nav) {
     await run(nav);
     return true;
@@ -1349,6 +1349,11 @@ async function runWhenNavReady(
 let lastHomeNotificationNavigation: { nav: ReadyNavigation; destination: NotificationHomeDestination; at: number } | null = null;
 
 export function navigateNotificationHome(destination: NotificationHomeDestination, fromId?: string): Promise<boolean> {
+  if (!getReadyNav()) {
+    if (destination === 'unread') setPendingWelcomeChatsFilter('unread');
+    if (destination === 'missed') setPendingWelcomeCallsFilter('missed');
+    prepareNotificationHome(destination);
+  }
   return runWhenNavReady('notification:home', (nav) => {
     const now = Date.now();
     // MainActivity, AppState resume and Expo may report the same tap. Once Home
@@ -1362,8 +1367,10 @@ export function navigateNotificationHome(destination: NotificationHomeDestinatio
     emitCloseHomeModals();
     if (destination === 'unread') setPendingWelcomeChatsFilter('unread');
     if (destination === 'missed') setPendingWelcomeCallsFilter('missed');
+    prepareNotificationHome(destination);
     nav.dispatch(CommonActions.navigate({
       name: 'Home',
+      pop: true,
       params: { ...notificationHomeParams(destination), ...(fromId ? { pushMessageFrom: fromId } : {}) },
     }));
   }, 0);

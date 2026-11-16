@@ -34,6 +34,31 @@ import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
   private var lastReportedImeInset = -1
+  private var notificationLaunchBackground: android.graphics.drawable.Drawable? = null
+
+  private fun applyStageWindowBackground() {
+    window.setBackgroundDrawable(notificationLaunchBackground ?: StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
+  }
+
+  /** A killed process needs a native branded frame before React/fonts are ready. */
+  private fun prepareNotificationLaunchBackground() {
+    if (LiviAppModule.reactContextForBackgroundTask() != null) return
+    if (intent?.getBooleanExtra("livi_notification_destination_consumed", false) != true) return
+    val logo = getDrawable(R.drawable.splashscreen_icon) ?: return
+    val metrics = resources.displayMetrics
+    val density = metrics.density
+    val size = minOf(214f * density, maxOf(136f * density, minOf(metrics.heightPixels * .28f, metrics.widthPixels * .5f))).toInt()
+    notificationLaunchBackground = android.graphics.drawable.LayerDrawable(arrayOf(StageBackgroundDrawable(this, StagePalette.TEAL_DEEP), logo)).apply {
+      setLayerSize(1, size, size)
+      setLayerGravity(1, android.view.Gravity.CENTER)
+    }
+  }
+
+  fun completeNotificationLaunch() {
+    if (notificationLaunchBackground == null) return
+    notificationLaunchBackground = null
+    applyStageWindowBackground()
+  }
   /**
    * Exposes the platform's actual IME inset to JS. This avoids screen-coordinate
    * calculations, which differ between edge-to-edge OEM implementations.
@@ -472,7 +497,7 @@ class MainActivity : ReactActivity() {
     try {
       // Та же сцена, что в JS: без фона окна при повороте в полосах, которые RN
       // ещё не перерисовал, был бы чёрный.
-      window.setBackgroundDrawable(StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
+      applyStageWindowBackground()
     } catch (_: Exception) {
       try {
         window.decorView.setBackgroundColor(android.graphics.Color.TRANSPARENT)
@@ -970,6 +995,9 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onNewIntent(intent: Intent) {
+    // Publish the target while the shade is still closing, before React/Expo
+    // resume callbacks can paint the previous Home pane.
+    if (!isInPictureInPictureMode) consumeShadeOpenIntent(intent, dismissMissed = true)
     super.onNewIntent(intent)
     setIntent(intent)
     // FCM call_accepted при уже запущенной MainActivity — сохранить callId для JS (onResume вызовет emitPendingCallAcceptedEvent).
@@ -1396,8 +1424,9 @@ class MainActivity : ReactActivity() {
     consumeShadeOpenIntent(intent, dismissMissed = false)
     super.onCreate(null)
     if (!isDeclineCallIntent(intent)) {
+      prepareNotificationLaunchBackground()
       // Новая сцена, как у JS-сплэша, пиксель-в-пиксель: старт без смены тона.
-      window.setBackgroundDrawable(StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
+      applyStageWindowBackground()
     }
     liveInstance = this
     applyShowOverLock(shouldShowOverLock())

@@ -1,6 +1,6 @@
 import { setVideoCallActive, setPipVisible, setPipInSystemMode, setCallEndedFromPiPNoOpen, isVideoCallActive, isPipVisible, isPipInSystemMode } from '../utils/callRuntime';
 import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
-import { notificationHomeTab } from '../utils/notificationHome';
+import { notificationHomeTab, notificationHomeParams, getNotificationHomeRequest, subscribeNotificationHomeRequest, completeNotificationHome } from '../utils/notificationHome';
 // screens/HomeScreen.tsx
 import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore, startTransition } from 'react';
 import {
@@ -121,7 +121,7 @@ import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../u
 import { BlurListSource, BlurSourceFill } from '../components/BackdropBlur';
 import { GLASS_DOCK_TOP_PAD, GLASS_SEGMENT_PAD, WelcomeGlassDock, WelcomeGlassTop } from './home/WelcomeGlassHeader';
 import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogSoftUi, cancelPendingCallLogNotify, flushCallLogUi, forceCallLogUiNow, loadCallLog } from './home/callLog';
-import { getChatPreviewSnapshot, prefetchChatPreviews, selectChatPreviews, subscribeChatPreviews } from './home/hooks/useChatPreviews';
+import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import {
   markChatCallBubbleEligibleIfViewing,
   appendChatCallStatusIfEligible,
@@ -490,7 +490,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     () => ({ paddingTop: homeInsets.top, paddingBottom: tabBarH }),
     [homeInsets.top, tabBarH],
   );
-  const [welcomeActiveTab, setWelcomeActiveTab] = useState<WelcomeTabId>(() => notificationHomeTab(route?.params) || 'search');
+  const notificationHomeRequest = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeRequest, getNotificationHomeRequest);
+  const requestedHomeTab = notificationHomeRequest ? notificationHomeTab(notificationHomeParams(notificationHomeRequest.destination)) : undefined;
+  const [selectedWelcomeTab, setWelcomeActiveTab] = useState<WelcomeTabId>(() => requestedHomeTab || notificationHomeTab(route?.params) || 'search');
+  const welcomeActiveTab = requestedHomeTab || selectedWelcomeTab;
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
   useLayoutEffect(() => {
@@ -571,6 +574,18 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       return next;
     });
   }, []);
+  useLayoutEffect(() => {
+    if (!notificationHomeRequest || !requestedHomeTab) return;
+    setWelcomeActiveTab(requestedHomeTab);
+    setWelcomeSettledTab(requestedHomeTab);
+    ensureWelcomeTabMounted(requestedHomeTab);
+    // Hold the notification-only animation override until the target has painted.
+    let secondFrame: number | undefined;
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => completeNotificationHome(notificationHomeRequest.id));
+    });
+    return () => { cancelAnimationFrame(firstFrame); if (secondFrame != null) cancelAnimationFrame(secondFrame); };
+  }, [notificationHomeRequest, requestedHomeTab, ensureWelcomeTabMounted]);
   /** One-shot: idle + dial. Only the less frequent Calls/Profile panes still need warming. */
   const welcomeShellsWarmedRef = useRef(false);
   const warmTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
@@ -647,30 +662,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     refreshBadgesOnAppResume,
   } = useHomeBadges({ friends, friendsRef, lang });
 
-  // Paint a cold notification destination together with its local rows. In Calls,
-  // import the native inbox first so inserting the new call cannot shift the list.
-  const notificationEntryKind = useRef(
-    route?.params?.openWelcomeCallsMissed ? 'missed' : route?.params?.openWelcomeChatUnread ? 'unread' : null,
-  ).current;
-  const [notificationEntryReady, setNotificationEntryReady] = useState(
-    !notificationEntryKind,
-  );
-  const notificationPreviewSnapshot = useSyncExternalStore(subscribeChatPreviews, getChatPreviewSnapshot, getChatPreviewSnapshot);
-  const notificationPreviews = selectChatPreviews(notificationPreviewSnapshot, unreadByUser);
-  const notificationChatHasRow = unreadLoaded && friends.some(f =>
-    (unreadByUser[String(f.id)] || 0) > 0 && !!notificationPreviews[String(f.id)]?.text?.trim(),
-  );
-  useLayoutEffect(() => {
-    if (notificationEntryKind === 'unread' && notificationChatHasRow) setNotificationEntryReady(true);
-  }, [notificationEntryKind, notificationChatHasRow]);
-  const onNotificationCallHistoryReady = useCallback(() => {
-    if (notificationEntryKind === 'missed') setNotificationEntryReady(true);
-  }, [notificationEntryKind]);
-  useEffect(() => {
-    if (notificationEntryReady) return;
-    const timer = setTimeout(() => setNotificationEntryReady(true), 750);
-    return () => clearTimeout(timer);
-  }, [notificationEntryReady]);
+  // Notification destinations render their own header, filter and local loading
+  // state immediately; a solid entry cover hid the correct page on cold starts.
 
   const { onlineCount: welcomeOnlineCount } = useWelcomeOnlineCount(
     appIsActive,
@@ -5394,6 +5387,8 @@ const handleClearNick = useCallback(async () => {
     isDirectCallSessionLive(global as AppRuntimeGlobals);
   const handleWelcomeTabPress = useCallback(
     (tabId: WelcomeTabId, pressMeta?: WelcomeTabPressMeta) => {
+      const pendingNotification = getNotificationHomeRequest();
+      if (pendingNotification) completeNotificationHome(pendingNotification.id);
       const g = global as AppRuntimeGlobals;
       const cancelAt = Number(g.__lastOutgoingCancelAtRef?.current || 0);
       const t0 = Date.now();
@@ -5882,7 +5877,6 @@ const handleClearNick = useCallback(async () => {
         {mountedWelcomeTabs.has('calls') ? (
         <WelcomeKeepAlivePane visible={showCallsTab} mode="offscreen">
           <HomeWelcomeCallsView
-            onInitialHistoryReady={onNotificationCallHistoryReady}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
             L={L}
@@ -6270,9 +6264,6 @@ const handleClearNick = useCallback(async () => {
       </AppDialogModal>
     </SafeAreaView>
 
-    {!notificationEntryReady && (
-      <View testID="notification-entry-cover" style={[StyleSheet.absoluteFillObject, { zIndex: 9997, backgroundColor: WELCOME_STAGE_BG }]} />
-    )}
     {showSplashOverlay && (
       <View style={[StyleSheet.absoluteFillObject, { zIndex: 9998 }]} pointerEvents="box-none">
         <FliqWebViewWarmup />

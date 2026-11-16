@@ -26,11 +26,13 @@ interface SplashLoaderProps {
   hasNick?: boolean;
   hasAvatar?: boolean;
   hasContentReady?: boolean;
+  waitForContent?: boolean;
   overlayMode?: boolean;
 }
 
 export default function SplashLoader({
   hasContentReady = true,
+  waitForContent = false,
   onComplete,
   overlayMode,
 }: SplashLoaderProps) {
@@ -80,6 +82,10 @@ export default function SplashLoader({
       return;
     }
 
+    // The root font gate has no content to reveal yet. Its owner unmounts this
+    // loader on success/error; do not turn it into a blank frame after a timeout.
+    if (waitForContent) return;
+
     // Не держим экран бесконечно при ошибке диска/сети. Fliq здесь намеренно
     // не учитывается: он прогревается в фоне и не задерживает видимый Search.
     const remainingHardStopMs = Math.max(0, MAX_SPLASH_DURATION_MS - elapsedMs);
@@ -87,7 +93,7 @@ export default function SplashLoader({
       finishSplash(0);
     }, remainingHardStopMs);
     return () => clearTimeout(hardStopTimer);
-  }, [finishSplash, hasContentReady, overlayMode]);
+  }, [finishSplash, hasContentReady, overlayMode, waitForContent]);
 
   useEffect(() => {
     breath.value = withRepeat(

@@ -100,7 +100,7 @@ it.each([
   ['updates', { openWelcomeProfile: true, openAppUpdates: true }],
 ] as const)('opens %s immediately without waiting for network or shade cleanup', async (destination, params) => {
   await navigateNotificationHome(destination);
-  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', params });
+  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', pop: true, params });
 });
 it('retains the most recent tap through a slow cold start instead of losing it after 2.5 seconds', async () => {
   mockNavReady = false;
@@ -111,7 +111,7 @@ it('retains the most recent tap through a slow cold start instead of losing it a
   mockNavReady = true;
   await drainPendingNavigations();
   expect(mockDispatch).toHaveBeenCalledTimes(1);
-  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } });
+  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', pop: true, params: { openWelcomeCalls: true, openWelcomeCallsMissed: true } });
   expect(setPendingWelcomeCallsFilter).toHaveBeenCalledWith('missed');
 });
 it('sets the unread filter before dispatch so a mounted chat list sees it in the first frame', async () => {
@@ -119,7 +119,7 @@ it('sets the unread filter before dispatch so a mounted chat list sees it in the
     expect(setPendingWelcomeChatsFilter).toHaveBeenCalledWith('unread');
   });
   await navigateNotificationHome('unread', 'peer');
-  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', params: {
+  expect(mockDispatch).toHaveBeenCalledWith({ name: 'Home', pop: true, params: {
     openWelcomeChat: true, openWelcomeChatUnread: true, pushMessageFrom: 'peer',
   } });
 });
@@ -134,4 +134,16 @@ it('dispatches once when native, resume and Expo report the same notification ta
   await jest.advanceTimersByTimeAsync(1600);
   await navigateNotificationHome('unread');
   expect(mockDispatch).toHaveBeenCalledTimes(3);
+});
+
+it('dispatches a ready notification synchronously and prepares its destination before the stack changes', async () => {
+  const { getNotificationHomeRequest, completeNotificationHome } = await import('./notificationHome');
+  mockDispatch.mockImplementationOnce(() => {
+    expect(getNotificationHomeRequest()?.destination).toBe('missed');
+    expect(setPendingWelcomeCallsFilter).toHaveBeenCalledWith('missed');
+  });
+  const pending = navigateNotificationHome('missed');
+  expect(mockDispatch).toHaveBeenCalledTimes(1);
+  await pending;
+  const request = getNotificationHomeRequest(); if (request) completeNotificationHome(request.id);
 });

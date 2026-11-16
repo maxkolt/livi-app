@@ -1,9 +1,10 @@
 import type { AppRuntimeGlobals } from './utils/appRuntimeTypes';
 import type { PushNotificationData } from './utils/notificationTypes';
-import { notificationHomeParams } from './utils/notificationHome';
+import { notificationHomeParams, getNotificationHomeRequest, subscribeNotificationHomeRequest, createNotificationHomeDelivery } from './utils/notificationHome';
 // App.tsx
 import "react-native-gesture-handler";
 import React from "react";
+import SplashLoader from "./components/SplashLoader";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
@@ -453,8 +454,9 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 (global as AppRuntimeGlobals).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 function AppContent() {
+  const notificationHomeRequest = React.useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeRequest, getNotificationHomeRequest);
   const [initialNotificationParams] = React.useState(() => {
-    const params = notificationHomeParams(NativeModules.LiviAppModule?.initialNotificationDestination);
+    const params = notificationHomeParams(NativeModules.LiviAppModule?.initialNotificationDestination || getNotificationHomeRequest()?.destination);
     if (params?.openWelcomeChatUnread) setPendingWelcomeChatsFilter('unread');
     if (params?.openWelcomeCallsMissed) setPendingWelcomeCallsFilter('missed');
     return params;
@@ -2340,36 +2342,27 @@ function AppContent() {
   // Handle taps even while Home is already foreground; retain cold-start taps until nav is ready.
   React.useEffect(() => {
     if (Platform.OS !== 'android') return;
-    let disposed = false;
-    let reading = false;
-    let readAgain = false;
-    const consume = async () => {
-      if (reading) { readAgain = true; return; }
-      reading = true;
-      try {
-        do {
-          readAgain = false;
-          const mod = NativeModules.LiviAppModule;
-          const destination = mod?.getAndClearPendingNotificationDestination
-            ? await mod.getAndClearPendingNotificationDestination()
-            : (await mod?.getAndClearPendingOpenWelcomeChat?.()) ? 'unread'
-              : (await mod?.getAndClearPendingOpenTabFriends?.()) ? 'missed' : '';
-          if (!disposed && (destination === 'unread' || destination === 'missed' || destination === 'requests' || destination === 'updates')) {
-            ensureInAppPiPBeforeOpenFriends();
-            await navigateNotificationHome(destination);
-          }
-        } while (readAgain && !disposed);
-      } catch (e) {
-        logger.warn('[App] notification destination failed', e);
-      } finally { reading = false; }
-    };
-    const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
-    const tap = emitter.addListener('NotificationHomeDestination', () => { void consume(); });
-    const resume = AppState.addEventListener('change', state => {
-      if (state === 'active') void consume();
+    const delivery = createNotificationHomeDelivery({
+      readPending: async () => {
+        const mod = NativeModules.LiviAppModule;
+        return mod?.getAndClearPendingNotificationDestination
+          ? mod.getAndClearPendingNotificationDestination()
+          : (await mod?.getAndClearPendingOpenWelcomeChat?.()) ? 'unread'
+            : (await mod?.getAndClearPendingOpenTabFriends?.()) ? 'missed' : '';
+      },
+      onDestination: destination => {
+        ensureInAppPiPBeforeOpenFriends();
+        return navigateNotificationHome(destination);
+      },
+      onError: error => logger.warn('[App] notification destination failed', error),
     });
-    void consume();
-    return () => { disposed = true; tap.remove(); resume.remove(); };
+    const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
+    const tap = emitter.addListener('NotificationHomeDestination', delivery.receive);
+    const resume = AppState.addEventListener('change', state => {
+      if (state === 'active') void delivery.consume();
+    });
+    void delivery.consume();
+    return () => { delivery.dispose(); tap.remove(); resume.remove(); };
   }, [ensureInAppPiPBeforeOpenFriends]);
 
   // «Надёжные звонки»: из фона Android мог не дать поднять сервис — проверяем на старте и при возврате.
@@ -4636,6 +4629,9 @@ function AppContent() {
           }}
           onReady={() => {
             void drainPendingNavigations();
+            requestAnimationFrame(() => requestAnimationFrame(() => {
+              try { NativeModules.LiviAppModule?.completeNotificationLaunch?.(); } catch {}
+            }));
             try {
               if (navRef.isReady()) {
                 const currentRoute = navRef.getCurrentRoute()?.name;
@@ -4709,8 +4705,8 @@ function AppContent() {
             contentStyle: {
               backgroundColor: WELCOME_STAGE_BG,
             },
-            animation: 'fade',
-            animationDuration: 120,
+            animation: notificationHomeRequest ? 'none' : 'fade',
+            animationDuration: notificationHomeRequest ? 0 : 120,
             // Не размонтировать неактивные экраны — при закрытии VideoCall Home остаётся смонтированным, state (аватар и т.д.) сохраняется, нет мерцания буквы.
             // Типы native-stack не включают detachInactiveScreens, но опция поддерживается в рантайме.
             detachInactiveScreens: false,
@@ -5102,7 +5098,7 @@ export default function App() {
           <ThemeProvider>
             <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
               <AppErrorBoundary>
-                {appFontsLoaded || appFontsError ? <AppContent /> : null}
+                {appFontsLoaded || appFontsError ? <AppContent /> : <SplashLoader hasContentReady={false} waitForContent />}
               </AppErrorBoundary>
             </PiPProvider>
           </ThemeProvider>

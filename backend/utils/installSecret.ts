@@ -29,9 +29,11 @@ export const LEGACY_INSTALL_SEAL = 'legacy-migration';
 /** Versioned hashes never use the legacy pepper. */
 export function hashInstallSecret(secret: string): string {
   assertInstallSecretConfiguration();
-  return 'v1:' + digest(String(secret), PEPPER || DEV_FALLBACK_PEPPER);
+  // Development without a production pepper writes the explicit legacy format,
+  // so a dev-created account remains verifiable during staged production migration.
+  return PEPPER ? 'v1:' + digest(String(secret), PEPPER) : digest(String(secret), DEV_FALLBACK_PEPPER);
 }
-export function needsInstallSecretRehash(hash: string): boolean { return !hash.startsWith('v1:'); }
+export function needsInstallSecretRehash(hash: string): boolean { return !!PEPPER && !hash.startsWith('v1:'); }
 export function verifyInstallSecret(secret: string | undefined | null, storedHash: string | undefined | null): boolean {
   if (!isPlausibleInstallSecret(secret) || typeof storedHash !== 'string') return false;
   if (storedHash.startsWith('v1:')) return sameHash(digest(secret, PEPPER || DEV_FALLBACK_PEPPER), storedHash.slice(3));

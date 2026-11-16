@@ -7,6 +7,7 @@ import {
 } from './constants';
 import { FramesStoreModal } from '../../components/frames/FramesStoreModal';
 import { t } from '../../utils/i18n';
+import { onCloseHomeModals } from '../../utils/globalEvents';
 import { useLang } from '../../store/lang';
 import {
   WELCOME_CHROME_BTN_SHADOW,
@@ -43,8 +44,10 @@ export function FramesStoreHost({ warmEnabled, userId }: { warmEnabled: boolean;
   const [layoutKey, setLayoutKey] = useState(`${width}-${height}`);
   useEffect(() => {
     storeOpenListeners.add(setOpen);
+    const offClose = onCloseHomeModals(() => setOpen(false));
     return () => {
       storeOpenListeners.delete(setOpen);
+      offClose();
     };
   }, []);
   useEffect(() => {

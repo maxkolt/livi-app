@@ -46,7 +46,7 @@ suite('installation ownership security with isolated real MongoDB',()=>{
   await Install.create({installId:'inst_android_original1234',user:userId,installSecretHash:oldHash});
   const {invoke,sock}=fixture();expect(await invoke('identity:attach',{installId:'inst_android_original1234',installSecret:secret})).toMatchObject({ok:true,userId});
   const saved=await Install.findOne({installId:'inst_android_original1234'});
-  expect(saved!.installSecretHash).toMatch(/^v1:/);expect(verifyInstallSecret(secret,saved!.installSecretHash)).toBe(true);
+  expect(saved!.installSecretHash).toBe(hashInstallSecret(secret));expect(verifyInstallSecret(secret,saved!.installSecretHash)).toBe(true);
   expect(sock.data.userId).toBe(userId);expect(sock.data.verifiedInstallId).toBe('inst_android_original1234');
  });
  it('keeps an existing legacy account accessible in staged mode without enrolling an unproven secret',async()=>{
