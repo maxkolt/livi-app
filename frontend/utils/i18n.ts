@@ -518,6 +518,11 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     purchasesRemove: 'Снять',
     purchasesApply: 'Применить',
     purchasesManagement: 'Моё оформление',
+    purchasesDelete: 'Удалить',
+    purchasesDeleteTitle: 'Удалить оформление?',
+    purchasesDeleteText: '«{name}» исчезнет из вашей коллекции. Если оформление применяется, оно будет снято. LiVi баллы и подарки не возвращаются. Позже его можно получить заново.',
+    purchasesDeleteError: 'Не удалось удалить оформление. Проверьте подключение и повторите попытку.',
+
     storeShowcaseA11y: 'Витрина Legendary',
     moderationPartnerBanned:
       'Видео собеседника заблокировано. Система модерации выявила контент, нарушающий правила эфира.',
@@ -1052,6 +1057,11 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     purchasesRemove: 'Remove',
     purchasesApply: 'Apply',
     purchasesManagement: 'My styles',
+    purchasesDelete: 'Delete',
+    purchasesDeleteTitle: 'Delete this style?',
+    purchasesDeleteText: '“{name}” will be removed from your collection and deactivated if applied. LiVi points and gifts are not refunded. You can unlock it again later.',
+    purchasesDeleteError: 'Could not delete this style. Check your connection and try again.',
+
     storeShowcaseA11y: 'Legendary showcase',
     moderationPartnerBanned:
       'The other person\u2019s video was blocked because the moderation system detected content that violates the live-stream rules.',

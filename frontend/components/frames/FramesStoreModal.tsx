@@ -9,8 +9,7 @@ import {
   type ChatBackgroundItem, type FrameItem,
 } from '../../utils/cosmeticCatalog';
 import { MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
-import Carousel from 'react-native-reanimated-carousel';
-import { Extrapolation, interpolate } from 'react-native-reanimated';
+import { StoreCarousel } from './StoreCarousel';
 import AdaptiveText from '../AdaptiveText';
 import { t } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
@@ -29,6 +28,7 @@ import {
 } from '../../utils/cosmetics';
 import {
   CROWN_GOLD,
+  UI_ACCENT, UI_ACCENT_LIGHT, UI_SURFACE, UI_RIM, UI_ACCENT_SOFT,
   SEARCH_CTA_MAX_WIDTH,
   SEARCH_CTA_TABLET_MAX_WIDTH,
   SEARCH_CTA_TABLET_MIN_WIDTH,
@@ -479,7 +479,6 @@ function FramesStoreContent({
   const [paymentBusy, setPaymentBusy] = useState<CosmeticKind | null>(null);
   const [rewardsVisible, setRewardsVisible] = useState(false);
   const [rewardTarget, setRewardTarget] = useState<CosmeticKind | null>(null);
-  const [loaded, setLoaded] = useState(false);
   const [loadError, setLoadError] = useState(false);
   const busyRef = useRef(false);
   const [confirm, setConfirm] = useState<{ kind: CosmeticKind; itemId: string; useGift: boolean } | null>(null);
@@ -493,11 +492,11 @@ function FramesStoreContent({
   const activeFrame = FRAME_CATALOG[activeFrameIndex] ?? FRAME_CATALOG[0];
 
   const refreshBalance = useCallback(async () => {
-    try { await loadCosmetics(true); setLoaded(true); setLoadError(false); }
+    try { await loadCosmetics(true); setLoadError(false); }
     catch { setLoadError(true); }
   }, []);
   useEffect(() => {
-    if (!visible) { setLoaded(false); setRewardsVisible(false); setConfirm(null); return; }
+    if (!visible) { setRewardsVisible(false); setConfirm(null); return; }
     void refreshBalance();
     const resume = AppState.addEventListener('change', state => {
       if (state === 'active') void refreshBalance();
@@ -506,15 +505,13 @@ function FramesStoreContent({
     return () => { resume.remove(); clearInterval(timer); };
   }, [visible, refreshBalance]);
 
-  const loadedRef = useRef({ background: false, frame: false, sent: false });
-  useEffect(() => {
-    if (!visible) loadedRef.current = { background: false, frame: false, sent: false };
-  }, [visible]);
+  const loadedRef = useRef({ background: false, frame: false, backgroundLayout: false, frameLayout: false, sent: false });
+
   const handleCardLoad = useCallback(
-    (kind: 'background' | 'frame') => {
+    (kind: 'background' | 'frame' | 'backgroundLayout' | 'frameLayout') => {
       const loaded = loadedRef.current;
       loaded[kind] = true;
-      if (loaded.sent || !loaded.background || !loaded.frame) return;
+      if (loaded.sent || !loaded.background || !loaded.frame || !loaded.backgroundLayout || !loaded.frameLayout) return;
       loaded.sent = true;
       // Соседние карточки берут тот же кадр из кэша — им нужен ещё кадр-другой.
       requestAnimationFrame(() => requestAnimationFrame(() => onContentReady?.()));
@@ -523,75 +520,15 @@ function FramesStoreContent({
   );
   const handleBackgroundLoad = useCallback(() => handleCardLoad('background'), [handleCardLoad]);
   const handleFrameLoad = useCallback(() => handleCardLoad('frame'), [handleCardLoad]);
-
-  const backgroundCoverflowAnimation = useCallback(
-    (value: number) => {
-      'worklet';
-      const translateX = interpolate(
-        value,
-        [-3, -2, -1, 0, 1, 2, 3],
-        [
-          -backgroundPageWidth * 2.15,
-          -backgroundPageWidth * 1.35,
-          -backgroundPageWidth * 0.58,
-          0,
-          backgroundPageWidth * 0.58,
-          backgroundPageWidth * 1.35,
-          backgroundPageWidth * 2.15,
-        ],
-        Extrapolation.CLAMP,
-      );
-      const rotateY = interpolate(value, [-2, -1, 0, 1, 2], [58, 54, 0, -54, -58], Extrapolation.CLAMP);
-      const scale = interpolate(value, [-2, -1, 0, 1, 2], [0.74, 0.85, 1.08, 0.85, 0.74], Extrapolation.CLAMP);
-      const opacity = interpolate(value, [-3, -2, -1, 0, 1, 2, 3], [0.18, 0.45, 0.78, 1, 0.78, 0.45, 0.18], Extrapolation.CLAMP);
-      const zIndex = Math.round(interpolate(value, [-2, -1, 0, 1, 2], [2, 8, 30, 8, 2], Extrapolation.CLAMP));
-      return {
-        transform: [{ perspective: 1000 }, { translateX }, { rotateY: `${rotateY}deg` }, { scale }],
-        opacity,
-        zIndex,
-      };
-    },
-    [backgroundPageWidth],
-  );
-
-  const frameCoverflowAnimation = useCallback(
-    (value: number) => {
-      'worklet';
-      // Круги теряют ширину сильнее карточек: шаг считаем от диаметра,
-      // чтобы соседние рамки оставались видны за центральным аватаром.
-      const translateX = interpolate(
-        value,
-        [-3, -2, -1, 0, 1, 2, 3],
-        [
-          -frameSize * 1.65,
-          -frameSize * 1.1,
-          -frameSize * 0.6,
-          0,
-          frameSize * 0.6,
-          frameSize * 1.1,
-          frameSize * 1.65,
-        ],
-        Extrapolation.CLAMP,
-      );
-      const rotateY = interpolate(value, [-2, -1, 0, 1, 2], [54, 44, 0, -44, -54], Extrapolation.CLAMP);
-      const scale = interpolate(value, [-2, -1, 0, 1, 2], [0.74, 0.85, 1.08, 0.85, 0.74], Extrapolation.CLAMP);
-      const opacity = interpolate(value, [-3, -2, -1, 0, 1, 2, 3], [0.18, 0.45, 0.78, 1, 0.78, 0.45, 0.18], Extrapolation.CLAMP);
-      const zIndex = Math.round(interpolate(value, [-2, -1, 0, 1, 2], [2, 8, 30, 8, 2], Extrapolation.CLAMP));
-      return {
-        transform: [{ perspective: 1000 }, { translateX }, { rotateY: `${rotateY}deg` }, { scale }],
-        opacity,
-        zIndex,
-      };
-    },
-    [frameSize],
-  );
+  const handleBackgroundLayout = useCallback(() => handleCardLoad('backgroundLayout'), [handleCardLoad]);
+  const handleFrameLayout = useCallback(() => handleCardLoad('frameLayout'), [handleCardLoad]);
 
   if (!visible && !keepWarm) return null;
 
   const wallet = entitlements.rewards;
   const points = (value: number) => formatLiviPoints(value, lang);
   const buy = async (kind: CosmeticKind) => {
-    if (busyRef.current || !loaded || !wallet || (kind === 'frame' && !activeFrame.available) ||
+    if (busyRef.current || !wallet || (kind === 'frame' && !activeFrame.available) ||
       (kind === 'background' && !activeBackground.available)) return;
     const itemId = kind === 'background' ? activeBackground.key : activeFrame.key;
     const owned = kind === 'background' ? entitlements.purchasedBackgroundIds.includes(itemId) : entitlements.purchasedFrameIds.includes(itemId);
@@ -628,7 +565,7 @@ function FramesStoreContent({
     ...FRAME_CATALOG.filter(item => item.available && !entitlements.purchasedFrameIds.includes(item.key)).map(() => wallet?.prices.frame ?? 100),
   );
   const remaining = Math.max(0, minimumPrice - (wallet?.balance ?? 0));
-  const progressText = loadError ? L('rewardsLoadError') : !loaded || !wallet ? L('rewardsLoading')
+  const progressText = loadError ? L('rewardsLoadError') : !wallet ? L('rewardsLoading')
     : !Number.isFinite(minimumPrice) ? L('rewardsAllOwned')
     : wallet.feedbackGiftAvailable ? L('rewardsGiftReady')
     : remaining === 0 ? L('rewardsReady') : L('rewardsProgress').replace('{points}', points(remaining));
@@ -659,27 +596,25 @@ function FramesStoreContent({
       </View>
       <FlexGap {...gaps.heading} />
       <View style={[styles.carouselWrap, { height: backgroundCarouselBox }]}>
-        <Carousel
+        <StoreCarousel
           key={`bg-${orientKey}-${backgroundPageWidth}-${backgroundCardWidth}`}
-          width={backgroundPageWidth}
+          pageWidth={backgroundPageWidth}
+          spacing={backgroundPageWidth * 0.58} secondSpacing={backgroundPageWidth * 1.35}
           height={backgroundPageHeight}
           data={CHAT_BACKGROUND_SLIDES}
           // Смена ступени размеров или поворот пересоздают карусель — без этого
           // она вставала на первый фон, а описание оставалось от выбранного.
-          defaultIndex={activeBackgroundIndex}
-          loop
-          style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
-          containerStyle={{ overflow: 'visible' }}
-          customAnimation={backgroundCoverflowAnimation}
-          scrollAnimationDuration={420}
-          onSnapToItem={setActiveBackgroundIndex}
-          renderItem={({ item }) => (
+          index={activeBackgroundIndex}
+          viewportWidth={sectionWidth}
+          onReady={handleBackgroundLayout}
+          onSelect={setActiveBackgroundIndex}
+          renderItem={(item, focused) => (
             <View style={[styles.carouselItem, { width: backgroundPageWidth, height: backgroundPageHeight }]}>
               <ChatBackgroundCard
                 item={item}
                 width={backgroundCardWidth}
                 height={backgroundCardHeight}
-                onLoad={handleBackgroundLoad}
+                onLoad={focused ? handleBackgroundLoad : undefined}
               />
               <FitText
                 style={[styles.carouselLabel, item.key === activeBackground.key && styles.carouselLabelActive]}
@@ -716,7 +651,7 @@ function FramesStoreContent({
         borderColor={activeBackground.available ? PEARL_BORDER : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeBackground.available ? 'rgba(244,240,232,0.12)' : 'rgba(139,148,158,0.08)'}
         contentColor={activeBackground.available ? '#F6F0E5' : WELCOME_MUTED_TEXT}
-        disabled={!activeBackground.available || paymentBusy !== null || !loaded || !wallet}
+        disabled={!activeBackground.available || paymentBusy !== null || !wallet}
         onPress={() => void buy('background')}
       />
     </>
@@ -732,21 +667,19 @@ function FramesStoreContent({
       </View>
       <FlexGap {...gaps.heading} />
       <View style={[styles.carouselWrap, { height: frameCarouselBox }]}>
-        <Carousel
+        <StoreCarousel
           key={`frame-${orientKey}-${framePageWidth}-${frameSize}`}
-          width={framePageWidth}
+          pageWidth={framePageWidth}
+          spacing={frameSize * 0.6} secondSpacing={frameSize * 1.1}
           height={framePageHeight}
           data={FRAME_CATALOG}
-          defaultIndex={activeFrameIndex}
-          loop
-          style={{ width: sectionWidth, justifyContent: 'center', overflow: 'visible' }}
-          containerStyle={{ overflow: 'visible' }}
-          customAnimation={frameCoverflowAnimation}
-          scrollAnimationDuration={420}
-          onSnapToItem={setActiveFrameIndex}
-          renderItem={({ item }) => (
+          index={activeFrameIndex}
+          viewportWidth={sectionWidth}
+          onReady={handleFrameLayout}
+          onSelect={setActiveFrameIndex}
+          renderItem={(item, focused) => (
             <View style={[styles.carouselItem, { width: framePageWidth, height: framePageHeight }]}>
-              <FrameCoverCard item={item} size={frameSize} active={visible} onLoad={handleFrameLoad} />
+              <FrameCoverCard item={item} size={frameSize} active={visible && focused} onLoad={focused ? handleFrameLoad : undefined} />
               <FitText
                 style={[styles.carouselLabel, item.key === activeFrame.key && styles.carouselLabelActive]}
                 minimumFontScale={0.65}
@@ -782,7 +715,7 @@ function FramesStoreContent({
         borderColor={activeFrame.available ? activeFrame.colors[1] : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeFrame.available ? withAlpha(activeFrame.colors[0], 0.12) : 'rgba(139,148,158,0.08)'}
         contentColor={activeFrame.available ? activeFrame.colors[0] : WELCOME_MUTED_TEXT}
-        disabled={!activeFrame.available || paymentBusy !== null || !loaded || !wallet}
+        disabled={!activeFrame.available || paymentBusy !== null || !wallet}
         onPress={() => void buy('frame')}
       />
     </>
@@ -835,7 +768,7 @@ function FramesStoreContent({
               <MaterialCommunityIcons name="star-four-points" size={22} color={CROWN_GOLD} />
               <Text style={styles.walletBalance}>{wallet ? points(wallet.balance) : '…'}</Text>
               <Text style={styles.walletEarn}>{L('rewardsEarn')}</Text>
-              <MaterialIcons name="chevron-right" size={20} color="#80D9D0" />
+              <MaterialIcons name="chevron-right" size={20} color={UI_ACCENT} />
             </View>
             <Text style={[styles.walletHint, loadError && { color: '#FF8E98' }]} numberOfLines={1}>{progressText}</Text>
             <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${wallet && Number.isFinite(minimumPrice) ? Math.min(100, wallet.balance / minimumPrice * 100) : 0}%` }]} /></View>
@@ -878,7 +811,7 @@ function FramesStoreContent({
         </View>
 
         <LiviRewardsDialog visible={visible && rewardsVisible} onClose={() => setRewardsVisible(false)}
-          wallet={loaded ? wallet : undefined} userId={myUserId} lang={lang} targetPrice={rewardTarget ? wallet?.prices[rewardTarget] : undefined} />
+          wallet={wallet} userId={myUserId} lang={lang} targetPrice={rewardTarget ? wallet?.prices[rewardTarget] : undefined} />
         <AppDialogModal visible={visible && !!confirm} onRequestClose={() => { if (!busyRef.current) setConfirm(null); }}
           title={L('rewardsConfirmTitle')}
           message={confirm ? `${L(cosmeticNameKey(confirm.itemId))}\n${confirm.useGift ? L('rewardsConfirmGift') : L('rewardsConfirmText').replace('{points}', points(wallet?.prices[confirm.kind] ?? 0))}` : ''}
@@ -952,13 +885,13 @@ const styles = StyleSheet.create({
   titleCompact: { fontSize: 14 },
   closeBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
   closeBtnPressed: { opacity: 0.72 },
-  wallet: { marginHorizontal: 16, marginTop: 6, marginBottom: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(128,217,208,0.25)', backgroundColor: 'rgba(8,25,30,0.74)', minHeight: 72, gap: 6 },
+  wallet: { marginHorizontal: 16, marginTop: 6, marginBottom: 6, paddingHorizontal: 14, paddingVertical: 10, borderRadius: 18, borderWidth: 1, borderColor: UI_RIM, backgroundColor: UI_SURFACE, minHeight: 72, gap: 6 },
   walletRow: { flexDirection: 'row', alignItems: 'center', gap: 7 },
   walletBalance: { color: CROWN_GOLD, fontSize: 16, fontWeight: '800', flexShrink: 1 },
-  walletEarn: { color: '#80D9D0', fontSize: 12, fontWeight: '700', marginLeft: 'auto', flexShrink: 1 },
+  walletEarn: { color: UI_ACCENT_LIGHT, fontSize: 12, fontWeight: '700', marginLeft: 'auto', flexShrink: 1 },
   walletHint: { color: WELCOME_MUTED_TEXT, fontSize: 11 },
-  progressTrack: { height: 3, backgroundColor: 'rgba(128,217,208,0.12)', borderRadius: 2, overflow: 'hidden' },
-  progressFill: { height: 3, backgroundColor: '#80D9D0', borderRadius: 2 },
+  progressTrack: { height: 3, backgroundColor: UI_ACCENT_SOFT, borderRadius: 2, overflow: 'hidden' },
+  progressFill: { height: 3, backgroundColor: UI_ACCENT, borderRadius: 2 },
   lowerContent: { flex: 1, minHeight: 0 },
   sectionsLandscape: { flex: 1, minHeight: 0, flexDirection: 'row', alignItems: 'stretch' },
   // flex-end: если высоты всё же не хватит, контент уходит под шапку, а кнопка

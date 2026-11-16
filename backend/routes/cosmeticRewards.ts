@@ -25,7 +25,9 @@ export function createCosmeticRewardsRouter(
       [activeField]: { $cond: [{ $eq: [`$${activeField}`, { $literal: itemId }] }, '', { $ifNull: [`$${activeField}`, ''] }] },
     } }], { new: true }).select(COSMETIC_FIELDS).lean();
     if (!user) return res.status(404).json({ ok: false, error: 'user_not_found' });
-    if (kind === 'frame') await broadcast(req, userId, user.activeFrameId || '');
+    // Deliver the confirmed collection immediately; friend fanout has its own
+    // error handling and must not hold the purchase/delete button busy.
+    if (kind === 'frame') void broadcast(req, userId, user.activeFrameId || '');
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ ok: true, entitlements: { ...serializeCosmeticEntitlements(user), rewards: serializeRewards(user) } });
   });
@@ -60,7 +62,7 @@ export function createCosmeticRewardsRouter(
     if (!updated && !user[ownedField]?.includes(itemId)) {
       return res.status(409).json({ ok: false, error: useGift ? 'gift_unavailable' : 'insufficient_points', entitlements });
     }
-    if (updated && kind === 'frame') await broadcast(req, userId, itemId);
+    if (updated && kind === 'frame') void broadcast(req, userId, itemId);
     res.setHeader('Cache-Control', 'no-store');
     return res.json({ ok: true, alreadyOwned: !updated, entitlements });
   });

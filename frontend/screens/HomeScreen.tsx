@@ -6056,7 +6056,7 @@ const handleClearNick = useCallback(async () => {
       />
 
       {ConfirmView}
-      <FramesStoreHost warmEnabled={splashDismissed} />
+      <FramesStoreHost warmEnabled={splashDismissed} userId={resolvedUserId} />
 
       {/* Поддержать проект */}
       <AppDialogModal

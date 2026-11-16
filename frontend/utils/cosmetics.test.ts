@@ -320,3 +320,27 @@ it('discards an incomplete wallet from disk until the server supplies a valid ba
   expect(ReadCosmetics()).toMatchObject({ activeFrameId: 'fire' });
   expect(ReadCosmetics().rewards).toBeUndefined();
 });
+
+it('deletes ownership through the shared write queue and rejects an older owned-items response', async () => {
+  const initial = { purchasedFrameIds: ['fire'], purchasedBackgroundIds: ['poetry'], activeFrameId: 'fire', activeBackgroundId: 'poetry' };
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own: initial }));
+  let finishRead!: (value: unknown) => void;
+  mockFetch.mockImplementation((_url, init) => init?.method === 'DELETE'
+    ? Promise.resolve({ ok: true, json: async () => ({ ok: true, entitlements: { ...initial, purchasedFrameIds: [], activeFrameId: '' } }) })
+    : new Promise(resolve => { finishRead = resolve; }));
+  boot(); await flush();
+  const read = cosmetics.loadCosmetics(true); await flush();
+  await cosmetics.deleteOwnedCosmetic('frame', 'fire');
+  finishRead({ ok: true, json: async () => ({ ok: true, entitlements: initial }) }); await read;
+  expect(ReadCosmetics()).toMatchObject({ purchasedFrameIds: [], activeFrameId: '', purchasedBackgroundIds: ['poetry'], activeBackgroundId: 'poetry' });
+  expect(mockFetch.mock.calls.find(([url]) => url.endsWith('/cosmetics/owned'))?.[1]).toMatchObject({ method: 'DELETE', body: JSON.stringify({ kind: 'frame', itemId: 'fire' }) });
+});
+
+it('keeps the same snapshot and avoids wallpaper refresh when server cosmetics have not changed', async () => {
+  const initial = { purchasedFrameIds: ['fire'], activeFrameId: 'fire', activeBackgroundId: '' };
+  mockFetch.mockResolvedValue({ ok: true, json: async () => ({ ok: true, entitlements: initial }) });
+  boot(); await flush();
+  const first = await cosmetics.loadCosmetics(true);
+  const second = await cosmetics.loadCosmetics(true);
+  expect(second).toBe(first);
+});

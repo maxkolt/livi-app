@@ -1,5 +1,5 @@
 import React, { memo, useEffect, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { InteractionManager, Pressable, StyleSheet, View, useWindowDimensions } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   WELCOME_TAB_BLOCK_SURFACE,
@@ -33,20 +33,33 @@ function setFramesStoreOpen(open: boolean) {
 
 /**
  * Витрина Legendary (только __DEV__).
- * keepWarm отключён: закрытые карусели при повороте роняли Home
- * (TypeError forEach of null) и оставляли пустой экран после шторки.
+ * Native carousels can be prepared while hidden and have no active frame animations.
+ * Rebuild a hidden store after rotation, before the next entrance.
  */
-export function FramesStoreHost({ warmEnabled: _warmEnabled }: { warmEnabled: boolean }) {
+export function FramesStoreHost({ warmEnabled, userId }: { warmEnabled: boolean; userId?: string }) {
   const [open, setOpen] = useState(false);
+  const [warm, setWarm] = useState(false);
+  const { width, height } = useWindowDimensions();
+  const [layoutKey, setLayoutKey] = useState(`${width}-${height}`);
   useEffect(() => {
     storeOpenListeners.add(setOpen);
     return () => {
       storeOpenListeners.delete(setOpen);
     };
   }, []);
+  useEffect(() => {
+    if (!__DEV__ || !warmEnabled) return;
+    // Home has looping animations, so InteractionManager alone can wait forever.
+    const fallback = setTimeout(() => setWarm(true), 500);
+    const task = InteractionManager.runAfterInteractions(() => { clearTimeout(fallback); setWarm(true); });
+    return () => { clearTimeout(fallback); task.cancel(); };
+  }, [warmEnabled]);
+  useEffect(() => {
+    if (!open) setLayoutKey(`${width}-${height}`);
+  }, [open, width, height]);
   if (!__DEV__) return null;
-  if (!open) return null;
-  return <FramesStoreModal visible={open} keepWarm={false} onClose={() => setOpen(false)} />;
+  if (!open && !warm) return null;
+  return <FramesStoreModal key={layoutKey} visible={open} keepWarm myUserId={userId} onClose={() => setOpen(false)} />;
 }
 
 /** Корона в welcome chrome. Витрина Legendary — только в __DEV__; в релизе некликабельный декор. */

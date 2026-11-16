@@ -1,8 +1,10 @@
 import React, { useRef, useState } from 'react';
 import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import AdaptiveText from '../../components/AdaptiveText';
-import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
+import { cosmeticNameKey, deleteOwnedCosmetic, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
+import { AppDialogModal } from '../../components/AppDialog';
 import { t, type Lang } from '../../utils/i18n';
 import { useLang } from '../../store/lang';
 import {
@@ -63,6 +65,20 @@ export function PurchasesManagementPanel() {
   const cosmetics = useCosmetics();
   const [busyKey, setBusyKey] = useState('');
   const busyRef = useRef(false);
+  const [deleting, setDeleting] = useState<{ kind: CosmeticKind; itemId: string } | null>(null);
+  const [deleteError, setDeleteError] = useState(false);
+
+  const remove = async () => {
+    if (!deleting || busyRef.current) return;
+    busyRef.current = true;
+    setBusyKey(`${deleting.kind}:${deleting.itemId}`);
+    setDeleteError(false);
+    try {
+      await deleteOwnedCosmetic(deleting.kind, deleting.itemId);
+      setDeleting(null);
+    } catch { setDeleteError(true); }
+    finally { busyRef.current = false; setBusyKey(''); }
+  };
 
   const toggle = async (kind: CosmeticKind, itemId: string, active: boolean) => {
     const key = `${kind}:${itemId}`;
@@ -93,7 +109,7 @@ export function PurchasesManagementPanel() {
         <Pressable
           onPress={() => void toggle(kind, itemId, active)}
           disabled={!!busyKey}
-          hitSlop={8}
+          hitSlop={4}
           accessibilityRole="button"
           accessibilityLabel={`${cosmeticName(itemId, lang)}: ${t(active ? 'purchasesRemove' : 'purchasesApply', lang)}`}
           accessibilityState={{ disabled: !!busyKey, busy: busyKey === `${kind}:${itemId}` }}
@@ -102,6 +118,16 @@ export function PurchasesManagementPanel() {
           <AdaptiveText style={[styles.actionText, active && styles.actionTextActive]}>
             {busyKey === `${kind}:${itemId}` ? '…' : t(active ? 'purchasesRemove' : 'purchasesApply', lang)}
           </AdaptiveText>
+        </Pressable>
+        <Pressable
+          onPress={() => { setDeleteError(false); setDeleting({ kind, itemId }); }}
+          disabled={!!busyKey} hitSlop={4}
+          accessibilityRole="button"
+          accessibilityLabel={`${cosmeticName(itemId, lang)}: ${t('purchasesDelete', lang)}`}
+          accessibilityState={{ disabled: !!busyKey }}
+          style={({ pressed }) => [styles.deleteAction, pressed && styles.actionPressed]}
+        >
+          <MaterialCommunityIcons name="trash-can-outline" size={20} color="#FF939D" />
         </Pressable>
       </View>
     );
@@ -117,6 +143,18 @@ export function PurchasesManagementPanel() {
             : <EmptyPurchase kind="frame" lang={lang} />}
         </View>
       </View>
+      <AppDialogModal visible={!!deleting}
+        onRequestClose={() => { if (!busyRef.current) setDeleting(null); }}
+        dismissOnBackdrop={!busyKey}
+        title={t('purchasesDeleteTitle', lang)}
+        message={deleteError ? t('purchasesDeleteError', lang)
+          : t('purchasesDeleteText', lang).replace('{name}', deleting ? cosmeticName(deleting.itemId, lang) : '')}
+        icon={<MaterialCommunityIcons name="trash-can-outline" size={22} color="#FF939D" />}
+        actions={[
+          { label: t('rewardsCancel', lang), onPress: () => setDeleting(null), variant: 'cancel', disabled: !!busyKey },
+          { label: t('purchasesDelete', lang), onPress: () => void remove(), variant: 'danger', busy: !!busyKey },
+        ]}
+      />
       <View style={styles.section}>
         <AdaptiveText style={styles.sectionTitle}>{t('storeChatBackgrounds', lang)}</AdaptiveText>
         <View style={styles.card}>
@@ -190,4 +228,5 @@ const styles = StyleSheet.create({
   actionPressed: { opacity: 0.72 },
   actionText: { color: '#EDE6F1', fontSize: 12, fontWeight: '700' },
   actionTextActive: { color: WELCOME_MUTED_TEXT },
+  deleteAction: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,111,127,0.07)' },
 });

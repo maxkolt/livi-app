@@ -7,7 +7,7 @@ import { submitCosmeticFeedback, type RewardWallet } from '../../utils/cosmetics
 import { API_BASE } from '../../sockets/modules/constants';
 import { t, type Lang } from '../../utils/i18n';
 import { formatLiviPoints } from '../../utils/liviRewards';
-import { CROWN_GOLD, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT } from '../../screens/home/constants';
+import { CROWN_GOLD, WELCOME_HEADER_TITLE, WELCOME_MUTED_TEXT, UI_ACCENT, UI_ACCENT_LIGHT, UI_SURFACE, UI_RIM, UI_ACCENT_SOFT } from '../../screens/home/constants';
 
 export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targetPrice }: {
   visible: boolean; onClose: () => void; wallet?: RewardWallet; userId?: string; lang: Lang; targetPrice?: number;
@@ -49,7 +49,7 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
         <Text style={styles.gift}>{L('rewardsNeed').replace('{points}', formatLiviPoints(targetPrice - wallet.balance, lang))}</Text>
       </View> : null}
       <View style={styles.card}>
-        <MaterialCommunityIcons name="account-multiple-plus-outline" size={26} color="#80D9D0" />
+        <MaterialCommunityIcons name="account-multiple-plus-outline" size={26} color={UI_ACCENT} />
         <Text style={styles.title}>{L('rewardsInviteTitle')}</Text>
         <Text style={styles.copy}>{L('rewardsInviteRule').replace('{points}', formatLiviPoints(wallet?.invitePoints ?? 10, lang))}</Text>
         <Text style={styles.count}>{L('rewardsInvited').replace('{count}', String(wallet?.invitedCount ?? '—'))}</Text>
@@ -85,15 +85,15 @@ export function LiviRewardsDialog({ visible, onClose, wallet, userId, lang, targ
 
 const styles = StyleSheet.create({
   body: { gap: 14, padding: 16 },
-  card: { padding: 16, gap: 10, borderRadius: 18, borderWidth: 1, borderColor: 'rgba(128,217,208,0.16)', backgroundColor: 'rgba(128,217,208,0.04)' },
+  card: { padding: 16, gap: 10, borderRadius: 18, borderWidth: 1, borderColor: UI_RIM, backgroundColor: UI_SURFACE },
   title: { color: WELCOME_HEADER_TITLE, fontSize: 17, fontWeight: '700' },
   copy: { color: WELCOME_MUTED_TEXT, fontSize: 14, lineHeight: 21 },
-  count: { color: '#80D9D0', fontSize: 14, fontWeight: '600' },
+  count: { color: UI_ACCENT_LIGHT, fontSize: 14, fontWeight: '600' },
   gift: { color: CROWN_GOLD, fontSize: 15, lineHeight: 22 },
   input: { color: WELCOME_HEADER_TITLE, minHeight: 110, maxHeight: 200, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: 'rgba(255,255,255,0.16)', fontSize: 14, backgroundColor: 'rgba(0,0,0,0.18)' },
   counter: { color: WELCOME_MUTED_TEXT, fontSize: 12, textAlign: 'right' },
-  button: { minHeight: 46, padding: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(128,217,208,0.45)', backgroundColor: 'rgba(128,217,208,0.12)' },
-  buttonText: { color: '#B5ECE6', fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  button: { minHeight: 46, padding: 12, borderRadius: 14, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: 'rgba(98, 176, 216, 0.58)', backgroundColor: UI_ACCENT_SOFT },
+  buttonText: { color: UI_ACCENT_LIGHT, fontSize: 14, fontWeight: '700', textAlign: 'center' },
   pressed: { opacity: 0.7 }, disabled: { opacity: 0.45 },
   error: { color: '#FF8E98', lineHeight: 20 },
 });

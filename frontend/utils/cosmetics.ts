@@ -254,12 +254,15 @@ async function syncWallpaper(value: CosmeticEntitlements) {
 }
 
 function publish(value: Partial<CosmeticEntitlements> | null | undefined) {
-  cached = normalize(value);
+  const next = normalize(value);
+  const unchanged = JSON.stringify(next) === JSON.stringify(cached);
+  if (!unchanged) cached = next;
   const ownId = String(getCurrentUserId() || '');
   if (ownId) {
     userFrameCache.set(ownId, { frameId: cached.activeFrameId, loadedAt: Date.now() });
-    userFrameListeners.get(ownId)?.forEach((listener) => listener(cached.activeFrameId));
+    if (!unchanged) userFrameListeners.get(ownId)?.forEach((listener) => listener(cached.activeFrameId));
   }
+  if (unchanged) return cached;
   listeners.forEach((listener) => listener(cached));
   schedulePersist();
   void syncWallpaper(cached);
@@ -307,11 +310,11 @@ export async function loadCosmetics(force = false): Promise<CosmeticEntitlements
 }
 
 /** All mutations share a queue: a late response cannot restore a spent balance. */
-function mutateCosmetics(path: string, body: object) {
+function mutateCosmetics(path: string, body: object, method = 'POST') {
   entitlementRevision += 1;
   activeWrites += 1;
   const pending = writeTail.then(async () => {
-    const json = await request(path, { method: 'POST', body: JSON.stringify(body) });
+    const json = await request(path, { method, body: JSON.stringify(body) });
     return publish(json.entitlements);
   }).finally(() => { activeWrites -= 1; entitlementRevision += 1; });
   writeTail = pending.catch(() => {});
@@ -324,6 +327,10 @@ export function redeemCosmetic(kind: CosmeticKind, itemId: string, useGift = fal
 
 export function submitCosmeticFeedback(text: string) {
   return mutateCosmetics('/cosmetics/feedback', { text });
+}
+
+export function deleteOwnedCosmetic(kind: CosmeticKind, itemId: string) {
+  return mutateCosmetics('/cosmetics/owned', { kind, itemId }, 'DELETE');
 }
 
 export async function setActiveCosmetic(kind: CosmeticKind, itemId: string) {
