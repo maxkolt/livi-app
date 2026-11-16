@@ -16,6 +16,7 @@ import {
 } from './constants';
 import { CosmeticFramePreview } from '../../components/frames/CosmeticFramePreview';
 import { getCosmeticBackground } from '../../utils/cosmeticCatalog';
+import { CosmeticSwipeRow, type CosmeticSwipeHandle } from './CosmeticSwipeRow';
 
 /** Название купленной рамки или фона; неизвестный id показываем как есть. */
 function cosmeticName(itemId: string, lang: Lang): string {
@@ -65,6 +66,7 @@ export function PurchasesManagementPanel() {
   const cosmetics = useCosmetics();
   const [busyKey, setBusyKey] = useState('');
   const busyRef = useRef(false);
+  const openSwipe = useRef<CosmeticSwipeHandle | null>(null);
   const [deleting, setDeleting] = useState<{ kind: CosmeticKind; itemId: string } | null>(null);
   const [deleteError, setDeleteError] = useState(false);
 
@@ -83,13 +85,14 @@ export function PurchasesManagementPanel() {
   const toggle = async (kind: CosmeticKind, itemId: string, active: boolean) => {
     const key = `${kind}:${itemId}`;
     if (busyRef.current) return;
+    openSwipe.current?.close();
     busyRef.current = true;
     setBusyKey(key);
     try {
       await setActiveCosmetic(kind, active ? '' : itemId);
     } catch (error) {
       Alert.alert(t('errorTitle', lang), t(
-        error instanceof Error && error.message === 'unauthorized' ? 'unauthorizedError' : 'storePaymentOpenFailedText',
+        error instanceof Error && error.message === 'unauthorized' ? 'unauthorizedError' : 'cosmeticsActionFailedText',
         lang,
       ));
     } finally {
@@ -101,7 +104,18 @@ export function PurchasesManagementPanel() {
   const renderItem = (kind: CosmeticKind, itemId: string) => {
     const active = kind === 'frame' ? cosmetics.activeFrameId === itemId : cosmetics.activeBackgroundId === itemId;
     return (
-      <View key={`${kind}:${itemId}`} style={styles.itemRow}>
+      <CosmeticSwipeRow key={`${kind}:${itemId}`}
+        disabled={!!busyKey}
+        deleteLabel={t('purchasesDelete', lang)}
+        accessibilityLabel={`${cosmeticName(itemId, lang)}: ${t('purchasesDelete', lang)}`}
+        onReveal={handle => {
+          if (openSwipe.current && openSwipe.current !== handle) openSwipe.current.close();
+          openSwipe.current = handle;
+        }}
+        onClose={handle => { if (openSwipe.current === handle) openSwipe.current = null; }}
+        onDelete={() => { setDeleteError(false); setDeleting({ kind, itemId }); }}
+      >
+      <View style={styles.itemRow}>
         {kind === 'frame' ? <FramePreview itemId={itemId} /> : <BackgroundPreview itemId={itemId} />}
         <AdaptiveText style={styles.itemLabel} numberOfLines={1}>
           {cosmeticName(itemId, lang)}
@@ -119,17 +133,8 @@ export function PurchasesManagementPanel() {
             {busyKey === `${kind}:${itemId}` ? '…' : t(active ? 'purchasesRemove' : 'purchasesApply', lang)}
           </AdaptiveText>
         </Pressable>
-        <Pressable
-          onPress={() => { setDeleteError(false); setDeleting({ kind, itemId }); }}
-          disabled={!!busyKey} hitSlop={4}
-          accessibilityRole="button"
-          accessibilityLabel={`${cosmeticName(itemId, lang)}: ${t('purchasesDelete', lang)}`}
-          accessibilityState={{ disabled: !!busyKey }}
-          style={({ pressed }) => [styles.deleteAction, pressed && styles.actionPressed]}
-        >
-          <MaterialCommunityIcons name="trash-can-outline" size={20} color="#FF939D" />
-        </Pressable>
       </View>
+      </CosmeticSwipeRow>
     );
   };
 
@@ -228,5 +233,4 @@ const styles = StyleSheet.create({
   actionPressed: { opacity: 0.72 },
   actionText: { color: '#EDE6F1', fontSize: 12, fontWeight: '700' },
   actionTextActive: { color: WELCOME_MUTED_TEXT },
-  deleteAction: { width: 40, height: 40, borderRadius: 20, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,111,127,0.07)' },
 });

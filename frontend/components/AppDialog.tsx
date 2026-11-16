@@ -27,6 +27,7 @@ type AppDialogActionVariant = 'cancel' | 'primary' | 'danger';
 
 type AppDialogAction = {
   label: string;
+  accessibilityLabel?: string;
   onPress: () => void;
   /** cancel — нейтральная; primary — главное действие (голубая); danger — удаление. */
   variant?: AppDialogActionVariant;
@@ -127,6 +128,7 @@ export function AppDialog({
 
 export function AppDialogButton({
   label,
+  accessibilityLabel,
   onPress,
   variant = 'cancel',
   disabled,
@@ -141,6 +143,7 @@ export function AppDialogButton({
       onPress={onPress}
       disabled={inactive}
       accessibilityRole="button"
+      accessibilityLabel={accessibilityLabel || label}
       accessibilityState={{ disabled: inactive, busy: !!busy }}
       style={({ pressed }) => [
         styles.button,

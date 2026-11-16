@@ -52,7 +52,7 @@ export function StoreCarousel<T extends { key: string }>({
       contentContainerStyle={{ paddingHorizontal: Math.max(0, (viewportWidth - pageWidth) / 2) }}
       keyExtractor={i => `${data[i % data.length].key}-${i}`}
       initialScrollIndex={start}
-      initialNumToRender={9} maxToRenderPerBatch={9} windowSize={3}
+      initialNumToRender={9} maxToRenderPerBatch={5} windowSize={1}
       getItemLayout={(_, i) => ({ length: pageWidth, offset: i * pageWidth, index: i })}
       snapToInterval={pageWidth} decelerationRate="fast" disableIntervalMomentum
       showsHorizontalScrollIndicator={false} bounces={false}

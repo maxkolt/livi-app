@@ -3,6 +3,7 @@ import { Alert } from 'react-native';
 let mockState: unknown[] = [];
 let mockCursor = 0;
 const mockBusyRef = { current: false };
+const mockSwipeRef: { current: { close: () => void } | null } = { current: null };
 const mockSetActive = jest.fn();
 const mockDelete = jest.fn();
 const mockCosmetics = {
@@ -16,7 +17,7 @@ jest.mock('react', () => ({
     if (!(i in mockState)) mockState[i] = initial;
     return [mockState[i], (value: unknown) => { mockState[i] = value; }];
   },
-  useRef: () => mockBusyRef,
+  useRef: (initial: unknown) => initial === false ? mockBusyRef : mockSwipeRef,
 }));
 jest.mock('react-native', () => ({
   View: 'View', Pressable: 'Pressable', Alert: { alert: jest.fn() },
@@ -24,6 +25,7 @@ jest.mock('react-native', () => ({
 }));
 jest.mock('@expo/vector-icons', () => ({ MaterialCommunityIcons: 'Icon' }));
 jest.mock('../../components/AppDialog', () => ({ AppDialogModal: 'AppDialogModal' }));
+jest.mock('./CosmeticSwipeRow', () => ({ CosmeticSwipeRow: 'CosmeticSwipeRow' }));
 jest.mock('expo-image', () => ({ Image: 'Image' }));
 jest.mock('../../components/AdaptiveText', () => ({ __esModule: true, default: 'AdaptiveText' }));
 jest.mock('../../components/frames/CosmeticFramePreview', () => ({ CosmeticFramePreview: 'CosmeticFramePreview' }));
@@ -46,6 +48,10 @@ function buttons(includeDelete = false): Button[] {
     React.Children.forEach(node, child => {
       if (!React.isValidElement<{ children?: React.ReactNode }>(child)) return;
       if ((child.type as unknown) === 'Pressable') found.push(child as Button);
+      if (includeDelete && (child.type as unknown) === 'CosmeticSwipeRow') {
+        const props = child.props as { onDelete: () => void; disabled: boolean; accessibilityLabel: string };
+        found.push(React.createElement('Pressable', { onPress: props.onDelete, disabled: props.disabled, accessibilityLabel: props.accessibilityLabel }) as unknown as Button);
+      }
       walk(child.props.children);
     });
   }
@@ -54,7 +60,7 @@ function buttons(includeDelete = false): Button[] {
 }
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 beforeEach(() => {
-  mockState = []; mockCursor = 0; mockBusyRef.current = false;
+  mockState = []; mockCursor = 0; mockBusyRef.current = false; mockSwipeRef.current = null;
   mockSetActive.mockReset(); mockDelete.mockReset(); jest.mocked(Alert.alert).mockClear();
 });
 it.each([['frame', 0], ['background', 1]] as const)('removes the active %s once even on repeated taps before React rerenders', async (kind, index) => {
@@ -71,7 +77,7 @@ it.each([['frame', 0], ['background', 1]] as const)('removes the active %s once 
 it('shows a failed change and releases both buttons so the user can retry', async () => {
   mockSetActive.mockRejectedValueOnce(new Error('network unavailable')).mockResolvedValueOnce(undefined);
   buttons()[0].props.onPress(); await flush();
-  expect(Alert.alert).toHaveBeenCalledWith('errorTitle', 'storePaymentOpenFailedText');
+  expect(Alert.alert).toHaveBeenCalledWith('errorTitle', 'cosmeticsActionFailedText');
   expect(buttons().every(button => !button.props.disabled)).toBe(true);
   buttons()[0].props.onPress(); await flush();
   expect(mockSetActive).toHaveBeenCalledTimes(2);

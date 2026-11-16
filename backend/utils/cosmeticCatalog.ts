@@ -1,7 +1,6 @@
-import type { CosmeticKind } from '../models/CosmeticPurchase';
 import type { UserRecord } from '../models/User';
 
-export const COSMETIC_PRICES: Record<CosmeticKind, string> = { background: '99.00', frame: '199.00' };
+export type CosmeticKind = 'frame' | 'background';
 const FRAME_IDS = new Set(['fire', 'diamond', 'aurora', 'palladium', 'frost', 'jade', 'void', 'obsidian']);
 const BACKGROUND_IDS = new Set(['aurora-chat', 'deep-space', 'poetry', 'ocean-flow', 'graphite-chat']);
 

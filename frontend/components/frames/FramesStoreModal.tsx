@@ -94,7 +94,7 @@ function withAlpha(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
-function ChatBackgroundCard({
+const ChatBackgroundCard = React.memo(function ChatBackgroundCard({
   item,
   width,
   height,
@@ -134,9 +134,9 @@ function ChatBackgroundCard({
       </View>
     </View>
   );
-}
+});
 
-function FrameCoverCard({
+const FrameCoverCard = React.memo(function FrameCoverCard({
   item,
   size,
   active,
@@ -165,7 +165,7 @@ function FrameCoverCard({
       ) : null}
     </View>
   );
-}
+});
 
 function PurchaseButton({
   label,
@@ -476,7 +476,7 @@ function FramesStoreContent({
 
   const [activeBackgroundIndex, setActiveBackgroundIndex] = useState(0);
   const [activeFrameIndex, setActiveFrameIndex] = useState(0);
-  const [paymentBusy, setPaymentBusy] = useState<CosmeticKind | null>(null);
+  const [mutationBusy, setMutationBusy] = useState<CosmeticKind | null>(null);
   const [rewardsVisible, setRewardsVisible] = useState(false);
   const [rewardTarget, setRewardTarget] = useState<CosmeticKind | null>(null);
   const [loadError, setLoadError] = useState(false);
@@ -539,15 +539,15 @@ function FramesStoreContent({
       setConfirm({ kind, itemId, useGift });
       return;
     }
-    busyRef.current = true; setPaymentBusy(kind);
+    busyRef.current = true; setMutationBusy(kind);
     try { await setActiveCosmetic(kind, activeId === itemId ? '' : itemId); }
     catch { setPurchaseNotice({ kind: 'error', title: 'rewardsErrorTitle', message: 'rewardsErrorText' }); }
-    finally { busyRef.current = false; setPaymentBusy(null); }
+    finally { busyRef.current = false; setMutationBusy(null); }
   };
   const redeem = async () => {
     if (!confirm || busyRef.current) return;
     const selection = confirm;
-    busyRef.current = true; setPaymentBusy(selection.kind);
+    busyRef.current = true; setMutationBusy(selection.kind);
     try {
       await redeemCosmetic(selection.kind, selection.itemId, selection.useGift);
       setConfirm(null); onUnlock?.();
@@ -558,7 +558,7 @@ function FramesStoreContent({
       const insufficient = error instanceof Error && error.message === 'insufficient_points';
       if (insufficient) { setRewardTarget(selection.kind); setRewardsVisible(true); }
       else setPurchaseNotice({ kind: 'error', title: 'rewardsErrorTitle', message: 'rewardsErrorText' });
-    } finally { busyRef.current = false; setPaymentBusy(null); }
+    } finally { busyRef.current = false; setMutationBusy(null); }
   };
   const minimumPrice = Math.min(
     ...CHAT_BACKGROUND_CATALOG.filter(item => !entitlements.purchasedBackgroundIds.includes(item.key)).map(() => wallet?.prices.background ?? 50),
@@ -640,7 +640,7 @@ function FramesStoreContent({
       <PurchaseButton
         label={!activeBackground.available
           ? L('storeComingSoon')
-          : paymentBusy === 'background'
+          : mutationBusy === 'background'
             ? L('rewardsBusy')
             : backgroundOwned
               ? backgroundActive ? L('storeRemoveBackground') : L('storeApplyBackground')
@@ -651,7 +651,7 @@ function FramesStoreContent({
         borderColor={activeBackground.available ? PEARL_BORDER : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeBackground.available ? 'rgba(244,240,232,0.12)' : 'rgba(139,148,158,0.08)'}
         contentColor={activeBackground.available ? '#F6F0E5' : WELCOME_MUTED_TEXT}
-        disabled={!activeBackground.available || paymentBusy !== null || !wallet}
+        disabled={!activeBackground.available || mutationBusy !== null || !wallet}
         onPress={() => void buy('background')}
       />
     </>
@@ -704,7 +704,7 @@ function FramesStoreContent({
       <PurchaseButton
         label={!activeFrame.available
           ? L('storeComingSoon')
-          : paymentBusy === 'frame'
+          : mutationBusy === 'frame'
             ? L('rewardsBusy')
             : frameOwned
               ? frameActive ? L('storeRemoveFrame') : L('storeApplyFrame')
@@ -715,7 +715,7 @@ function FramesStoreContent({
         borderColor={activeFrame.available ? activeFrame.colors[1] : 'rgba(139,148,158,0.4)'}
         surfaceColor={activeFrame.available ? withAlpha(activeFrame.colors[0], 0.12) : 'rgba(139,148,158,0.08)'}
         contentColor={activeFrame.available ? activeFrame.colors[0] : WELCOME_MUTED_TEXT}
-        disabled={!activeFrame.available || paymentBusy !== null || !wallet}
+        disabled={!activeFrame.available || mutationBusy !== null || !wallet}
         onPress={() => void buy('frame')}
       />
     </>
@@ -816,8 +816,8 @@ function FramesStoreContent({
           title={L('rewardsConfirmTitle')}
           message={confirm ? `${L(cosmeticNameKey(confirm.itemId))}\n${confirm.useGift ? L('rewardsConfirmGift') : L('rewardsConfirmText').replace('{points}', points(wallet?.prices[confirm.kind] ?? 0))}` : ''}
           actions={[
-            { label: L('rewardsCancel'), onPress: () => setConfirm(null), variant: 'cancel', disabled: paymentBusy !== null },
-            { label: L('rewardsConfirm'), onPress: () => void redeem(), variant: 'primary', busy: paymentBusy !== null },
+            { label: L('rewardsCancel'), onPress: () => setConfirm(null), variant: 'cancel', disabled: mutationBusy !== null },
+            { label: L('rewardsConfirm'), onPress: () => void redeem(), variant: 'primary', busy: mutationBusy !== null },
           ]}
         />
         <AppDialogModal

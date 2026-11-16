@@ -162,11 +162,24 @@ suite('LiVi rewards with real MongoDB atomic updates and HTTP routes', () => {
   ])('rejects unavailable items and malformed input: %j', async body => {
     expect((await http('/cosmetics/redeem', body)).status).toBe(400);
   });
-  it('requires authentication and disables cash checkout creation', async () => {
+  it('requires authentication for rewards', async () => {
     expect((await http('/cosmetics/redeem', { kind: 'frame', itemId: 'fire' }, null)).status).toBe(401);
     expect((await http('/cosmetics/feedback', { text: 'x'.repeat(30) }, null)).status).toBe(401);
-    expect((await http('/cosmetics/payments', { kind: 'frame', itemId: 'fire' })).status).toBe(410);
-    expect((await http('/cosmetics/intellectmoney/checkout/im_old')).status).toBe(410);
+  });
+  it.each([
+    ['POST', '/cosmetics/payments'],
+    ['GET', '/cosmetics/payments/old-order'],
+    ['GET', '/cosmetics/payment-return'],
+    ['POST', '/cosmetics/webhook'],
+    ['GET', '/cosmetics/intellectmoney/checkout/im_old'],
+    ['POST', '/cosmetics/intellectmoney/webhook'],
+  ])('retires %s %s without granting cosmetics or changing the wallet', async (method, path) => {
+    await User.updateOne({ _id: userId }, { $set: { liviPoints: 50, purchasedFrameIds: ['diamond'], activeFrameId: 'diamond' } });
+    const body = method === 'POST' ? { event: 'payment.succeeded', object: { id: 'old-order', paid: true }, kind: 'frame', itemId: 'fire' } : undefined;
+    for (const uid of [null, userId]) {
+      expect(await http(path, body, uid, method)).toEqual({ status: 410, body: { ok: false, error: 'use_livi_points' } });
+    }
+    expect(await User.findById(userId).lean()).toMatchObject({ liviPoints: 50, purchasedFrameIds: ['diamond'], activeFrameId: 'diamond' });
   });
   it('keeps ownership enforcement and lets earlier purchases be applied', async () => {
     await User.updateOne({ _id: userId }, { $set: { purchasedFrameIds: ['diamond'] } });
