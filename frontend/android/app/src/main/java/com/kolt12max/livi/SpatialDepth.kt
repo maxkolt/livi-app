@@ -621,6 +621,8 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
   private val paint = Paint(Paint.FILTER_BITMAP_FLAG)
   private val fallbackPaint = Paint().apply { color = Color.rgb(37, 43, 52) }
   private var clearBottomHeight = 0f
+  internal var plainBelowPx = Float.POSITIVE_INFINITY
+    private set
   private val dockClip = Path()
   private val honeycombRect = RectF()
   private var scene: Any? = null
@@ -658,6 +660,13 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     val next = PixelUtil.toPixelFromDIP(value.coerceAtLeast(0f))
     if (next == clearBottomHeight) return
     clearBottomHeight = next
+    invalidate()
+  }
+
+  fun setPlainBelowDp(value: Float) {
+    val next = if (value < 0f) Float.POSITIVE_INFINITY else PixelUtil.toPixelFromDIP(value)
+    if (next == plainBelowPx) return
+    plainBelowPx = next
     invalidate()
   }
 
@@ -794,6 +803,11 @@ class SpatialBackgroundView(context: Context) : View(context), SpatialTilt.Liste
     updateGeometry(img)
     val restore = canvas.save()
     try {
+      if (plainBelowPx.isFinite()) {
+        val top = plainBelowPx.coerceIn(0f, height.toFloat())
+        canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), fallbackPaint)
+        canvas.clipRect(0f, 0f, width.toFloat(), top)
+      }
       if (clearBottomHeight > 0f) {
         val top = (height - clearBottomHeight).coerceAtLeast(0f)
         canvas.drawRect(0f, top, width.toFloat(), height.toFloat(), fallbackPaint)
@@ -1194,6 +1208,7 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
   private val sceneLoc = IntArray(2)
   private var drawnX = Float.NaN
   private var drawnY = Float.NaN
+  private var drawnPlainBelow = Float.POSITIVE_INFINITY
   private var sheenHeight = -1f
 
   private val preDraw =
@@ -1253,7 +1268,8 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     val shift = scene.glassShift
     val ox = sceneLoc[0] - selfLoc[0] + scene.drawnTiltX * shift
     val oy = sceneLoc[1] - selfLoc[1] + scene.drawnTiltY * shift
-    if (drawnX.isNaN() || abs(ox - drawnX) >= STICKY_PX || abs(oy - drawnY) >= STICKY_PX) invalidate()
+    val plainBelow = sceneLoc[1] - selfLoc[1] + scene.plainBelowPx
+    if (drawnX.isNaN() || abs(ox - drawnX) >= STICKY_PX || abs(oy - drawnY) >= STICKY_PX || drawnPlainBelow != plainBelow) invalidate()
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -1292,6 +1308,16 @@ class SpatialGlassView(context: Context) : View(context), SpatialTilt.Listener {
     vignetteMatrix.postTranslate(sceneLoc[0] - selfLoc[0] + sw / 2f, sceneLoc[1] - selfLoc[1] + sh / 2f)
     vignettePaint.shader.setLocalMatrix(vignetteMatrix)
     canvas.drawRoundRect(rect, radius, radius, vignettePaint)
+
+    // Стекло берёт тот же сплошной фон, что виден под ним, без скрытых элементов сцены.
+    drawnPlainBelow = sceneLoc[1] - selfLoc[1] + scene.plainBelowPx
+    if (drawnPlainBelow < h) {
+      val restore = canvas.save()
+      canvas.clipRect(0f, drawnPlainBelow.coerceAtLeast(0f), w, h)
+      fillPaint.color = Color.rgb(37, 43, 52)
+      canvas.drawRoundRect(rect, radius, radius, fillPaint)
+      canvas.restoreToCount(restore)
+    }
 
     fillPaint.color = tint
     canvas.drawRoundRect(rect, radius, radius, fillPaint)
@@ -1337,6 +1363,9 @@ class SpatialBackgroundViewManager : SimpleViewManager<SpatialBackgroundView>() 
 
   @ReactProp(name = "clearBottomHeight", defaultFloat = 0f)
   fun setClearBottomHeight(view: SpatialBackgroundView, value: Float) = view.setClearBottomHeightDp(value)
+
+  @ReactProp(name = "plainBelow", defaultFloat = -1f)
+  fun setPlainBelow(view: SpatialBackgroundView, value: Float) = view.setPlainBelowDp(value)
 }
 
 class SpatialGlassViewManager : SimpleViewManager<SpatialGlassView>() {

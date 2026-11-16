@@ -13,6 +13,7 @@ import { fetchWithTimeout } from './fetchWithTimeout';
 import { getCosmeticBackground } from './cosmeticCatalog';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 import { UserFrameRefresh } from './userFrameRefresh';
+import { restoreHttpInstallAuth } from './restoreHttpInstallAuth';
 
 export type CosmeticKind = 'frame' | 'background';
 
@@ -21,6 +22,12 @@ type CosmeticEntitlements = {
   purchasedBackgroundIds: string[];
   activeFrameId: string;
   activeBackgroundId: string;
+};
+
+type CosmeticResponse = Record<string, unknown> & {
+  ok?: boolean;
+  error?: string;
+  entitlements?: Partial<CosmeticEntitlements>;
 };
 
 const EMPTY: CosmeticEntitlements = {
@@ -53,6 +60,10 @@ export function cosmeticBackgroundToWallpaperId(itemId: string): string {
 
 let cached: CosmeticEntitlements = EMPTY;
 let loadPromise: Promise<CosmeticEntitlements> | null = null;
+let entitlementRevision = 0;
+let activeWrites = 0;
+let loadSequence = 0;
+let writeTail: Promise<unknown> = Promise.resolve();
 const listeners = new Set<(value: CosmeticEntitlements) => void>();
 const userFrameCache = new Map<string, { frameId: string; loadedAt: number }>();
 const userFrameListeners = new Map<string, Set<(frameId: string) => void>>();
@@ -241,7 +252,7 @@ async function authHeaders(json = false): Promise<Record<string, string>> {
   };
 }
 
-async function request(path: string, init?: RequestInit) {
+async function request(path: string, init?: RequestInit, mayRestoreAuth = true): Promise<CosmeticResponse> {
   const response = await fetchWithTimeout(`${API_BASE}/api${path}`, {
     ...init,
     headers: {
@@ -249,19 +260,29 @@ async function request(path: string, init?: RequestInit) {
       ...(init?.headers || {}),
     },
   });
-  const json = await response.json().catch(() => ({}));
+  const json: CosmeticResponse = await response.json().catch(() => ({}));
+  if (response.status === 401 && mayRestoreAuth && !init?.signal?.aborted && await restoreHttpInstallAuth()) {
+    return request(path, init, false);
+  }
   if (!response.ok || !json?.ok) throw new Error(String(json?.error || `http_${response.status}`));
   return json;
 }
 
 export async function loadCosmetics(force = false): Promise<CosmeticEntitlements> {
   if (loadPromise && !force) return loadPromise;
-  loadPromise = request('/cosmetics/me')
-    .then((json) => publish(json.entitlements))
+  const revision = entitlementRevision;
+  const sequence = ++loadSequence;
+  const pending = request('/cosmetics/me')
+    .then((json) => {
+      // A read started before/during a change cannot undo that change.
+      if (activeWrites || revision !== entitlementRevision || sequence !== loadSequence) return cached;
+      return publish(json.entitlements);
+    })
     .finally(() => {
-      loadPromise = null;
+      if (loadPromise === pending) loadPromise = null;
     });
-  return loadPromise;
+  loadPromise = pending;
+  return pending;
 }
 
 export async function createCosmeticPayment(kind: CosmeticKind, itemId: string) {
@@ -287,11 +308,22 @@ export async function checkCosmeticPayment(paymentId: string) {
 }
 
 export async function setActiveCosmetic(kind: CosmeticKind, itemId: string) {
-  const json = await request('/cosmetics/active', {
-    method: 'PATCH',
-    body: JSON.stringify({ kind, itemId }),
+  entitlementRevision += 1;
+  activeWrites += 1;
+  // Both settings share one server snapshot. Serialize writes so a late frame
+  // response cannot restore a background removed by the next action (or vice versa).
+  const pending = writeTail.then(async () => {
+    const json = await request('/cosmetics/active', {
+      method: 'PATCH',
+      body: JSON.stringify({ kind, itemId }),
+    });
+    return publish(json.entitlements);
+  }).finally(() => {
+    activeWrites -= 1;
+    entitlementRevision += 1;
   });
-  return publish(json.entitlements);
+  writeTail = pending.catch(() => {});
+  return pending;
 }
 
 export function useCosmetics(): CosmeticEntitlements {
@@ -327,6 +359,7 @@ export function applyRemoteFrameChange(userId: string, frameId: string): void {
   userFrameCache.set(id, { frameId: next, loadedAt: Date.now() });
   userFrameRefreshers.get(id)?.received();
   if (String(getCurrentUserId() || '') === id) {
+    entitlementRevision += 1;
     cached = { ...cached, activeFrameId: next };
     listeners.forEach((listener) => listener(cached));
   }

@@ -66,10 +66,12 @@ import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
 import { primeCallNick } from '../utils/callAvatarPrime';
 import { usePiP } from '../src/pip/PiPContext';
-import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent } from '../sockets/socket';
+import { onCallTimeout as onCallTimeoutEvent, onCallIncoming as onCallIncomingEvent, onCallDeclined as onCallDeclinedEvent, setIncomingCallScreenVisible } from '../sockets/socket';
 import { onRequestCloseIncoming, onCloseOutgoingCall, onCallCancelledOnHome, onCallEndedOnHome, onCloseHomeModals, onRequestDirectCall, shouldSkipHomeUiSettle, armHomeUiSettleSkip, clearHomeUiSettleSkip, setPendingWelcomeCallsFilter, setPendingWelcomeChatsFilter } from '../utils/globalEvents';
 import { displayOutgoingCallImmediate, notifyOutgoingCallId, reportEndCallToCallKeep, OUTGOING_CALL_TIMEOUT_MS, clearOutgoingDeclineHandled, isOutgoingDeclineHandled, setupCallKeep, isCallKeepAvailable, setCallMediaHint } from '../utils/callKeep';
 import { terminateCall } from '../utils/terminateCall';
+import { recoverStaleIncomingForRedial } from './home/callStartRecovery';
+import { recordReleaseDiagnostic } from '../utils/releaseDiagnosticBridge';
 import { syncAppBadgeFromMissedCount, dismissMessageNotificationsOnly, getMissedCountByUserFromNative } from '../utils/pushNotifications';
 import {
   LIVI,
@@ -1303,12 +1305,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
   /* ===== Call (outgoing modal) ===== */
   const [calling, setCalling] = useState<{ visible: boolean; friend?: Friend | null; callId?: string | null }>({ visible: false });
+  const incomingCallUiRevisionRef = useRef(0);
   const [incomingCallScreen, setIncomingCallScreenState] = useState<{ visible: boolean; fromUserId: string | null }>(() => {
     const s = getIncomingCallScreenState();
     return { visible: s.visible, fromUserId: s.fromUserId };
   });
   useEffect(() => {
     const off = onIncomingCallScreenChange((visible, fromUserId) => {
+      incomingCallUiRevisionRef.current += 1;
       setIncomingCallScreenState({ visible, fromUserId: fromUserId ?? null });
     });
     return () => off();
@@ -2146,13 +2150,34 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const handleStartDirectCall = useCallback(async (friend: Friend, media: 'audio' | 'video' = 'video') => {
     // Не flush до native UI: setState на входе откладывал displayOutgoing на кадр+.
     const gStart = global as AppRuntimeGlobals;
+    if (Platform.OS === 'android' && (getIncomingCallScreenState().visible || isVideoCallActive())) {
+      const native = NativeModules.LiviAppModule;
+      await recoverStaleIncomingForRedial({
+        readIncoming: () => ({ ...getIncomingCallScreenState(), revision: incomingCallUiRevisionRef.current }),
+        hasStaleActiveFlag: isVideoCallActive,
+        hasLiveCall: () => {
+          const session = gStart.__webrtcSessionRef?.current;
+          const sessionAlive = !!session && (typeof session.isEnded !== 'function' || !session.isEnded());
+          return isPipVisible() || isPipInSystemMode() || pip.pendingSystemPiP || sessionAlive ||
+            callingVisibleRef.current || gStart.__outgoingStartInFlightRef?.current === true ||
+            Number(gStart.__incomingAnswerTransitionRef?.current?.expiresAt || 0) > Date.now();
+        },
+        peekNative: typeof native?.peekOngoingIncomingCallForUi === 'function'
+          ? () => native.peekOngoingIncomingCallForUi() : undefined,
+        clearStale: () => {
+          setIncomingCallScreenVisible(false);
+          forceResetCallBusyRefs({ skipEndedCallback: true });
+          recordReleaseDiagnostic('call_redial_recovered', 'info', { reason: 'stale_incoming_ui' });
+        },
+      });
+    }
     // Активный звонок / in-app|system PiP — не поднимать Outgoing (иначе flash + initiator_busy).
     // Не трогаем обычный cancel→redial: там сессия ещё не live / PiP нет.
     const blockForActiveCall =
       pip.visible ||
       pip.inSystemPiPMode ||
       pip.pendingSystemPiP ||
-      incomingCallScreen.visible ||
+      getIncomingCallScreenState().visible ||
       isDirectCallSessionLive(gStart);
     if (blockForActiveCall) {
       logger.info('[outgoing] blocked start — active call or PiP', {
@@ -2829,6 +2854,9 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       }, OUTGOING_CALL_TIMEOUT_MS);
     } catch (e) {
       const errCode = String((e as { message?: string } | null)?.message ?? e ?? '').trim();
+      recordReleaseDiagnostic('call_start_failed', 'warning', {
+        code: /^[a-z][a-z0-9_]{0,63}$/.test(errCode) ? errCode : 'call_failed', kind: media,
+      });
       logger.warn('[outgoing] handleStartDirectCall failed', { error: errCode, media });
       teardownOutgoingAttemptSubs();
       disposeDirectCallAudioPrewarm('home:outgoing-start-failed');

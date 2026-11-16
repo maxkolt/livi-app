@@ -60,6 +60,23 @@ describe('окно подавления авто-возврата на BT', () =
     clearBtAutoSuppress();
     expect(shouldSuppressBluetoothAutoReconnect('poll_bt')).toBe(false);
   });
+
+  it('a late ICM list gain cannot undo the recorded physical unplug', () => {
+    markBtRemovedFromCycleByUnplug();
+    expect(shouldSuppressBluetoothAutoReconnect('onAudioDeviceChanged_gained_bt')).toBe(true);
+    armBtAutoSuppress(12000);
+    jest.advanceTimersByTime(12001);
+    expect(shouldSuppressBluetoothAutoReconnect('onAudioDeviceChanged_gained_bt')).toBe(true);
+    expect(shouldSuppressBluetoothAutoReconnect('native_bt_wear_acl_connected')).toBe(false);
+    clearBtRemovedFromCycleByUnplug();
+    expect(shouldSuppressBluetoothAutoReconnect('onAudioDeviceChanged_gained_bt')).toBe(false);
+  });
+
+  it('raw SCO rising does not count as a new physical connection during unplug suppression', () => {
+    armBtAutoSuppress(12000);
+    expect(shouldSuppressBluetoothAutoReconnect('headset_poll_sco_audio_rising')).toBe(true);
+    expect(shouldSuppressBluetoothAutoReconnect('native_bt_wear_profile_connected')).toBe(false);
+  });
 });
 
 describe('sticky-окна одевания и reconnect', () => {

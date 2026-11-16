@@ -13,6 +13,7 @@ import { CallScreenChrome } from './CallScreenChrome';
 
 type IncomingAnswerConnectingCoverProps = {
   partnerName: string;
+  partnerUserId?: string;
   partnerAvatarUri?: string;
   statusLine: string;
   moreLabel: string;
@@ -30,6 +31,7 @@ type IncomingAnswerConnectingCoverProps = {
 
 export function IncomingAnswerConnectingCover({
   partnerName,
+  partnerUserId,
   partnerAvatarUri,
   statusLine,
   moreLabel,
@@ -58,6 +60,7 @@ export function IncomingAnswerConnectingCover({
     <View style={styles.root} pointerEvents="auto" nativeID="incoming-answer-connecting-cover">
       <CallScreenChrome
         partnerName={partnerName || '—'}
+        partnerUserId={partnerUserId}
         partnerAvatarUri={partnerAvatarUri}
         statusLine={statusLine}
         statusMuted

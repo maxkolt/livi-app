@@ -7,7 +7,6 @@ import React, { useRef, useState } from 'react';
 import {
   View,
   Text,
-  Image,
   StyleSheet,
   Pressable,
   Platform,
@@ -15,9 +14,8 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { NativeBlurBackdrop, type BackdropSources } from '../../BackdropBlur';
 import { AppOverlay } from '../../AppOverlay';
-import { AvatarGlyph } from '../../AvatarGlyph';
+import AvatarImage from '../../AvatarImage';
 import { StageGradient } from '../../../screens/home/WelcomeStageBackground';
-import { useResolvedImageUri } from '../../../hooks/useResolvedImageUri';
 import { displayAvatarLetter } from '../../../screens/home/friendHelpers';
 import {
   HOME_NAV_TAB_ACTIVE,
@@ -85,6 +83,7 @@ function WeakSignalGlyph() {
 
 type Props = {
   partnerName: string;
+  partnerUserId?: string;
   partnerAvatarUri?: string;
   statusLine: string;
   /** Иконка перечёркнутых палочек + акцентный цвет статуса (слабая связь). */
@@ -133,6 +132,7 @@ type Props = {
 
 export function CallScreenChrome({
   partnerName,
+  partnerUserId,
   partnerAvatarUri,
   statusLine,
   statusWeak = false,
@@ -165,7 +165,6 @@ export function CallScreenChrome({
   encrypted = false,
 }: Props) {
   const [moreOpen, setMoreOpen] = useState(false);
-  const [resolvedUri, ready] = useResolvedImageUri(partnerAvatarUri ?? '');
   const letter = displayAvatarLetter(partnerName);
   const locked = controlsLocked;
   const holdText = typeof holdLine === 'string' ? holdLine.trim() : '';
@@ -211,13 +210,14 @@ export function CallScreenChrome({
 
           <View style={styles.partnerChip} pointerEvents="none">
             <View style={styles.avatarWrap}>
-              {ready && resolvedUri ? (
-                <Image source={{ uri: resolvedUri }} style={styles.avatar} />
-              ) : (
-                <View style={[styles.avatar, styles.avatarFallback]}>
-                  <AvatarGlyph style={styles.avatarLetter}>{letter || '—'}</AvatarGlyph>
-                </View>
-              )}
+              <AvatarImage
+                userId={partnerUserId}
+                uri={partnerAvatarUri}
+                size={54}
+                containerStyle={styles.avatar}
+                fallbackText={letter || '—'}
+                fallbackTextStyle={styles.avatarLetter}
+              />
               <View style={styles.onlineDot} />
             </View>
             <View style={styles.partnerTextCol}>
@@ -618,10 +618,6 @@ const styles = StyleSheet.create({
     height: 54,
     borderRadius: 27,
     backgroundColor: WELCOME_CHROME_BTN_BG,
-  },
-  avatarFallback: {
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   avatarLetter: {
     color: WELCOME_HEADER_TITLE,

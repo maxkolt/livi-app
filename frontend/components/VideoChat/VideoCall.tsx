@@ -7852,6 +7852,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           {showControls ? (
             <CallScreenChrome
               partnerName={partnerDisplayName}
+              partnerUserId={partnerUserId || undefined}
               partnerAvatarUri={partnerAvatarUri}
               statusLine={callChromeStatusLine}
               statusWeak={connectionDegradedUi && !callChromeHoldLine}

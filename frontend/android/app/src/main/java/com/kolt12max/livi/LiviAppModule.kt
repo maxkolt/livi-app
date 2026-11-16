@@ -1492,7 +1492,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
             BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED -> {
               val state =
                 intent.getIntExtra(BluetoothHeadset.EXTRA_STATE, BluetoothHeadset.STATE_AUDIO_DISCONNECTED)
-              val connected = state == BluetoothHeadset.STATE_AUDIO_CONNECTED
+              // CONNECTING is a transition, not an unplug. Publishing false here
+              // makes JS tear down SCO and flash the phone icon while SCO starts.
+              val connected = BluetoothHeadsetAudioState.connectedOrNull(state) ?: return
               bluetoothHeadsetAudioConnected = connected
               Log.i(NAME, "BT headset audio state=$state connected=$connected")
               emitBluetoothHeadsetWearEvent(if (connected) "audio_connected" else "audio_disconnected", connected)

@@ -2,6 +2,7 @@ import {
   BT_SETTLING_WINDOW_MS,
   isBluetoothSettlingWindow,
   isBuiltInRouteCoercible,
+  shouldDeferBluetoothUnplug,
 } from './bluetoothSettling';
 
 const checks = {
@@ -28,6 +29,24 @@ describe('isBuiltInRouteCoercible', () => {
 
   it('откат после снятия гарнитуры тоже не подменяем', () => {
     expect(isBuiltInRouteCoercible('EARPIECE', 'headset_unplug_bt', checks)).toBe(false);
+  });
+});
+
+describe('a lagging native poll during a physical Bluetooth connect', () => {
+  const connecting = {
+    routedOnBluetooth: true, callAudioActive: false, unplugged: false,
+    now: 10_000, lastBluetoothApplyAt: 9_750, wearSticky: true, wearReconnectInFlight: false,
+  };
+  it('keeps the optimistic BT route when ACL precedes the HFP profile', () => {
+    expect(shouldDeferBluetoothUnplug(connecting)).toBe(true);
+    expect(shouldDeferBluetoothUnplug({ ...connecting, callAudioActive: true })).toBe(false);
+  });
+  it('lets a real unplug or a manual builtin choice win even during settling', () => {
+    expect(shouldDeferBluetoothUnplug({ ...connecting, unplugged: true })).toBe(false);
+    expect(shouldDeferBluetoothUnplug({ ...connecting, routedOnBluetooth: false })).toBe(false);
+  });
+  it('allows fallback if Bluetooth never establishes audio within the bounded window', () => {
+    expect(shouldDeferBluetoothUnplug({ ...connecting, now: 20_000, wearSticky: false })).toBe(false);
   });
 });
 

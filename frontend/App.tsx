@@ -482,6 +482,7 @@ function AppContent() {
   const [incomingAnswerCover, setIncomingAnswerCover] = React.useState(false);
   const [incomingAnswerCoverMeta, setIncomingAnswerCoverMeta] = React.useState<{
     partnerName: string;
+    partnerUserId?: string;
     partnerAvatarUri?: string;
   } | null>(null);
   const incomingAnswerCoverClearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -673,7 +674,7 @@ function AppContent() {
       try { clearTimeout(t); } catch {}
     }
     incomingAnswerCoverDisarmTimersRef.current = [];
-    setIncomingAnswerCoverMeta(meta);
+    setIncomingAnswerCoverMeta({ ...meta, partnerUserId: opts?.peerUserId });
     setIncomingAnswerCover(true);
     // Android: нативный фон сцены поверх RN до VideoCall.onLayout.
     // Раньше clear/disarm здесь снимал native до paint → вспышка Home/чатов.
@@ -4767,6 +4768,7 @@ function AppContent() {
           {incomingAnswerCover ? (
             <IncomingAnswerConnectingCover
               partnerName={incomingAnswerCoverMeta?.partnerName || '—'}
+              partnerUserId={incomingAnswerCoverMeta?.partnerUserId}
               partnerAvatarUri={incomingAnswerCoverMeta?.partnerAvatarUri}
               statusLine={t('audioCallConnecting', lang)}
               moreLabel={t('tabMore', lang)}

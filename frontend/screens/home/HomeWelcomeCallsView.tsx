@@ -660,9 +660,8 @@ function HomeWelcomeCallsViewInner({
 
   const startCall = useCallback(
     (friend: Friend) => {
-      if (callActionsLocked) {
-        return;
-      }
+      // Repair stale refs before the central call handler checks the live call.
+      // The render-time lock can be left over from a missed-call notification.
       prepareFriendRowActionTap();
       // Сначала native UI, badge — после (не блокировать redial).
       handleStartFriendCall(friend);
@@ -670,7 +669,6 @@ function HomeWelcomeCallsViewInner({
       if (pickMode) closePick();
     },
     [
-      callActionsLocked,
       clearMissedCallsForFriend,
       closePick,
       handleStartFriendCall,

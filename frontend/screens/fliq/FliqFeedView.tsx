@@ -34,6 +34,8 @@ import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Rect } from 'react-native-svg';
 import type { Lang } from '../../utils/i18n';
+import { useFliqAccessNotice } from './useFliqAccessNotice';
+import { FliqAccessNotice } from './FliqAccessNotice';
 import {
   HOME_BLUR_LIST_SOURCE,
   UI_ACCENT,
@@ -167,6 +169,8 @@ export function FliqFeedView({
   const [viewportH, setViewportH] = useState(0);
   const [topicsOpen, setTopicsOpen] = useState(false);
   const [savedOpen, setSavedOpen] = useState(false);
+  const accessNotice = useFliqAccessNotice(active && !savedOpen);
+  const { onPlaybackIssue: reportAccessIssue, onFirstFrame: reportYoutubeReady } = accessNotice;
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   // prewarming одноразовый: после первого реального входа обычные правила паузы/выгрузки
   // снова действуют и скрытая вкладка не держит WebView бесконечно.
@@ -446,10 +450,13 @@ export function FliqFeedView({
 
   const onPlayError = useCallback(
     (id: string, code: number) => {
+      if (playbackOnRef.current && itemsRef.current[activeIndexRef.current]?.id === id) {
+        void reportAccessIssue(code);
+      }
       if (!FLIQ_UNAVAILABLE_CODES.has(code)) return;
       reportFliqUnplayable(id, code);
     },
-    [],
+    [reportAccessIssue],
   );
 
   /** Звук и пауза из самого плеера считаются, только если это ролик на экране. */
@@ -474,9 +481,10 @@ export function FliqFeedView({
     setHeldId((prev) => (prev === id ? null : prev));
   }, []);
   const onStarted = useCallback((id: string) => {
+    if (itemsRef.current[activeIndexRef.current]?.id === id) reportYoutubeReady();
     setStartedId(id);
     setNeighborsOn(true);
-  }, []);
+  }, [reportYoutubeReady]);
   /** Следующий медиапоток разрешаем только после завершения подгрузки ближайшего. */
   const markChainReady = useCallback((id: string) => {
     setBufferedIds((current) => {
@@ -894,6 +902,7 @@ export function FliqFeedView({
       ) : null}
 
       <FliqTopicsDialog visible={topicsOpen} lang={lang} initial={topics} onDone={onTopicsDone} />
+      <FliqAccessNotice visible={accessNotice.visible} lang={lang} bottom={bottomInset + 12} onClose={accessNotice.dismiss} />
       <FliqShareSheet url={shareUrl} onClose={() => setShareUrl(null)} />
     </BlurListSource>
   );

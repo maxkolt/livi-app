@@ -47,3 +47,18 @@ export function isBluetoothSettlingWindow(input: {
   const now = input.now ?? Date.now();
   return now - input.lastBluetoothApplyAt < BT_SETTLING_WINDOW_MS;
 }
+
+/** A lagging poll is not an unplug while a physical connection is settling.
+ * Explicit unplug and a manual change away from BT always take precedence. */
+export function shouldDeferBluetoothUnplug(input: {
+  routedOnBluetooth: boolean;
+  callAudioActive: boolean;
+  unplugged: boolean;
+  now?: number;
+  lastBluetoothApplyAt: number;
+  wearSticky: boolean;
+  wearReconnectInFlight: boolean;
+}): boolean {
+  return input.routedOnBluetooth && !input.callAudioActive && !input.unplugged &&
+    isBluetoothSettlingWindow(input);
+}

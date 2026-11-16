@@ -163,10 +163,13 @@ export function isBtScoSettleActive(lastBtApplyAt: number, ms = BT_SCO_SETTLE_MS
 
 /** После снятия BT: блокировать sticky reconnect, кроме нового физического connect. */
 export function shouldSuppressBluetoothAutoReconnect(reason: string): boolean {
+  // ICM may report a delayed list gain while the headset is already in its case.
+  // Only a real new native connection can supersede the recorded unplug.
+  if (isBtRemovedFromCycleByUnplug() && /gained|_gain/.test(reason)) return true;
   if (Date.now() >= readBtAutoSuppressUntil()) return false;
   // Только физический connect — не expect_* (иначе кейс → expect → снова BT).
   if (
-    /acl_connected|profile_connected|device_added|a2dp_connected|_rising/.test(reason) &&
+    /acl_connected|profile_connected|device_added|a2dp_connected/.test(reason) &&
     !/expect/.test(reason)
   ) {
     clearBtAutoSuppress();

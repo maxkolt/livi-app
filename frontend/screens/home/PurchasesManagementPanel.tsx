@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import React, { useRef, useState } from 'react';
+import { Alert, Pressable, StyleSheet, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import AdaptiveText from '../../components/AdaptiveText';
 import { cosmeticNameKey, setActiveCosmetic, useCosmetics, type CosmeticKind } from '../../utils/cosmetics';
@@ -62,14 +62,22 @@ export function PurchasesManagementPanel() {
   const lang = useLang((state) => state.lang);
   const cosmetics = useCosmetics();
   const [busyKey, setBusyKey] = useState('');
+  const busyRef = useRef(false);
 
   const toggle = async (kind: CosmeticKind, itemId: string, active: boolean) => {
     const key = `${kind}:${itemId}`;
-    if (busyKey) return;
+    if (busyRef.current) return;
+    busyRef.current = true;
     setBusyKey(key);
     try {
       await setActiveCosmetic(kind, active ? '' : itemId);
+    } catch (error) {
+      Alert.alert(t('errorTitle', lang), t(
+        error instanceof Error && error.message === 'unauthorized' ? 'unauthorizedError' : 'storePaymentOpenFailedText',
+        lang,
+      ));
     } finally {
+      busyRef.current = false;
       setBusyKey('');
     }
   };
@@ -85,6 +93,10 @@ export function PurchasesManagementPanel() {
         <Pressable
           onPress={() => void toggle(kind, itemId, active)}
           disabled={!!busyKey}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel={`${cosmeticName(itemId, lang)}: ${t(active ? 'purchasesRemove' : 'purchasesApply', lang)}`}
+          accessibilityState={{ disabled: !!busyKey, busy: busyKey === `${kind}:${itemId}` }}
           style={({ pressed }) => [styles.action, active && styles.actionActive, pressed && styles.actionPressed]}
         >
           <AdaptiveText style={[styles.actionText, active && styles.actionTextActive]}>

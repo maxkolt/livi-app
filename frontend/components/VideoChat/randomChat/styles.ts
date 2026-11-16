@@ -1,5 +1,6 @@
 import { Platform, Dimensions, StyleSheet } from 'react-native';
 import {
+  HOME_NAV_BG,
   UI_ACCENT_SELECTED,
   UI_SURFACE_RAISED,
   WELCOME_HEADER_TITLE,
@@ -13,6 +14,23 @@ export const styles = StyleSheet.create({
   container: {
     flex: 1,
     // padding не задаём тут: на Android safe-area + базовый отступ считаем во внутреннем контейнере (styles.content)
+  },
+  /** Ниже карточки «Вы» до края экрана — только основной фон, без элементов сцены. */
+  belowLocalCardBackground: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: HOME_NAV_BG,
+  },
+  idleCard: {
+    backgroundColor: 'rgba(27,32,40,0.92)',
+  },
+  flatCardGlass: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: CARD_BASE.borderRadius,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(255,255,255,0.07)',
   },
   content: {
     flex: 1,

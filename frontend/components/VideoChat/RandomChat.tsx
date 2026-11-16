@@ -21,6 +21,7 @@ import {
   BackHandler,
   Easing,
   ActivityIndicator,
+  type LayoutChangeEvent,
   } from 'react-native';
 import { useOrientationLayoutGuard } from '../../hooks/useOrientationLayoutGuard';
 import { OrientationCoverModal } from '../OrientationCoverModal';
@@ -143,6 +144,14 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       paddingRight: insets.right + ANDROID_SCREEN_PADDING,
     } as const;
   }, [insets.bottom, insets.left, insets.right, insets.top]);
+  const [localCardBottom, setLocalCardBottom] = useState(0);
+  const onLocalCardLayout = useCallback(({ nativeEvent: { layout } }: LayoutChangeEvent) => {
+    setLocalCardBottom(layout.y + layout.height);
+  }, []);
+  // Карточка измеряется внутри topSection; верхний отступ учитывает текущую safe-area.
+  const plainBackgroundTop = localCardBottom > 0
+    ? insets.top + (Platform.OS === 'android' ? ANDROID_SCREEN_PADDING : 0) + localCardBottom
+    : 0;
   
   // Состояния
   const [started, setStarted] = useState(false);
@@ -1718,7 +1727,11 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         onLayout={onRootLayout}
         pointerEvents={orientationCovering ? 'none' : 'auto'}
       >
-      <SpatialStageBackground enabled={false} />
+      <SpatialStageBackground enabled={false} plainBelow={plainBackgroundTop} />
+      <View
+        pointerEvents="none"
+        style={[styles.belowLocalCardBackground, { top: plainBackgroundTop }]}
+      />
       <SafeAreaView 
         style={[styles.container, { backgroundColor: 'transparent' }]}
         // Android: safe-area отступы считаем сами через insets, чтобы ничего не перезатиралось стилями
@@ -1730,11 +1743,19 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         >
         {/* Карточка "Собеседник" — ref для модерации (проверяем партнёра, не себя) */}
         <View
-          style={isLandscape ? styles.cardLandscape : styles.card}
+          style={[
+            isLandscape ? styles.cardLandscape : styles.card,
+            (!started || isInactiveState) && styles.idleCard,
+          ]}
           ref={remoteModerationTargetRef}
           collapsable={false}
         >
-          <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
+          {started && !isInactiveState && (
+            <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
+          )}
+          {(!started || isInactiveState) && (
+            <View pointerEvents="none" style={styles.flatCardGlass} />
+          )}
           {(() => {
             // КРИТИЧНО: Если поиск остановлен (started=false), всегда показываем текст "Собеседник"
             if (!started) {
@@ -1939,10 +1960,19 @@ const RandomChat: React.FC<Props> = ({ route }) => {
         
         {/* Карточка "Вы" */}
         <View
-          style={isLandscape ? styles.cardLandscape : styles.card}
+          style={[
+            isLandscape ? styles.cardLandscape : styles.card,
+            (!started || isInactiveState) && styles.idleCard,
+          ]}
+          onLayout={onLocalCardLayout}
           collapsable={false}
         >
-          <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
+          {started && !isInactiveState && (
+            <SpatialGlass sheen={false} radius={CARD_BASE.borderRadius} tint={CARD_GLASS_TINT} fallbackColor={CARD_BASE.backgroundColor} />
+          )}
+          {(!started || isInactiveState) && (
+            <View pointerEvents="none" style={styles.flatCardGlass} />
+          )}
           {(() => {
             // КРИТИЧНО: Если поиск не начат, всегда показываем "Вы"
             if (!started) {

@@ -5,6 +5,7 @@ import type { Lang } from '../../utils/i18n';
 type Table = Record<string, string>;
 
 const ru: Table = {
+  youtubeAccessNotice: 'В вашей стране или сети доступ к YouTube Shorts может быть ограничен. Для продолжения просмотра включите VPN.',
   play: 'Продолжить воспроизведение',
   pause: 'Приостановить воспроизведение',
   soundOn: 'Включить звук',
@@ -55,6 +56,7 @@ const ru: Table = {
 };
 
 const en: Table = {
+  youtubeAccessNotice: 'Access to YouTube Shorts may be restricted in your country or network. Turn on a VPN to continue watching.',
   play: 'Resume playback',
   pause: 'Pause playback',
   soundOn: 'Sound on',

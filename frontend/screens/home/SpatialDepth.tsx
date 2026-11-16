@@ -13,7 +13,7 @@ import { HOME_NAV_BG } from './constants';
  */
 const NativeSpatialBackground =
   Platform.OS === 'android' && UIManager.hasViewManagerConfig('LiviSpatialBackground')
-    ? requireNativeComponentOnce<ViewProps & { active: boolean; clearBottomHeight?: number }>('LiviSpatialBackground')
+    ? requireNativeComponentOnce<ViewProps & { active: boolean; clearBottomHeight?: number; plainBelow?: number }>('LiviSpatialBackground')
     : null;
 
 const NativeSpatialGlass =
@@ -30,10 +30,12 @@ export const SPATIAL_GLASS_AVAILABLE = !!NativeSpatialGlass;
  * Дальний слой главного экрана. Датчик работает, только пока экран в фокусе и
  * enabled (на вкладке с видео во весь экран сцены не видно — незачем).
  */
-export function SpatialStageBackground({ enabled = true, clearBottomHeight = 0 }: {
+export function SpatialStageBackground({ enabled = true, clearBottomHeight = 0, plainBelow = -1 }: {
   enabled?: boolean;
   /** За нижней навигацией рисуются только фон и полоса сот. */
   clearBottomHeight?: number;
+  /** Ниже этой координаты — сплошной фон, в том числе под стеклом; -1 — полная сцена. */
+  plainBelow?: number;
 }) {
   const focused = useIsFocused();
   if (!NativeSpatialBackground) {
@@ -45,6 +47,7 @@ export function SpatialStageBackground({ enabled = true, clearBottomHeight = 0 }
       style={StyleSheet.absoluteFill}
       active={focused && enabled}
       clearBottomHeight={clearBottomHeight}
+      plainBelow={plainBelow}
     />
   );
 }
