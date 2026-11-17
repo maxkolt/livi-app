@@ -1052,6 +1052,14 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
         private const val PI_REQ_OPEN_UNREAD_CHAT = 7102
         const val ACTION_OPEN_MISSED_CALLS = "com.kolt12max.livi.OPEN_MISSED_CALLS"
         const val ACTION_OPEN_UNREAD_CHAT = "com.kolt12max.livi.OPEN_UNREAD_CHAT"
+
+        private fun notificationHomeLaunchOptions(context: Context): android.os.Bundle {
+            val options = android.app.ActivityOptions.makeCustomAnimation(context, 0, 0)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                options.setSplashScreenStyle(android.window.SplashScreen.SPLASH_SCREEN_STYLE_ICON)
+            }
+            return options.toBundle()
+        }
         /** База для ID уведомлений о сообщениях (один ID на чат). Далеко от missed-base и summary 2001/2002. */
         const val NOTIFICATION_ID_MESSAGE_BASE = 52000
         /**
@@ -1187,7 +1195,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val body = AppLocale.str(context, R.string.summary_missed_calls_title)
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 action = ACTION_OPEN_MISSED_CALLS
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 putExtra(MainActivity.EXTRA_OPEN_TAB_FRIENDS, true)
             }
             val contentPending = PendingIntent.getActivity(
@@ -1195,6 +1203,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PI_REQ_OPEN_MISSED_CALLS,
                 contentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                notificationHomeLaunchOptions(context),
             )
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_menu_call)
             if (!allowAlert) {
@@ -1318,7 +1327,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
             val safeBody = body.trim().ifEmpty { AppLocale.str(context, R.string.notification_new_message) }
             val contentIntent = Intent(context, MainActivity::class.java).apply {
                 action = ACTION_OPEN_UNREAD_CHAT
-                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_NO_ANIMATION)
                 putExtra(MainActivity.EXTRA_OPEN_WELCOME_CHAT, true)
             }
             val contentPending = PendingIntent.getActivity(
@@ -1326,6 +1335,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 PI_REQ_OPEN_UNREAD_CHAT,
                 contentIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                notificationHomeLaunchOptions(context),
             )
             val smallIconRes = getSafeSmallIconRes(context, android.R.drawable.ic_dialog_info)
             val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager

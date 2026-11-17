@@ -24,20 +24,25 @@ export function notificationHomeTab(params?: HomeRouteParams) {
 type NotificationHomeRequest = { id: number; destination: NotificationHomeDestination };
 let request: NotificationHomeRequest | null = null;
 let requestId = 0;
+let stackTransitionRequestId: number | null = null;
 const listeners = new Set<() => void>();
 export const getNotificationHomeRequest = () => request;
+export const getNotificationHomeTabSnapshot = () => notificationHomeTab(notificationHomeParams(request?.destination));
+export const getNotificationStackTransition = () => stackTransitionRequestId !== null;
 export function subscribeNotificationHomeRequest(listener: () => void) {
   listeners.add(listener); return () => { listeners.delete(listener); };
 }
 /** Publish the destination before the stack changes, including an already mounted Home. */
-export function prepareNotificationHome(destination: NotificationHomeDestination) {
-  request = { id: ++requestId, destination }; listeners.forEach(listener => listener());
+export function prepareNotificationHome(destination: NotificationHomeDestination, stackTransition = true) {
+  request = { id: ++requestId, destination };
+  stackTransitionRequestId = stackTransition ? request.id : null;
+  listeners.forEach(listener => listener());
   return request.id;
 }
 /** A late frame from an older tap cannot clear a more recent destination. */
 export function completeNotificationHome(id: number) {
   if (request?.id !== id) return;
-  request = null; listeners.forEach(listener => listener());
+  request = null; stackTransitionRequestId = null; listeners.forEach(listener => listener());
 }
 
 export function isNotificationHomeDestination(value: unknown): value is NotificationHomeDestination {

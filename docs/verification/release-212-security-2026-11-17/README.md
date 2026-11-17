@@ -1,7 +1,7 @@
 # Release 212: security, Legendary and device verification
 
 Android versionCode is 212 in app.json and Gradle; versionName remains 1.1.22.
-The user will build the AAB. No completed AAB/APK 212 is claimed. An earlier packaging attempt reached R8 and failed because the Mac ran out of disk space; generated intermediate files were cleaned. The existing old AAB must not be uploaded as 212.
+The user will build the AAB. Test APK 212 was explicitly authorized and installed over the existing com.kolt12max.livi.dev package with the same debug signing key and preserved data. The standalone test APK embeds production Hermes JavaScript and runs without Metro/developer support. Its debuggable flag, dev package, debug signing and disabled minification are local QA overrides in a temporary Gradle init script outside the repository; they are not publication settings. No new AAB is claimed.
 
 ## User-visible changes
 
@@ -29,7 +29,7 @@ Legacy sessions cannot delete the account or replace the chat ownership key befo
 ## Verification
 
 - Backend: 37 suites / 301 tests, including isolated real MongoDB ownership/migration cases. Production data was not used for integration tests.
-- Frontend: 135 suites / 1332 tests.
+- Frontend: 136 suites / 1339 tests.
 - TypeScript, ESLint and backend compilation pass.
 - Android production Hermes/asset export passes. No active backend environment secret was found in the generated bundle.
 - npm audit: backend 0 findings; frontend 20 moderate, 0 high/critical. Remaining findings are transitive Expo/toolchain dependencies; no forced Expo SDK upgrade was made.
@@ -38,9 +38,9 @@ Legacy sessions cannot delete the account or replace the chat ownership key befo
 
 ## Physical device evidence and limits
 
-Samsung A35 SM-A356E, existing dev client with current JavaScript, portrait, connected over USB. The feedback form was shown with a temporary UI-only new-feedback fixture; POST submission was blocked, the existing real feedback and owned background were restored untouched. The keyboard was visible and the enabled submit button stayed entirely above it. See feedback-keyboard.png.
+Samsung A35 SM-A356E, portrait, connected over USB. The original Legendary/feedback checks used the dev client; the final notification checks use a standalone APK 212 with embedded production JavaScript. The feedback form was shown with a temporary UI-only new-feedback fixture; POST submission was blocked, the existing real feedback and owned background were restored untouched. The keyboard was visible and the enabled submit button stayed entirely above it. See feedback-keyboard.png.
 
-Search crown roundness/opening was inspected on the device. The clean-launch carousel run used the same living app process for background left/right and frame left/right gestures; settled titles matched the central cards (frame example: Fire to Aurora and back). See carousel-frame-left.png and carousel-frame-right.png. Carousel validation is performed from a clean launch after source edits; Fast Refresh produced a pre-existing native Skia fromURI/JsiPromises crash while tearing down a runtime. This is recorded, not counted as a passing stability run. Release binary/device acceptance still requires the user's newly built 212 AAB/APK.
+Search crown roundness/opening was inspected on the device. The clean-launch carousel run used the same living app process for background left/right and frame left/right gestures; settled titles matched the central cards (frame example: Fire to Aurora and back). See carousel-frame-left.png and carousel-frame-right.png. Carousel validation is performed from a clean launch after source edits; Fast Refresh produced a pre-existing native Skia fromURI/JsiPromises crash while tearing down a runtime. This is recorded, not counted as a passing stability run. The final notification follow-up is also checked in a standalone APK; the user's eventual minified Play AAB is a separate artifact.
 
 Uploaded media remains accessible by its media URL; this is not attachment end-to-end encryption. Existing media links were preserved. This review and the passing tests do not guarantee an application cannot be compromised. Signing keys, live .env values and service accounts are not included in Git or the deployment archive.
 
@@ -51,13 +51,15 @@ Deployed as an atomic, manifest-verified release with fresh production dependenc
 
 ## Notification entry follow-up
 
-User-reported acceptance defects were reproduced: a warm Missed transition could expose Chats, and a cold entry had a solid dark cover. Preliminary recordings are retained only under /tmp/livi-212-notifications, because they include private chat previews; they are not committed or presented as successful final acceptance.
+The final design uses the existing Home panes and navigation bar. There are no additional Unread/Missed headings, native destination cards or intermediate notification pages. On an already focused Home, Unread/Missed changes the pane and filter in place instead of dispatching another Home stack navigation. Other screens still navigate to the existing Home route with pop:true and notification-only animation suppression. Modals, including Legendary, close in the same React batch.
 
-The delivery pump now handles the native destination immediately and ignores an older asynchronous resume result after a newer tap. Unread/Missed filter snapshots and a shared destination request are published before navigation. The existing Home route is reused with pop:true; only the notification transition disables fade, and manual tab selection cancels its temporary override. Legendary closes when a notification opens Home. The 750 ms dark entry cover was removed: the destination's header/filter render directly, with local loading state while data arrives. Calls no longer claims the history is empty before its initial load finishes.
+Pane visibility, Search glass and the dock subscribe directly to the destination snapshot, so the requested existing interface paints before the large Home shell reconciles its data hooks. Calls is mounted alongside the other primary shells. The shell catches up after the first frames; Fliq and live-call transitions keep immediate shell updates. Manual tabs and Back cancel a pending notification selection. The delivery pump rejects a stale asynchronous resume result after a newer tap and keeps cold-start requests until navigation is ready.
 
-Android delivers notification destinations before the React/Expo onNewIntent delegate and emits directly when already on the UI thread, avoiding another UI-queue turn. Initial notification constants are still set before React creation. Native compilation and :app:testDebugUnitTest passed; 4 JVM suites / 12 tests, no failures (PiP, Bluetooth/audio policy and network probing). JavaScript typecheck/lint and 135 suites / 1332 tests pass, including the stale resume result regression. Production export is rerun after the final changes.
+A temporary instrumented APK measured the notification pane commit at approximately 59 ms after activityNewIntent, compared with a shell-first commit around 211 ms in an earlier intermediate run. These are individual trace samples, not a latency SLA or a comparison with other messengers. The traces identified a Home repaint caused by transient Activity pause/resume before destination delivery. Non-media Home activity changes now coalesce on the next timer turn; Fliq, outgoing overlays and active calls update immediately. Regression tests run the actual AppState callback and cover retained playback, pause/resume coalescing, outgoing overlays, stale timers and disposal.
 
-Final device acceptance for the new native handler requires an updated dev APK. AAB generation remains with the user. The previous installed dev client cannot establish that the changed native ordering fixes the first displayed frame.
+Native notification PendingIntents disable the Activity launch animation. Cold notification entry publishes the destination before React starts, keeps the Android splash theme/icon, explicitly requests the icon style on Android 13+, and retains the standard icon splash until navigation has painted its first frames. An iconless system surface is released instead of being held over the JS startup artwork. Older Android keeps the existing branded window fallback and the existing JS font-loading artwork. There is no solid 750 ms cover. The [Android splash lifecycle documentation](https://developer.android.com/develop/ui/views/launch/splash-screen/) and [ActivityOptions splash style API](https://developer.android.com/reference/android/app/ActivityOptions) were checked. Calls uses a local loading state until history is ready. Fonts use the existing SplashLoader instead of returning null while loading.
+
+Final frontend typecheck/lint and 136 suites / 1339 tests pass. Native compilation and 4 JVM suites / 12 tests pass. Temporary synchronous profiling methods and trace calls are removed from the final source and APK. Final device scenario results are recorded separately after the actual first-frame review; preliminary or failed recordings are not passing evidence. Videos/XML remain private under /tmp/livi-212-notifications and are not committed because they contain personal chat/call previews.
 
 ## Production checks
 
@@ -68,12 +70,12 @@ From the authenticated A35 profile, cosmetics returned 200; a wrong secret retur
 A production-pepper transfer to local .env was rejected by automatic approval review and was not performed. Instead, development without a production pepper writes an explicit unversioned compatibility hash that production verifies and upgrades only with the original secret. Production v1 hashes still never use the development fallback. The compatibility path is covered by an isolated regression test; the production pepper remains on the server.
 
 
-The remaining cold blank interval was traced to the root font gate rendering null before AppContent. It now paints the existing branded SplashLoader while fonts load, without changing normal Home's font-before-text behavior. Notification cold starts also get a native branded window background before the JS runtime exists; it is restored to the normal stage after navigation has drawn its initial frames. Existing orientation/PiP window resets retain that startup background only for the cold notification lifetime. An already running React context does not enter this native startup path.
+
 
 Production negative Socket.IO check from the A35: a connection supplied only the real installation identifier and a wrong secret. whoami stayed unbound, reauth was rejected and zero protected presence/message/missed events were received. A second isolated-Mongo run with a synthetic production pepper passed both ownership/migration suites, 13 tests. No production pepper was read or copied for those tests.
 
 
-Final native build evidence: 606 Gradle tasks, successful in 39 seconds. No APK or AAB packaging/install was performed. The user was asked whether an updated debug APK may be built/installed on A35 for final native acceptance; that preference has not yet been answered. The old dev APK remains version 211. The new production source is configured for versionCode 212.
+
 
 
 The production dependency preparation exposed Multer 1.x's vendor deprecation/security warning even though npm audit returned zero findings. The [maintainer advisory](https://github.com/expressjs/multer/security/advisories/GHSA-wc9g-mqfw-jrwm) and [Multer 2.5 release](https://github.com/expressjs/multer/releases/tag/v2.5.0) were checked; multipart parsing was upgraded to 2.5.0 with compatible types. Five real HTTP tests exercise disk upload byte preservation, random URL format, authentication, MIME rejection, malformed multipart and crafted field-name handling while keeping the next request operational. The complete backend run now passes 37 suites / 301 tests. Test uploads are removed after the isolated test server closes.
@@ -84,4 +86,17 @@ Release b7e4f3e11ae4f4a2cd7975882aa3b8e2a7bd108b was deployed at 2026-11-16 22:5
 
 The existing A35 client uploaded a dedicated 68-byte PNG through the actual authenticated multipart endpoint, receiving HTTP 200 and a 48-hex random filename. The server file's SHA256 matched the fixture before deleting that exact QA upload; the device fixture was also removed. No chat message or profile media was created. The final server passed the same authenticated/negative HTTP and Socket.IO checks documented above; feedbackSubmitted=true and one owned background were preserved.
 
-Server environment permissions are 0600. INSTALL_AUTH_MODE remains legacy-migration and HTTP_INSTALL_SECRET_REQUIRED remains 0, as explicitly requested. The production pepper remains on the server. The Android notification source and tests are pushed, but final native first-frame acceptance on A35 is still pending permission to build/install a test APK; no packaging or install is implied by this server deployment.
+Server environment permissions are 0600. INSTALL_AUTH_MODE remains legacy-migration and HTTP_INSTALL_SECRET_REQUIRED remains 0, as explicitly requested. The production pepper remains on the server. The Android notification source and tests are pushed, and final native first-frame checks use the separately authorized local QA APK. This server deployment does not publish an Android artifact.
+
+
+## Final A35 notification acceptance
+
+The final standalone APK SHA256 is 24d4b6f341ab0c73ca870465ca25c09412c1963d672c0ca4890eea60a1d43879. Fresh UI hierarchy assertions passed for both Unread/Missed with Home open and after process death; both cold cases verified pidof empty immediately before the notification tap. An earlier attempt was rejected by that guard when the background service restarted the process before the tap; it was repeated with the kill/check immediately before tapping, not counted as a passing cold run.
+
+Extracted-frame review confirmed the requested existing pane/filter while the shade closed in the warm cases, and normal LiVi-branded startup followed by the requested pane in the cold cases. No additional destination headings/cards are present. Android's ordinary window launch animation remains. Frame selection uses recording PTS; those values are not a wall-clock latency benchmark. Optional host Vision OCR failed and was not used as an acceptance gate.
+
+Back returned to Search; Friends, Chats, Calls, Profile, Fliq and Search were entered and left. Fliq was checked for navigation only, not playback/audibility. The round Search crown opened Legendary in production JavaScript. Background and frame carousels swiped in both directions and returned to Neon/Fire; the rewards dialog still showed the existing submitted feedback/gift. Back closed both dialogs. No purchase, apply, delete, review submission or invitation action was performed in this final run.
+
+The separate QA notification-generator package and task recordings/XML on public device storage were removed. The final LiVi Dev APK remains installed with data preserved. Private local recordings remain under a mode-0700 temporary directory and are not in Git. Structured, non-personal results are in notification-device-results.json. This run uses local QA notifications with the native production actions/options; FCM delivery and VPN routing are not newly certified.
+
+The follow-up changes no backend files. Production remains at b7e4f3e11ae4f4a2cd7975882aa3b8e2a7bd108b; public health was rechecked with Mongo=1, Redis=ready, adapter=true, service active and NRestarts=0. No additional server restart is needed for the client-only changes.

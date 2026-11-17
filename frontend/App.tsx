@@ -1,6 +1,6 @@
 import type { AppRuntimeGlobals } from './utils/appRuntimeTypes';
 import type { PushNotificationData } from './utils/notificationTypes';
-import { notificationHomeParams, getNotificationHomeRequest, subscribeNotificationHomeRequest, createNotificationHomeDelivery } from './utils/notificationHome';
+import { notificationHomeParams, getNotificationHomeRequest, getNotificationStackTransition, subscribeNotificationHomeRequest, createNotificationHomeDelivery } from './utils/notificationHome';
 // App.tsx
 import "react-native-gesture-handler";
 import React from "react";
@@ -236,6 +236,24 @@ if (__DEV__) {
 // Регистрация LiveKit globals — в index.tsx до загрузки App (избегаем stale module id при Fast Refresh).
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
+
+// A notification changes stack animation, not the application root. Subscribing
+// AppContent here used to reconcile all its providers/overlays before Home could
+// paint the destination while the notification shade was closing.
+function NotificationAwareStack({ children }: { children: React.ReactNode }) {
+  const notification = React.useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationStackTransition, getNotificationStackTransition);
+  return (
+    <Stack.Navigator screenOptions={{
+      headerShown: false,
+      contentStyle: { backgroundColor: WELCOME_STAGE_BG },
+      animation: notification ? 'none' : 'fade',
+      animationDuration: notification ? 0 : 120,
+      detachInactiveScreens: false,
+    } as React.ComponentProps<typeof Stack.Navigator>['screenOptions']}>
+      {children}
+    </Stack.Navigator>
+  );
+}
 const navRef = createNavigationContainerRef<RootStackParamList>();
 // Экспортируем ссылку глобально для простого доступа из модулей без хука
 // (безопасно: используется только для navigate на Home при разрыве вызова)
@@ -454,7 +472,6 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 (global as AppRuntimeGlobals).__cycleAudioRouteRef = { current: null as (() => void) | null };
 
 function AppContent() {
-  const notificationHomeRequest = React.useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeRequest, getNotificationHomeRequest);
   const [initialNotificationParams] = React.useState(() => {
     const params = notificationHomeParams(NativeModules.LiviAppModule?.initialNotificationDestination || getNotificationHomeRequest()?.destination);
     if (params?.openWelcomeChatUnread) setPendingWelcomeChatsFilter('unread');
@@ -4698,19 +4715,7 @@ function AppContent() {
             }
           }}
         >
-          <Stack.Navigator screenOptions={{
-            headerShown: false,
-            // Непрозрачный фон: Home остаётся под верхним экраном (detachInactiveScreens: false),
-            // а transparent contentStyle даёт мелькание Home/вкладок при сворачивании и app-switcher.
-            contentStyle: {
-              backgroundColor: WELCOME_STAGE_BG,
-            },
-            animation: notificationHomeRequest ? 'none' : 'fade',
-            animationDuration: notificationHomeRequest ? 0 : 120,
-            // Не размонтировать неактивные экраны — при закрытии VideoCall Home остаётся смонтированным, state (аватар и т.д.) сохраняется, нет мерцания буквы.
-            // Типы native-stack не включают detachInactiveScreens, но опция поддерживается в рантайме.
-            detachInactiveScreens: false,
-          } as React.ComponentProps<typeof Stack.Navigator>['screenOptions']}>
+          <NotificationAwareStack>
               <Stack.Screen name="Home" component={HomeScreen} initialParams={initialNotificationParams} />
               <Stack.Screen
                 name="RandomChat"
@@ -4756,7 +4761,7 @@ function AppContent() {
                   },
                 }}
               />
-            </Stack.Navigator>
+            </NotificationAwareStack>
           </NavigationContainer>
         </BlurListSource>
 

@@ -1,10 +1,11 @@
-import { notificationHomeParams, notificationHomeTab, getNotificationHomeRequest, prepareNotificationHome, completeNotificationHome, subscribeNotificationHomeRequest } from './notificationHome';
+import { notificationHomeParams, notificationHomeTab, getNotificationHomeRequest, getNotificationHomeTabSnapshot, prepareNotificationHome, completeNotificationHome, subscribeNotificationHomeRequest } from './notificationHome';
 afterEach(() => { const pending = getNotificationHomeRequest(); if (pending) completeNotificationHome(pending.id); });
 it.each([['unread', 'chat'], ['missed', 'calls']] as const)('publishes %s before navigation so the existing pane can prepare before paint', (destination, tab) => {
   let observed: string | undefined;
   const off = subscribeNotificationHomeRequest(() => { observed = notificationHomeTab(notificationHomeParams(getNotificationHomeRequest()?.destination)); });
   const id = prepareNotificationHome(destination);
   expect(observed).toBe(tab); expect(getNotificationHomeRequest()?.id).toBe(id);
+  expect(getNotificationHomeTabSnapshot()).toBe(tab);
   completeNotificationHome(id); expect(observed).toBeUndefined(); off();
 });
 it('does not clear a newer tap when an older destination finishes rendering', () => {
@@ -15,6 +16,7 @@ it('does not clear a newer tap when an older destination finishes rendering', ()
 it('leaves ordinary manual navigation in control after the notification destination has painted', () => {
   const id = prepareNotificationHome('missed'); completeNotificationHome(id);
   expect(getNotificationHomeRequest()).toBeNull(); expect(notificationHomeTab(undefined)).toBeUndefined();
+  expect(getNotificationHomeTabSnapshot()).toBeUndefined();
 });
 
 import { createNotificationHomeDelivery } from './notificationHome';

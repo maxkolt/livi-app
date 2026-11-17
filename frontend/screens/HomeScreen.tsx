@@ -1,6 +1,7 @@
 import { setVideoCallActive, setPipVisible, setPipInSystemMode, setCallEndedFromPiPNoOpen, isVideoCallActive, isPipVisible, isPipInSystemMode } from '../utils/callRuntime';
 import type { AppRuntimeGlobals } from '../utils/appRuntimeTypes';
-import { notificationHomeTab, notificationHomeParams, getNotificationHomeRequest, subscribeNotificationHomeRequest, completeNotificationHome } from '../utils/notificationHome';
+import { notificationHomeTab, notificationHomeParams, getNotificationHomeRequest, getNotificationHomeTabSnapshot, subscribeNotificationHomeRequest, completeNotificationHome } from '../utils/notificationHome';
+import { createHomeActivityState } from '../utils/homeActivityState';
 // screens/HomeScreen.tsx
 import React, { useEffect, useLayoutEffect, useState, useCallback, useMemo, useRef, useSyncExternalStore, startTransition } from 'react';
 import {
@@ -20,6 +21,7 @@ import {
   Linking,
   Share,
   Vibration,
+  unstable_batchedUpdates,
 } from 'react-native';
 import { showAppAlert } from '../components/AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
@@ -410,6 +412,15 @@ function isCallStartNetworkError(errCode: string): boolean {
   return /abort|network|timeout|timed out|offline|failed to fetch|disconnected|http_5\d\d/i.test(errCode);
 }
 
+function NotificationSearchGlass(props: React.ComponentProps<typeof WelcomeGlassTop>) {
+  const tab = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeTabSnapshot, getNotificationHomeTabSnapshot);
+  return tab ? null : <WelcomeGlassTop {...props} />;
+}
+function NotificationGlassDock(props: React.ComponentProps<typeof WelcomeGlassDock>) {
+  const tab = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeTabSnapshot, getNotificationHomeTabSnapshot);
+  return <WelcomeGlassDock {...props} listSourceId={tab ? HOME_BLUR_LIST_SOURCE[tab] : props.listSourceId} />;
+}
+
 export default function HomeScreen({ navigation, route }: Props & { route?: { params?: HomeRouteParams } }) {
   // Корень Home меряем сами и раздаём через HomeLayoutProvider: тогда
   // ориентация и размеры у всех потребителей меняются в одном кадре.
@@ -490,12 +501,39 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     () => ({ paddingTop: homeInsets.top, paddingBottom: tabBarH }),
     [homeInsets.top, tabBarH],
   );
-  const notificationHomeRequest = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeRequest, getNotificationHomeRequest);
+  const notificationHomeRequest = getNotificationHomeRequest();
+  const [, renderNotificationState] = useState(0);
   const requestedHomeTab = notificationHomeRequest ? notificationHomeTab(notificationHomeParams(notificationHomeRequest.destination)) : undefined;
   const [selectedWelcomeTab, setWelcomeActiveTab] = useState<WelcomeTabId>(() => requestedHomeTab || notificationHomeTab(route?.params) || 'search');
   const welcomeActiveTab = requestedHomeTab || selectedWelcomeTab;
   const welcomeActiveTabRef = useRef<WelcomeTabId>('search');
   welcomeActiveTabRef.current = welcomeActiveTab;
+  // The pane and dock subscribe independently and paint first. Updating the large
+  // Home shell after those frames keeps its data hooks off the notification tap.
+  useEffect(() => {
+    let first: number | undefined, second: number | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const cancel = () => {
+      if (first !== undefined) cancelAnimationFrame(first);
+      if (second !== undefined) cancelAnimationFrame(second);
+      if (timer !== undefined) clearTimeout(timer);
+    };
+    const update = () => {
+      cancel();
+      if (!getNotificationHomeRequest() || welcomeActiveTabRef.current === 'fliq' || isVideoCallActive()) {
+        renderNotificationState(value => value + 1);
+        return;
+      }
+      first = requestAnimationFrame(() => {
+        second = requestAnimationFrame(() => {
+          timer = setTimeout(() => renderNotificationState(value => value + 1), 0);
+        });
+      });
+    };
+    const off = subscribeNotificationHomeRequest(update);
+    return () => { cancel(); off(); };
+  }, []);
+
   useLayoutEffect(() => {
     const g = global as AppRuntimeGlobals;
     const trace = g.__welcomeTabPerfTrace as
@@ -564,7 +602,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * hundreds of milliseconds. The less frequent panes remain lazy.
    */
   const [mountedWelcomeTabs, setMountedWelcomeTabs] = useState<ReadonlySet<WelcomeTabId>>(
-    () => new Set<WelcomeTabId>(['search', 'friends', 'chat', notificationHomeTab(route?.params) || 'search']),
+    () => new Set<WelcomeTabId>(['search', 'friends', 'chat', 'calls', notificationHomeTab(route?.params) || 'search']),
   );
   const ensureWelcomeTabMounted = useCallback((tabId: WelcomeTabId) => {
     setMountedWelcomeTabs((prev) => {
@@ -576,13 +614,17 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, []);
   useLayoutEffect(() => {
     if (!notificationHomeRequest || !requestedHomeTab) return;
+    setSplashDismissed(true);
     setWelcomeActiveTab(requestedHomeTab);
     setWelcomeSettledTab(requestedHomeTab);
     ensureWelcomeTabMounted(requestedHomeTab);
     // Hold the notification-only animation override until the target has painted.
     let secondFrame: number | undefined;
     const firstFrame = requestAnimationFrame(() => {
-      secondFrame = requestAnimationFrame(() => completeNotificationHome(notificationHomeRequest.id));
+      secondFrame = requestAnimationFrame(() => {
+        if (getNotificationHomeRequest()?.id !== notificationHomeRequest.id) return;
+        completeNotificationHome(notificationHomeRequest.id);
+      });
     });
     return () => { cancelAnimationFrame(firstFrame); if (secondFrame != null) cancelAnimationFrame(secondFrame); };
   }, [notificationHomeRequest, requestedHomeTab, ensureWelcomeTabMounted]);
@@ -3802,6 +3844,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   useEffect(() => {
     const resumeTimers = new Set<ReturnType<typeof setTimeout>>();
     const resumeInteractions = new Set<{ cancel?: () => void }>();
+    const activityState = createHomeActivityState(next => setAppIsActive(prev => prev === next ? prev : next));
 
     const sub = AppState.addEventListener('change', (state) => {
       const wasBg = /inactive|background/.test(appStateRef.current);
@@ -3842,7 +3885,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           callingVisibleRef.current === true;
         const nextActive =
           state === 'active' || (outgoingCoversMain && /inactive|background/.test(state));
-        setAppIsActive((prev) => (prev === nextActive ? prev : nextActive));
+        activityState.update(nextActive, welcomeActiveTabRef.current === 'fliq' || outgoingCoversMain || activeVideoCall);
       } catch {
         try { setAppIsActive(state === 'active'); } catch {}
       }
@@ -3977,6 +4020,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     return () => {
       sub.remove();
       resumeTimers.forEach((timer) => clearTimeout(timer));
+      activityState.dispose();
       resumeInteractions.forEach((handle) => handle.cancel?.());
     };
   }, [syncUserData, ensureIdentity, loadFriends, navigation, syncSelfPresenceOnlineIfIdle, refreshBadgesOnAppResume]);
@@ -5469,7 +5513,11 @@ const handleClearNick = useCallback(async () => {
   // Android Back на Home: вкладка → Search → в фон (частые нажатия не finish Activity).
   // Profile nested UI обрабатывает свой Back; hub зовёт onBackFromHub → Search.
   const goWelcomeSearchFromBack = useCallback(() => {
-    setWelcomeActiveTab('search');
+    unstable_batchedUpdates(() => {
+      const pending = getNotificationHomeRequest();
+      if (pending) completeNotificationHome(pending.id);
+      setWelcomeActiveTab('search');
+    });
     return true;
   }, []);
 
@@ -5481,17 +5529,14 @@ const handleClearNick = useCallback(async () => {
           if (callingVisibleRef.current) return false;
           if (incomingCallScreen.visible) return false;
         } catch {}
-        const tab = welcomeActiveTabRef.current;
+        const tab = getNotificationHomeTabSnapshot() || welcomeActiveTabRef.current;
         // Profile: пусть сначала отработает вложенный BackHandler.
         if (tab === 'profile') return false;
-        if (tab !== 'search') {
-          setWelcomeActiveTab('search');
-          return true;
-        }
+        if (tab !== 'search') return goWelcomeSearchFromBack();
         return minimizeAndroidAppToBackground();
       });
       return () => sub.remove();
-    }, [incomingCallScreen.visible]),
+    }, [incomingCallScreen.visible, goWelcomeSearchFromBack]),
   );
 
   const handleProfileDeleteAvatar = useCallback(() => {
@@ -5779,12 +5824,12 @@ const handleClearNick = useCallback(async () => {
 
       {/* Верхнее стекло «Поиска»: под блоком «Онлайн», от верхнего края экрана. */}
       {showSearchWelcome && searchTopBlockBottom != null ? (
-        <WelcomeGlassTop height={homeInsets.top + searchTopBlockBottom + GLASS_SEGMENT_PAD.phone} />
+        <NotificationSearchGlass height={homeInsets.top + searchTopBlockBottom + GLASS_SEGMENT_PAD.phone} />
       ) : null}
       {/* Интерфейс — плоскость экрана: при наклоне за стеклом движется только сцена (SpatialDepth). */}
       <View style={{ flex: 1, minHeight: 0 }}>
         {/* Search always mounted. List panes lazy-mount on first visit, then stay (no remount flicker). */}
-        <WelcomeKeepAlivePane visible={showSearchWelcome} mode="offscreen" style={homePanePad} hiddenRevision={centerProfile}>
+        <WelcomeKeepAlivePane tabId="search" visible={showSearchWelcome} mode="offscreen" style={homePanePad} hiddenRevision={centerProfile}>
           <HomeWelcomeView
             styles={styles}
             isDark={isDark}
@@ -5811,6 +5856,7 @@ const handleClearNick = useCallback(async () => {
         ) : null}
         {mountedWelcomeTabs.has('friends') ? (
         <WelcomeKeepAlivePane
+          tabId="friends"
           visible={showFriendsTab}
           mode="offscreen"
           hiddenRevision={friendsPaneRevision}
@@ -5831,6 +5877,7 @@ const handleClearNick = useCallback(async () => {
         ) : null}
         {mountedWelcomeTabs.has('chat') ? (
         <WelcomeKeepAlivePane
+          tabId="chat"
           visible={showChatTab}
           mode="offscreen"
           hiddenRevision={chatsPaneRevision}
@@ -5858,7 +5905,7 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('fliq') ? (
-        <WelcomeKeepAlivePane visible={showFliqTab} mode="list">
+        <WelcomeKeepAlivePane tabId="fliq" visible={showFliqTab} mode="list">
           {/* От края до края экрана: свет от ролика под системной строкой, лента — под нижним стеклом. */}
           <FliqFeedView
             active={showFliqTab && appIsActive && !hasActiveCallForSearch}
@@ -5875,7 +5922,7 @@ const handleClearNick = useCallback(async () => {
           <WelcomeKeepAlivePane visible mode="list" />
         ) : null}
         {mountedWelcomeTabs.has('calls') ? (
-        <WelcomeKeepAlivePane visible={showCallsTab} mode="offscreen">
+        <WelcomeKeepAlivePane tabId="calls" visible={showCallsTab} mode="offscreen">
           <HomeWelcomeCallsView
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
             lang={lang}
@@ -5899,7 +5946,7 @@ const handleClearNick = useCallback(async () => {
         {/* keep-alive за экраном, а не display:none: иначе вся панель профиля
             раскладывается в момент тапа и первый переход роняет кадры. */}
         {mountedWelcomeTabs.has('profile') ? (
-        <WelcomeKeepAlivePane visible={showProfileTab} mode="offscreen" style={homePanePad}>
+        <WelcomeKeepAlivePane tabId="profile" visible={showProfileTab} mode="offscreen" style={homePanePad}>
           {/* Источник нижнего стекла: что подъезжает к навбару, видно под стеклом размытым. */}
           <BlurListSource sourceId={HOME_BLUR_LIST_SOURCE.profile} style={{ flex: 1, minHeight: 0 }}>
           <HomeWelcomeProfileView
@@ -5943,7 +5990,7 @@ const handleClearNick = useCallback(async () => {
       </View>
 
       {/* Стекло от верха навбара до низа экрана; содержимое вкладки размыто под ним. */}
-      <WelcomeGlassDock listSourceId={tabBarListSource} height={tabBarH} />
+      <NotificationGlassDock listSourceId={tabBarListSource} height={tabBarH} />
       {/* Навбар поверх вкладок — непрозрачный блок на стекле. */}
       <View
         pointerEvents="box-none"

@@ -1,6 +1,6 @@
 import type { AppRuntimeGlobals } from './appRuntimeTypes';
 import type { PushNotificationData } from './notificationTypes';
-import { AppState, NativeModules, Platform } from 'react-native';
+import { AppState, NativeModules, Platform, unstable_batchedUpdates } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
 import { CommonActions } from '@react-navigation/native';
@@ -1363,16 +1363,24 @@ export function navigateNotificationHome(destination: NotificationHomeDestinatio
         now - lastHomeNotificationNavigation.at < 1500 &&
         nav.getCurrentRoute?.()?.name === 'Home') return;
     lastHomeNotificationNavigation = { nav, destination, at: now };
-    ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
-    emitCloseHomeModals();
-    if (destination === 'unread') setPendingWelcomeChatsFilter('unread');
-    if (destination === 'missed') setPendingWelcomeCallsFilter('missed');
-    prepareNotificationHome(destination);
-    nav.dispatch(CommonActions.navigate({
-      name: 'Home',
-      pop: true,
-      params: { ...notificationHomeParams(destination), ...(fromId ? { pushMessageFrom: fromId } : {}) },
-    }));
+    // Device-emitter callbacks are outside React UI events. Commit the filter,
+    // pane and modal changes together instead of rendering each listener in turn.
+    unstable_batchedUpdates(() => {
+      ensureInAppPiPBeforeOpeningFriendsFromMessageNotification();
+      emitCloseHomeModals();
+      if (destination === 'unread') setPendingWelcomeChatsFilter('unread');
+      if (destination === 'missed') setPendingWelcomeCallsFilter('missed');
+      const switchInPlace = (destination === 'unread' || destination === 'missed') && nav.getCurrentRoute?.()?.name === 'Home';
+      prepareNotificationHome(destination, !switchInPlace);
+      // Home owns these panes already. A same-route stack dispatch forces another
+      // native-screen/options commit before the selected pane can become visible.
+      if (switchInPlace) return;
+      nav.dispatch(CommonActions.navigate({
+        name: 'Home',
+        pop: true,
+        params: { ...notificationHomeParams(destination), ...(fromId ? { pushMessageFrom: fromId } : {}) },
+      }));
+    });
   }, 0);
 }
 

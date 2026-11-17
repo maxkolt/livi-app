@@ -1,0 +1,105 @@
+{
+  "verifiedAtUtc": "2026-11-17T03:59:25.166012+00:00",
+  "device": "Samsung A35 SM-A356E",
+  "apk": {
+    "package": "com.kolt12max.livi.dev",
+    "versionCode": 212,
+    "sha256": "24d4b6f341ab0c73ca870465ca25c09412c1963d672c0ca4890eea60a1d43879",
+    "standalone": true,
+    "temporaryTraceMethodAbsent": true,
+    "extraDestinationHeadersAbsent": true
+  },
+  "scenarios": [
+    {
+      "case": "missed-warm",
+      "coldStart": false,
+      "processAbsentBeforeTap": false,
+      "filters": [
+        {
+          "filter": "Все",
+          "selected": false
+        },
+        {
+          "filter": "Пропущенные",
+          "selected": true
+        }
+      ],
+      "selectedDestination": true
+    },
+    {
+      "case": "unread-warm",
+      "coldStart": false,
+      "processAbsentBeforeTap": false,
+      "filters": [
+        {
+          "filter": "Все",
+          "selected": false
+        },
+        {
+          "filter": "Непрочитанные",
+          "selected": true
+        }
+      ],
+      "selectedDestination": true
+    },
+    {
+      "case": "missed-cold",
+      "coldStart": true,
+      "processAbsentBeforeTap": true,
+      "filters": [
+        {
+          "filter": "Все",
+          "selected": false
+        },
+        {
+          "filter": "Пропущенные",
+          "selected": true
+        }
+      ],
+      "selectedDestination": true
+    },
+    {
+      "case": "unread-cold",
+      "coldStart": true,
+      "processAbsentBeforeTap": true,
+      "filters": [
+        {
+          "filter": "Все",
+          "selected": false
+        },
+        {
+          "filter": "Непрочитанные",
+          "selected": true
+        }
+      ],
+      "selectedDestination": true
+    }
+  ],
+  "review": {
+    "method": "fresh UI hierarchy assertions and manual extracted-frame review",
+    "warmFirstVisibleApplicationPane": "requested existing pane and filter",
+    "coldFirstApplicationPane": "requested pane after standard Android branded startup",
+    "additionalDestinationHeaders": false,
+    "manualNavigation": [
+      "Back to Search",
+      "Friends",
+      "Chats",
+      "Calls",
+      "Profile",
+      "Fliq entry/return",
+      "Search",
+      "Legendary open/close"
+    ],
+    "carousels": {
+      "background": "left and right; returned to Neon",
+      "frame": "left and right; returned to Fire"
+    },
+    "existingFeedbackGiftPreserved": true
+  },
+  "limits": [
+    "Local QA notifications use production native actions and launch options; FCM delivery/VPN routing is not an E2E result of this run.",
+    "AAB publication/minification is separate; the user builds the AAB.",
+    "Fliq entry/return was checked; playback and human audibility are not certified by this run.",
+    "Cold startup includes normal Android window launch/branding; zero-time startup is not claimed."
+  ]
+}

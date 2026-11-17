@@ -1,5 +1,7 @@
-import React, { memo, useEffect, useState } from 'react';
+import React, { memo, useEffect, useState, useSyncExternalStore } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
+import { getNotificationHomeTabSnapshot, subscribeNotificationHomeRequest } from '../../utils/notificationHome';
+import type { WelcomeTabId } from './HomeWelcomeTabBar';
 import { useSharedValue } from 'react-native-reanimated';
 import { PaneLiveContext, PaneVisibleContext } from '../../utils/paneVisibility';
 import { DeferredHomeLayout } from './HomeLayoutContext';
@@ -43,6 +45,7 @@ function welcomeBlockPaneStyle(visible: boolean): ViewStyle {
 
 type Props = {
   visible: boolean;
+  tabId?: WelcomeTabId;
   /**
    * list = opacity keep-alive; block = display:none;
    * offscreen = за экраном — для вкладок со Skia (рамки, радар).
@@ -69,7 +72,9 @@ function paneStyle(visible: boolean, mode: NonNullable<Props['mode']>): ViewStyl
  * иначе после cancel смена вкладки гоняет FlatList/radar у всех keep-alive.
  */
 export const WelcomeKeepAlivePane = memo(
-  function WelcomeKeepAlivePane({ visible, mode = 'list', children, style }: Props) {
+  function WelcomeKeepAlivePane({ visible: controlledVisible, tabId, mode = 'list', children, style }: Props) {
+    const notificationTab = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeTabSnapshot, getNotificationHomeTabSnapshot);
+    const visible = tabId && notificationTab ? tabId === notificationTab : controlledVisible;
     const base = paneStyle(visible, mode);
     const visibleValue = useSharedValue(visible);
     // Once a pane has expanded its list window, keep it warm. Flipping this context back
@@ -103,7 +108,7 @@ export const WelcomeKeepAlivePane = memo(
   },
   (prev, next) => {
     if (prev.visible !== next.visible) return false;
-    if (prev.mode !== next.mode) return false;
+    if (prev.mode !== next.mode || prev.tabId !== next.tabId) return false;
     if (!next.visible) return Object.is(prev.hiddenRevision, next.hiddenRevision);
     return false;
   },

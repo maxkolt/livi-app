@@ -1,5 +1,6 @@
 import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
-import React, { memo, useRef } from 'react';
+import React, { memo, useRef, useSyncExternalStore } from 'react';
+import { getNotificationHomeTabSnapshot, subscribeNotificationHomeRequest } from '../../utils/notificationHome';
 import { AppState, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import Svg, { ClipPath, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import type { EdgeInsets } from 'react-native-safe-area-context';
@@ -223,14 +224,18 @@ const INACTIVE = UI_INACTIVE;
 const INACTIVE_ICON = 'rgba(244, 245, 247, 0.76)';
 
 function HomeWelcomeTabBarInner({
-  activeTab,
+  activeTab: controlledActiveTab,
   labels,
   onPressTab,
-  showChatDot,
-  showCallsDot,
+  showChatDot: controlledChatDot,
+  showCallsDot: controlledCallsDot,
   showProfileDot,
   safeAreaInsets,
 }: HomeWelcomeTabBarProps) {
+  const notificationTab = useSyncExternalStore(subscribeNotificationHomeRequest, getNotificationHomeTabSnapshot, getNotificationHomeTabSnapshot);
+  const activeTab = notificationTab || controlledActiveTab;
+  const showChatDot = controlledChatDot && activeTab !== 'chat';
+  const showCallsDot = controlledCallsDot && activeTab !== 'calls';
   const liveInsets = useStableSafeAreaInsets();
   const insets = safeAreaInsets ?? liveInsets;
   // Размер берём из safe-area frame: он приходит от нативного провайдера и

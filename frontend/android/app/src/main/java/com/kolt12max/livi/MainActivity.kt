@@ -35,6 +35,19 @@ import expo.modules.ReactActivityDelegateWrapper
 class MainActivity : ReactActivity() {
   private var lastReportedImeInset = -1
   private var notificationLaunchBackground: android.graphics.drawable.Drawable? = null
+  private var notificationLaunchReady = false
+  private var removeNotificationSystemSplash: (() -> Unit)? = null
+
+  private fun retainNotificationSystemSplash() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
+    if (intent?.getBooleanExtra("livi_notification_destination_consumed", false) != true) return
+    splashScreen.setOnExitAnimationListener { view ->
+      // Older systems/launchers may supply only a color surface. Do not retain
+      // that empty surface over the existing JS startup artwork.
+      if (notificationLaunchReady || view.iconView == null) view.remove()
+      else removeNotificationSystemSplash = { view.remove() }
+    }
+  }
 
   private fun applyStageWindowBackground() {
     window.setBackgroundDrawable(notificationLaunchBackground ?: StageBackgroundDrawable(this, StagePalette.TEAL_DEEP))
@@ -42,7 +55,6 @@ class MainActivity : ReactActivity() {
 
   /** A killed process needs a native branded frame before React/fonts are ready. */
   private fun prepareNotificationLaunchBackground() {
-    if (LiviAppModule.reactContextForBackgroundTask() != null) return
     if (intent?.getBooleanExtra("livi_notification_destination_consumed", false) != true) return
     val logo = getDrawable(R.drawable.splashscreen_icon) ?: return
     val metrics = resources.displayMetrics
@@ -55,6 +67,9 @@ class MainActivity : ReactActivity() {
   }
 
   fun completeNotificationLaunch() {
+    notificationLaunchReady = true
+    removeNotificationSystemSplash?.invoke()
+    removeNotificationSystemSplash = null
     if (notificationLaunchBackground == null) return
     notificationLaunchBackground = null
     applyStageWindowBackground()
@@ -1414,14 +1429,18 @@ class MainActivity : ReactActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     // Phones: portrait; tablets: any orientation (avoids letterbox when tablet is landscape).
     ScreenOrientationHelper.applyPhonePortraitTabletAny(this)
+    // Preserve the starting theme's icon while Android transfers its splash.
+    // Publish the destination before React creates its initial navigation state.
+    consumeShadeOpenIntent(intent, dismissMissed = false)
     // При запуске по livi://decline-call — прозрачная тема: пользователь видит экран блокировки/лаунчер, не страницу приветствия.
     if (isDeclineCallIntent(intent)) {
       setTheme(R.style.Theme_App_Translucent)
+    } else if (intent?.getBooleanExtra("livi_notification_destination_consumed", false) == true) {
+      setTheme(R.style.Theme_App_SplashScreen)
     } else {
       setTheme(R.style.AppTheme)
     }
-    // Publish the destination before React creates its initial navigation state.
-    consumeShadeOpenIntent(intent, dismissMissed = false)
+    retainNotificationSystemSplash()
     super.onCreate(null)
     if (!isDeclineCallIntent(intent)) {
       prepareNotificationLaunchBackground()
@@ -1571,6 +1590,9 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
+    notificationLaunchReady = true
+    removeNotificationSystemSplash?.invoke()
+    removeNotificationSystemSplash = null
     if (liveInstance === this) {
       liveInstance = null
     }

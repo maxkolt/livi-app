@@ -5,6 +5,7 @@ let mockNativeCount = 0;
 let mockViewingCalls = false;
 const mockDispatch = jest.fn();
 let mockNavReady = true;
+let mockCurrentRoute = 'Chat';
 const mockPersistHistory = jest.fn(async ({ eventId }: { eventId: string }) => {
   if (mockHistory.has(eventId)) return false;
   mockHistory.add(eventId); return true;
@@ -15,6 +16,7 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
   removeItem: jest.fn(async (key: string) => { mockStorage.delete(key); }),
 }));
 jest.mock('react-native', () => ({
+  unstable_batchedUpdates: (run: () => void) => run(),
   Platform: { OS: 'android' }, AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
   NativeModules: { LiviAppModule: {
     wasMissedShownForCallId: async (id: string) => mockShown.has(id),
@@ -61,9 +63,9 @@ const count = () => JSON.parse(mockStorage.get('missed_calls_by_user_v1') || '{}
 async function settle<T>(promise: Promise<T>) { await jest.runAllTimersAsync(); return promise; }
 beforeEach(() => {
   jest.useFakeTimers(); mockStorage.clear(); mockHistory.clear(); mockShown.clear();
-  mockNativeCount = 0; mockViewingCalls = false; mockNavReady = true; mockDispatch.mockClear();
+  mockNativeCount = 0; mockViewingCalls = false; mockNavReady = true; mockCurrentRoute = 'Chat'; mockDispatch.mockReset().mockImplementation(() => { mockCurrentRoute = 'Home'; });
   (global as AppRuntimeGlobals).__navRef = {
-    isReady: () => mockNavReady, dispatch: mockDispatch, getCurrentRoute: () => ({ name: 'Home' }),
+    isReady: () => mockNavReady, dispatch: mockDispatch, getCurrentRoute: () => ({ name: mockCurrentRoute }),
   } as unknown as AppRuntimeGlobals['__navRef'];
 });
 afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
@@ -130,10 +132,10 @@ it('dispatches once when native, resume and Expo report the same notification ta
   await navigateNotificationHome('unread');
   expect(mockDispatch).toHaveBeenCalledTimes(1);
   await navigateNotificationHome('missed');
-  expect(mockDispatch).toHaveBeenCalledTimes(2);
+  expect(mockDispatch).toHaveBeenCalledTimes(1);
   await jest.advanceTimersByTimeAsync(1600);
   await navigateNotificationHome('unread');
-  expect(mockDispatch).toHaveBeenCalledTimes(3);
+  expect(mockDispatch).toHaveBeenCalledTimes(1);
 });
 
 it('dispatches a ready notification synchronously and prepares its destination before the stack changes', async () => {
@@ -145,5 +147,14 @@ it('dispatches a ready notification synchronously and prepares its destination b
   const pending = navigateNotificationHome('missed');
   expect(mockDispatch).toHaveBeenCalledTimes(1);
   await pending;
+  const request = getNotificationHomeRequest(); if (request) completeNotificationHome(request.id);
+});
+it.each(['unread', 'missed'] as const)('switches %s in place on an open Home without a native stack transition', async destination => {
+  const { getNotificationHomeRequest, getNotificationStackTransition, completeNotificationHome } = await import('./notificationHome');
+  mockCurrentRoute = 'Home';
+  await navigateNotificationHome(destination);
+  expect(mockDispatch).not.toHaveBeenCalled();
+  expect(getNotificationHomeRequest()?.destination).toBe(destination);
+  expect(getNotificationStackTransition()).toBe(false);
   const request = getNotificationHomeRequest(); if (request) completeNotificationHome(request.id);
 });

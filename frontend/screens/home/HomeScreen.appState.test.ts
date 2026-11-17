@@ -2,6 +2,7 @@ import { readFileSync } from 'fs';
 import { join } from 'path';
 import { runInNewContext } from 'vm';
 import ts from 'typescript';
+import { createHomeActivityState } from '../../utils/homeActivityState';
 
 // Run Home's actual resume callback without mounting its native UI or replacing
 // the logic under test. This catches early returns that leave playback paused.
@@ -23,8 +24,11 @@ const callbackJs = ts.transpileModule(`(${resumeCallback.getText(file)})`, {
   compilerOptions: { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS },
 }).outputText;
 
-function startHome(initialActive = true) {
+function startHome(initialActive = true, tab = 'fliq') {
   let active = initialActive;
+  const activeUpdates: boolean[] = [];
+  const commitActive = (value: boolean) => { active = value; activeUpdates.push(value); };
+  const activityState = createHomeActivityState(commitActive);
   let settle = false;
   const runtime = {
     __lastOutgoingCancelAtRef: { current: 0 },
@@ -39,10 +43,12 @@ function startHome(initialActive = true) {
   const handler = runInNewContext(callbackJs, {
     global: runtime,
     appStateRef,
+    activityState,
+    welcomeActiveTabRef: { current: tab },
     callingVisibleRef: { current: false },
     shouldSkipHomeUiSettle: () => settle,
     setAppIsActive: (action: boolean | ((prev: boolean) => boolean)) => {
-      active = typeof action === 'function' ? action(active) : action;
+      commitActive(typeof action === 'function' ? action(active) : action);
     },
     refreshBadgesOnAppResume: badges,
     lastBadgeResumeAtRef: { current: 0 },
@@ -56,7 +62,7 @@ function startHome(initialActive = true) {
     Date,
   }) as (state: string) => void;
   return {
-    runtime, badges, scheduleSync,
+    runtime, badges, scheduleSync, activeUpdates,
     active: () => active,
     settle: (value: boolean) => { settle = value; },
     change: handler,
@@ -64,6 +70,15 @@ function startHome(initialActive = true) {
 }
 
 describe('Home activity during call resume', () => {
+  it('coalesces a notification pause/resume on Chats before repainting the old pane', () => {
+    jest.useFakeTimers();
+    try {
+      const home = startHome(true, 'chat');
+      home.change('background'); home.change('active');
+      expect(home.activeUpdates).toEqual([]);
+      jest.runAllTimers(); expect(home.activeUpdates).toEqual([true]);
+    } finally { jest.useRealTimers(); }
+  });
   it('recovers from incoming activity, PiP and YouTube before call end without another AppState event', () => {
     const home = startHome();
     // Native incoming screen covers Main before the call session is established.

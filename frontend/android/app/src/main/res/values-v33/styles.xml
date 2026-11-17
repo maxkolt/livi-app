@@ -1,0 +1,10 @@
+<resources>
+  <!-- Notification/deep-link launches otherwise may choose a solid-color splash.
+       Keep the ordinary LiVi icon, including Expo PendingIntents without options. -->
+  <style name="Theme.App.SplashScreen" parent="AppTheme">
+    <item name="android:windowBackground">@drawable/ic_launcher_background</item>
+    <item name="android:windowSplashScreenBackground">@color/splashscreen_background</item>
+    <item name="android:windowSplashScreenAnimatedIcon">@drawable/splashscreen_icon</item>
+    <item name="android:windowSplashScreenBehavior">icon_preferred</item>
+  </style>
+</resources>
