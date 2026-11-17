@@ -1,0 +1,92 @@
+{
+  "frontend": {
+    "suites": 145,
+    "tests": 1393,
+    "failures": 0,
+    "log": "accepted-frontend-tests.log"
+  },
+  "lint": {
+    "passed": true,
+    "log": "accepted-lint.log"
+  },
+  "frontendTypecheck": {
+    "passed": true,
+    "log": "accepted-typecheck.log"
+  },
+  "humanVoice": {
+    "direction": "S25 to A35",
+    "recordedByUser": true,
+    "delivered": true,
+    "playbackNativeDecoded": true,
+    "userCorrection": "речь слышна",
+    "audibilityAccepted": true
+  },
+  "network": "No actual VPN NetworkAgentInfo on either device; Wi-Fi defaults",
+  "securityUnchanged": true,
+  "kotlin": {
+    "tests": 18,
+    "failures": 0
+  },
+  "artifact": {
+    "apk": "livi-212-qa-candidate.apk",
+    "sha256": "86b8ca6d623c0025432f1ef1687a48e867154799b80970a956ed435fdd631702",
+    "bytes": 113298475,
+    "package": "com.kolt12max.livi.dev",
+    "versionCode": 212,
+    "publishable": false
+  },
+  "latestSystemPiPHumanAudioVideoBothDirections": true,
+  "bothCameraClientsVerifiedActiveBeforeLatestPiP": true,
+  "knownLimitation": "Samsung initial entry animation still briefly scales old call UI before LiVi icon cover",
+  "durableCallHistory": {
+    "latestCommonCallHash": "e81975328b84",
+    "A35Direction": "incoming",
+    "S25Direction": "outgoing",
+    "perDeviceCopies": {
+      "A35": 1,
+      "S25": 1
+    },
+    "A35Timestamp": "2026-11-17T21:21:25.950Z",
+    "S25Timestamp": "2026-11-17T21:21:26.263Z",
+    "pairedAcceptedCallsStored": 5,
+    "readScope": "only call metadata from exact own-pair chat; temporary SQLite copies deleted"
+  },
+  "miniSystemRoundtrip": {
+    "A35": {
+      "restoredMini": true
+    },
+    "S25": {
+      "restoredMini": true
+    }
+  },
+  "remoteEndFocusLatest": "A35 Settings retained after S25 mini hangup, sampled for 10 seconds",
+  "cleanup": [
+    {
+      "device": "A35",
+      "audioNormal": true,
+      "cameraReleased": true,
+      "callServicesStopped": true,
+      "noPinnedTask": true,
+      "callWakeLocksReleased": true,
+      "stayOnRestored": 0,
+      "actualVpnAgent": false
+    },
+    {
+      "device": "S25",
+      "audioNormal": true,
+      "cameraReleased": true,
+      "callServicesStopped": true,
+      "noPinnedTask": true,
+      "callWakeLocksReleased": true,
+      "stayOnRestored": 2,
+      "actualVpnAgent": false
+    }
+  ],
+  "outgoingCancel": {
+    "caller": "S25",
+    "peer": "A35QA",
+    "returnedToMain": true,
+    "focus": "mCurrentFocus=Window{526c299 u0 com.kolt12max.livi.dev/com.kolt12max.livi.MainActivity}",
+    "bothCallServicesStopped": true
+  }
+}

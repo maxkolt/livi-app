@@ -1,0 +1,11 @@
+{
+  "installed": true,
+  "version": "100.20.1",
+  "archiveSha256": "20f43dcaa37f5a4841ac5a91da685a488a5ebbd81113c018e25a6b544cc350ea",
+  "source": "https://fastdl.mongodb.org/tools/db/mongodb-database-tools-ubuntu2404-x86_64-100.20.1.tgz",
+  "tools": {
+    "mongodump": "mongodump version: 100.20.1",
+    "mongorestore": "mongorestore version: 100.20.1"
+  },
+  "serviceUnchanged": true
+}

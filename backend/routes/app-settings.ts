@@ -3,6 +3,7 @@ import { matchesSecret } from '../utils/adminAuth';
 import { Router, Request } from 'express';
 import mongoose from 'mongoose';
 import AppConfig from '../models/AppConfig';
+import { getAccountDataGeneration } from '../utils/accountDataGeneration';
 
 const r = Router();
 
@@ -31,6 +32,7 @@ function isAuthorized(req: Request): boolean {
 
 /** GET /api/app-settings — отдаёт настройки; latestAppVersion берётся из БД, при отсутствии — из env */
 r.get('/app-settings', async (_req, res) => {
+  res.setHeader('Cache-Control', 'no-store');
   let latestAppVersion = latestAppVersionEnv;
   if (mongoose.connection.readyState === 1) {
     try {
@@ -46,6 +48,7 @@ r.get('/app-settings', async (_req, res) => {
   res.json({
     ok: true,
     ...(latestAppVersion ? { latestAppVersion } : {}),
+    ...(getAccountDataGeneration() ? { accountDataGeneration: getAccountDataGeneration() } : {}),
   });
 });
 

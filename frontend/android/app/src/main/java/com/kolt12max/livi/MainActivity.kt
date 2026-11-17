@@ -7,7 +7,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
-import android.graphics.Rect
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -210,7 +209,18 @@ class MainActivity : ReactActivity() {
   private var exitPipTimeoutRunnable: Runnable? = null
   private var wasInPip = false
   private var expandedEmittedForPipExit = false
+  private var dismissingSystemPiPAfterCallEnd = false
   private val pipExitDecideMs = 2500L
+
+  /** Remote hangup closes the window; it is neither a user expand nor an X tap. */
+  internal fun prepareSystemPiPDismissalAfterCallEnded() {
+    dismissingSystemPiPAfterCallEnd = true
+    exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
+    exitPipTimeoutRunnable = null
+    exitedPipPending = false
+    wasInPip = false
+    expandedEmittedForPipExit = true
+  }
 
   /**
    * Окно PiP закрыли (X / смахнули): система сразу останавливает активити, onResume не будет.
@@ -721,10 +731,8 @@ class MainActivity : ReactActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
           builder.setAutoEnterEnabled(true)
         }
-        val liveSourceRect = buildSystemPiPSourceRect(placeholderOnly)
-        if (liveSourceRect != null) {
-          builder.setSourceRectHint(liveSourceRect)
-        }
+        // No source hint: Android covers the entry animation with the app icon.
+        // A hint opts into scaling the old window buffer, including call controls.
         val params = builder.build()
         if (enterPictureInPictureMode(params)) {
           android.util.Log.d("MainActivity", "Entered Picture-in-Picture mode ($reason)")
@@ -897,10 +905,8 @@ class MainActivity : ReactActivity() {
           .setAspectRatio(ratio)
           .setActions(buildSystemPiPActions())
           .setAutoEnterEnabled(allow)
-      val sourceRect = buildSystemPiPSourceRect(placeholderOnly)
-      if (sourceRect != null) {
-        builder.setSourceRectHint(sourceRect)
-      }
+      // Use Android's icon cover for auto-entry too; native backdrop protects the
+      // resized window until the clean video-only layout acknowledges readiness.
       setPictureInPictureParams(builder.build())
       android.util.Log.i(
         "MainActivity",
@@ -937,34 +943,6 @@ class MainActivity : ReactActivity() {
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "tryStashShareFromIntent failed", e)
       false
-    }
-  }
-
-  private fun buildSystemPiPSourceRect(placeholderOnly: Boolean = true): Rect? {
-    return try {
-      val root = window?.decorView ?: return null
-      val w = root.width
-      val h = root.height
-      if (w <= 0 || h <= 0) return null
-      if (placeholderOnly) {
-        return Rect(0, 0, w, h)
-      }
-      val ratioW = 9f
-      val ratioH = 16f
-      val targetW: Int
-      val targetH: Int
-      if (w.toFloat() / h.toFloat() > ratioW / ratioH) {
-        targetH = h
-        targetW = (h * (ratioW / ratioH)).toInt()
-      } else {
-        targetW = w
-        targetH = (w * (ratioH / ratioW)).toInt()
-      }
-      val left = (w - targetW) / 2
-      val top = (h - targetH) / 2
-      Rect(left, top, left + targetW, top + targetH)
-    } catch (_: Exception) {
-      null
     }
   }
 
@@ -1050,6 +1028,7 @@ class MainActivity : ReactActivity() {
   }
 
   private fun emitSystemPiPExpandedOnce(reason: String) {
+    if (dismissingSystemPiPAfterCallEnd) return
     exitPipTimeoutRunnable?.let { pipHandler.removeCallbacks(it) }
     exitPipTimeoutRunnable = null
     exitedPipPending = false
@@ -1298,8 +1277,6 @@ class MainActivity : ReactActivity() {
           if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             builderSync.setAutoEnterEnabled(true)
           }
-          val srcSync = buildSystemPiPSourceRect(placeholderOnlyEarly)
-          if (srcSync != null) builderSync.setSourceRectHint(srcSync)
           enteredSync = enterPictureInPictureMode(builderSync.build())
           homePiPTrace(if (enteredSync) "native_enter_pip_ok" else "native_enter_pip_false") {
             putString("enterReason", "leaveHint_sync")
@@ -1350,6 +1327,7 @@ class MainActivity : ReactActivity() {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
       if (isInPictureInPictureMode) {
+        dismissingSystemPiPAfterCallEnd = false
         cancelPendingPiPEnterAttempts()
         val placeholderOnly = LiviAppModule.getSystemPiPCapturePlaceholderOnly()
         // Auto-enter теперь armed заранее и может сработать без чистого video-only кадра —
@@ -1377,6 +1355,13 @@ class MainActivity : ReactActivity() {
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
         hideSystemPiPBackdropForCapture()
+        if (dismissingSystemPiPAfterCallEnd) {
+          prepareSystemPiPDismissalAfterCallEnded()
+          LiviAppModule.setPiPOnLeaveHintEnabled(false)
+          syncSystemPiPAutoEnterParams(false)
+          restoreMainWindowBackgroundAfterPiP()
+          return
+        }
         // На части устройств сразу после разворота из PiP прилетает ложный onUserLeaveHint и
         // может повторно увести экран в PiP. Держим окно anti re-enter до конца перехода.
         suppressPiPReenterUntilMs = System.currentTimeMillis() + PIP_REENTER_GUARD_MAX_MS

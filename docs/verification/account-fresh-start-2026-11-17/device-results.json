@@ -1,0 +1,24 @@
+{
+  "apkSha256": "0fa537fff8bf27fc781f17cc0cb5347a14c344b8cde90b25d9188086dc224a47",
+  "cleanInstall": {
+    "resetDialog": false,
+    "nicknameFieldImmediate": true,
+    "nicknameSavedThroughUi": true,
+    "nicknameVisibleAfterRelaunch": true
+  },
+  "afterServerReset": {
+    "confirmationBeforeCleanup": true,
+    "nicknameFieldImmediateAfterConfirmation": true,
+    "oldNicknameAbsent": true,
+    "nicknameSavedThroughUi": true,
+    "nicknameVisibleAfterRelaunch": true,
+    "resetDialogRepeated": false
+  },
+  "server": {
+    "userCount": 1,
+    "installCount": 1,
+    "nicknameOnServer": true,
+    "newUserId": true,
+    "allInstallSecretsHashed": true
+  }
+}

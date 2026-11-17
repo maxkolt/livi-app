@@ -1,0 +1,35 @@
+{
+  "frontend": {
+    "suites": 148,
+    "tests": 1414,
+    "passed": true
+  },
+  "backend": {
+    "suites": 40,
+    "tests": 322,
+    "passed": true,
+    "isolatedMongoIntegrationIncluded": true
+  },
+  "lint": true,
+  "frontendTypecheck": true,
+  "backendTypecheck": true,
+  "backendBuild": true,
+  "compiledBackendAcceptanceScenarios": 10,
+  "androidJvmTests": 18,
+  "productionSigningValidation": {
+    "passed": true,
+    "debugSigningOverrideUnset": true,
+    "qaInitScriptNotUsed": true,
+    "aabBuilt": false,
+    "playSigningCertificateNotCompared": true
+  },
+  "productionAndroidJsExport": true,
+  "localCleanup": {
+    "ownsLocalMongo": true,
+    "localMongoStopRequested": true,
+    "localMongoPortClosed": true
+  },
+  "deploymentMatchesCurrentBackendFiles": true,
+  "productionResetActivated": false,
+  "productionStrictAuthActivated": false
+}

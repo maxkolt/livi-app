@@ -1,0 +1,11 @@
+{
+  "backupDirectory": "/opt/backend/backups/security-preflight-20261118-enuw4to6",
+  "createdAtUtc": "2026-11-17T21:57:23.448208+00:00",
+  "mongoArchiveBytes": 9428968,
+  "mongoArchiveSha256": "90afe384e28743a41900e59f54ca890544244eff22bae7a3ba135e2af4973fad",
+  "mongoArchiveDryRunVerified": true,
+  "redisKeys": 13,
+  "mediaFiles": 645,
+  "productionDataUnchanged": true,
+  "quiescedCutoverBackup": false
+}

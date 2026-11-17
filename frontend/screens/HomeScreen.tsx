@@ -38,7 +38,7 @@ import * as Clipboard from 'expo-clipboard';
 import { PinchGestureHandler, State, type PinchGestureHandlerStateChangeEvent } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import { getAvatarImageProps, forceImageRefresh } from '../utils/imageOptimization';
+import { getAvatarImageProps } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import SplashLoader from '../components/SplashLoader';
@@ -63,6 +63,7 @@ import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
 
 import { getInstallAuthHeaders, getInstallId, getInstallSecret, resetInstallId } from '../utils/installId';
+import { accountDataReset } from '../utils/accountDataResetRuntime';
 import { logger } from '../utils/logger';
 import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
@@ -126,7 +127,7 @@ import { recordCallLog, recordCancelledCall, recordNoAnswerCall, requestCallLogS
 import { prefetchChatPreviews } from './home/hooks/useChatPreviews';
 import {
   markChatCallBubbleEligibleIfViewing,
-  appendChatCallStatusIfEligible,
+  appendAcceptedChatCallStatus,
 } from './chat/chatCallEvents';
 import { clearEndingCallInProgress } from '../utils/activeCallSession';
 import { clearDirectCallAudioRouteCarryoverAfterCallEnd } from '../utils/callAudioRoutePersist';
@@ -147,7 +148,7 @@ import {
 import { useOverlayBackHandler } from '../components/AppOverlay';
 import { useWelcomeOnlineCount } from './home/hooks/useWelcomeOnlineCount';
 import type { Friend, HomeRouteParams } from './home/types';
-import { getSearchAvatarDisplayUri } from './home/selfAvatarDisplay';
+import { getSearchAvatarDisplayUri, isLocalAvatarUri } from './home/selfAvatarDisplay';
 import {
   DRAFT_KEY,
   FRIENDS_CACHE_KEY_LEGACY,
@@ -751,6 +752,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // Синхронный guard от двойного тапа "Сохранить" (state обновляется не мгновенно)
   const savingRef = useRef(false);
   const [savedToast, setSavedToast] = useState(false);
+  const [avatarSaveSuccessId, setAvatarSaveSuccessId] = useState(0);
   const [wiping, setWiping] = useState(false);
 
   // Синхронная загрузка профиля при инициализации. При повторном монтировании (возврат из звонка/PiP) не показываем сплэш — оба true, профиль подставится в отдельном effect.
@@ -785,6 +787,11 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // снова уходил raw data: → AvatarImage резолвил второй раз → кадр с #2A2C31.
   const [myFullAvatarResolvedUri, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || '');
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
+  useEffect(() => {
+    if (savedNick.trim() && accountDataReset.shouldOpenProfile()) {
+      void accountDataReset.completeProfile().catch(() => {});
+    }
+  }, [savedNick]);
   
   // Отладочная версия setSavedNick с логированием
   const setSavedNickDebug = useCallback((value: string) => {
@@ -2611,7 +2618,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
             if (callId) try { reportEndCallToCallKeep(callId); } catch {}
             try { setOutgoingCallScreenVisible(false); } catch {}
             try {
-              void appendChatCallStatusIfEligible(String(friend.id), 'outgoing', {
+              void appendAcceptedChatCallStatus(String(friend.id), 'outgoing', {
                 callId: callId ? String(callId) : undefined,
               });
             } catch {}
@@ -2998,7 +3005,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
         (/^[a-f0-9]{24}$/i.test(fromRaw) ? fromRaw : '') ||
         String(getIncomingCallScreenState().fromUserId || '').trim();
       if (!peerId) return;
-      recordCallLog({ peerId, direction: 'incoming' });
+      recordCallLog({ peerId, direction: 'incoming', callId });
       try {
         forceCallLogUiNow('incoming_accepted');
       } catch {}
@@ -3531,14 +3538,14 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
               const avatarDataUri = toDataUri(avatarB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
-              setAvatarUri(avatarDataUri);
+              setAvatarUri(prev => isLocalAvatarUri(prev) ? prev : avatarDataUri);
               setSavedAvatarUrl(avatarDataUri);
               hasActualData = true;
             } else if (profileAvatarIsFresh && avatarThumbB64) {
               const avatarDataUri = toDataUri(avatarThumbB64);
               loadedAvatar = avatarDataUri;
               setMyFullAvatarUri(avatarDataUri);
-              setAvatarUri(avatarDataUri);
+              setAvatarUri(prev => isLocalAvatarUri(prev) ? prev : avatarDataUri);
               setSavedAvatarUrl(avatarDataUri);
               hasActualData = true;
             }
@@ -4383,9 +4390,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (avatarB64) {
         setMyFullAvatarUri(avatarB64);
 
-        // Очищаем локальный файл preview после успешной загрузки
-        // Это переключит UI с локального превью на кешированный data URI
-        setAvatarUri('');
+        // Keep the selected file painted while Android resolves the saved data URI.
+        setAvatarUri(prev => isLocalAvatarUri(prev) ? prev : '');
       } else {
         setMyFullAvatarUri('');
       }
@@ -4555,6 +4561,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
     setSaving(true);
     let shouldToast = false;
+    let avatarUploaded = false;
 
     try {
       // Убедимся, что identity установлен перед загрузкой аватара
@@ -4660,6 +4667,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           // UI автоматически переключится на myFullAvatarUri когда он загрузится
           setSavedAvatarUrl('');
           finalAvatarUrl = ''; // Аватар теперь хранится как data URI в БД
+          avatarUploaded = true;
         } catch (e) {
           // Молчать тут нельзя: раньше ошибка уходила только в console.error,
           // локальный превью оставался на экране, и пользователь был уверен,
@@ -4748,6 +4756,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       if (shouldToast) {
         setSavedToast(true);
+        if (avatarUploaded) setAvatarSaveSuccessId(id => id + 1);
       } else {}
     }
   };
@@ -4912,14 +4921,8 @@ const handleClearNick = useCallback(async () => {
         // Превью показываем сразу, а загрузку запускаем тут же — ниже.
         setAvatarUri(localUri);
         
-        // Принудительно обновляем изображение для Android
-        if (Platform.OS === 'android') {
-          await forceImageRefresh();
-          // Дополнительная задержка для Android
-          await new Promise(resolve => setTimeout(resolve, 100));
-          // Принудительно обновляем компонент
-          setAvatarRefreshKey(prev => prev + 1);
-        }
+        // The new file URI already invalidates the image source. Clearing Expo's
+        // caches here discarded the frame we had just prefetched and caused a flash.
         
         // Сохраняем текущий никнейм в черновик, если он есть
         const currentNick = nick || '';
@@ -5972,6 +5975,7 @@ const handleClearNick = useCallback(async () => {
             handleSaveProfile={handleSaveProfile}
             saving={saving}
             savedToast={savedToast}
+            avatarSaveSuccessId={avatarSaveSuccessId}
             setSavedToast={setSavedToast}
             onSelectLang={(code) => {
               void handleSelectLang(code);

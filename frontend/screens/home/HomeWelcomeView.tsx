@@ -30,7 +30,7 @@ import {
   type AvatarDustSource,
 } from './AvatarDust';
 import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
-import { PHONE_AVATAR_REFERENCE_WIDTH, usesLargePhoneAvatar } from './phoneAvatarLayout';
+import { PHONE_AVATAR_REFERENCE_WIDTH, searchPhoneAvatarScale, usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
@@ -399,7 +399,7 @@ function HomeWelcomeViewInner({
       // не оставалось места. Здесь аватар — доля радара, как пропорция в вертикали.
       const k =
         (splitStage ? (radarSize * PHONE_SPLIT_AVATAR_RATIO) / phone.outer : 1) *
-        avatarScale;
+        avatarScale * searchPhoneAvatarScale();
       return {
         base: Math.round(phone.base * k),
         avatarSize: Math.round(phone.outer * k),

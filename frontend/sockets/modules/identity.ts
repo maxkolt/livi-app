@@ -8,6 +8,7 @@ import { clearCancelledOutboxFingerprints } from "./outbox";
 import { clearAllMessageCache } from "./messages";
 import { shared } from "./shared";
 import { getSocketInstance, socket } from "./socketCore";
+import { accountDataReset } from '../../utils/accountDataResetRuntime';
 
 // ВАЖНО: отрицательный результат нельзя кэшировать надолго — иначе после восстановления/создания пользователя
 // приложение будет зацикливаться на "user_not_found" и делать hard reset по старому кэшу.
@@ -19,10 +20,16 @@ async function identityAttach(payload: {
   installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
 }) {
+  await accountDataReset.ensureReady();
   const response = await emitAck<{ ok: boolean; userId?: string; error?: string; legacyMigrationRequired?: boolean }>(
     "identity:attach",
-    payload,
+    { ...payload, accountDataGeneration: accountDataReset.getGeneration() },
   );
+  if (response?.error === 'account_reset_required') {
+    await accountDataReset.refresh();
+    // The old payload must never be retried after the user confirms a reset.
+    return response;
+  }
   // Установка привязана (и после переустановки секрет уже перепривязан) — отчёт Play Integrity в фоне.
   if (response?.ok) {
     if (response.legacyMigrationRequired && response.userId) {
@@ -232,7 +239,7 @@ async function createUserInternal(): Promise<string | null> {
       }
 
       // A rejected secret requires verified recovery; preserve the current identity.
-      if (response?.error === "unauthorized" || response?.error === "account_recovery_required" || response?.error === "install_secret_required") {
+      if (response?.error === "unauthorized" || response?.error === "account_recovery_required" || response?.error === "install_secret_required" || response?.error === 'account_reset_required') {
         // Never erase an existing identity or silently create a replacement
         // account after a security rejection. Its data requires verified recovery.
         console.warn('[createUser] account proof rejected; retaining local identity');
@@ -262,6 +269,7 @@ async function createUserInternal(): Promise<string | null> {
 
 // Функция для создания пользователя с retry
 export async function createUser(): Promise<string | null> {
+  await accountDataReset.ensureReady();
   if (shared.createUserPromise) {
     console.log("[createUser] Creation already in progress, waiting for existing promise");
     return shared.createUserPromise;

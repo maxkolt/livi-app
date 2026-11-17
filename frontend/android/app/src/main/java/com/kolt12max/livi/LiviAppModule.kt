@@ -80,8 +80,28 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   override fun getName(): String = NAME
 
   override fun getConstants(): Map<String, Any> = mapOf(
-    "initialNotificationDestination" to pendingNotificationDestination(reactApplicationContext)
+    "initialNotificationDestination" to pendingNotificationDestination(reactApplicationContext),
+    "screenDiagonalInches" to screenDiagonalInches()
   )
+
+  @Suppress("DEPRECATION")
+  private fun screenDiagonalInches(): Double {
+    return try {
+      val manager = reactApplicationContext.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+      val metrics = android.util.DisplayMetrics()
+      manager.defaultDisplay.getRealMetrics(metrics)
+      // Physical DPI, unlike densityDpi, does not follow the user's display zoom.
+      if (metrics.widthPixels <= 0 || metrics.heightPixels <= 0 ||
+        !metrics.xdpi.isFinite() || !metrics.ydpi.isFinite() ||
+        metrics.xdpi <= 0 || metrics.ydpi <= 0) return 0.0
+      kotlin.math.hypot(
+        metrics.widthPixels.toDouble() / metrics.xdpi,
+        metrics.heightPixels.toDouble() / metrics.ydpi
+      )
+    } catch (_: Exception) {
+      0.0
+    }
+  }
 
   @ReactMethod
   fun completeNotificationLaunch() {
@@ -477,6 +497,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
   @ReactMethod
   fun closeOutgoingCallActivity(callId: String?, force: Boolean, skipMainReturn: Boolean) {
+    val hadOutgoingActivity = OutgoingCallActivity.isAlive
     val id = callId?.trim().orEmpty()
     if (id.isNotBlank()) {
       EndedCallIds.add(reactApplicationContext, id)
@@ -497,9 +518,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     )
     Log.d(
       NAME,
-      "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn overlayWasVisible=$overlayWasVisible",
+      "closeOutgoingCallActivity: sent close broadcast callId=${id.ifBlank { "<unscoped>" }} force=$force skipMainReturn=$skipMainReturn overlayWasVisible=$overlayWasVisible hadOutgoingActivity=$hadOutgoingActivity",
     )
-    if (!skipMainReturn && !overlayWasVisible) {
+    if (!skipMainReturn && !overlayWasVisible && hadOutgoingActivity) {
       LiviAppModule.scheduleMainActivityAfterOutgoingClose(reactApplicationContext)
     }
   }
@@ -2405,6 +2426,34 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       .apply()
   }
 
+  /** Called only by the startup gate after an explicit fresh-start confirmation.
+   * No live JS call UI is mounted while these old account inboxes are removed. */
+  @ReactMethod
+  fun resetAccountDataForFreshStart(promise: Promise) {
+    try {
+      val ctx = reactApplicationContext
+      CallKeepAliveService.setEnabled(ctx, false)
+      ctx.stopService(Intent(ctx, IncomingCallForegroundService::class.java))
+      ctx.stopService(Intent(ctx, ActiveCallForegroundService::class.java))
+      val accountPrefs = listOf(
+        PREFS_PENDING_DECLINED, PREFS_PENDING_MISSED, PREFS_PENDING_UNREAD,
+        PREFS_PENDING_MISSED_REMOVED, PREFS_INCOMING_CALL_META, PREFS_MISSED_COUNT,
+        PREFS_MISSED_SHOWN_IDS, PREFS_MESSAGE_NOTIFIED_IDS, PREFS_OPEN_TAB
+      )
+      for (name in accountPrefs) {
+        check(ctx.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit())
+      }
+      check(ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
+        .remove(KEY_INSTALL_ID).remove(KEY_INSTALL_SECRET).remove(KEY_USER_ID_FOR_DECLINE)
+        .remove(KEY_INSTALL_INVITE_CODE).commit())
+      (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
+      clearAllMissedCountsAndSetBadgeZeroStatic(ctx)
+      promise.resolve(null)
+    } catch (e: Exception) {
+      promise.reject("account_reset_failed", e)
+    }
+  }
+
   /** SECURITY: секрет установки (installSecret) — сервер требует его в заголовке
    * x-install-secret для decline/cancel, если для этого installId уже сохранён хэш.
    * Без него простое знание/подбор installId позволяло бы отменять/отклонять чужие звонки. */
@@ -4110,6 +4159,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       try {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         if (!activity.isInPictureInPictureMode || activity.isFinishing) return
+        (activity as? MainActivity)?.prepareSystemPiPDismissalAfterCallEnded()
         activity.moveTaskToBack(true)
         Log.d(NAME, "dismissSystemPiPToBackground: moveTaskToBack")
         Handler(Looper.getMainLooper()).postDelayed({

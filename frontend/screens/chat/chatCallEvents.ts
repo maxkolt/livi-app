@@ -1,7 +1,8 @@
 import type { ChatMessage } from './chatMessageTypes';
 /**
  * Локальные статусные «облака» звонка в переписке.
- * Появляются только если в момент исходящего/входящего был открыт чат с этим peer.
+ * Принятые звонки пишутся с обеих сторон независимо от фокуса чата.
+ * Непринятые статусы сохраняют прежнюю привязку к открытой переписке.
  * Не уходят на сервер — только AsyncStorage + live UI.
  */
 
@@ -168,4 +169,14 @@ export async function appendChatCallStatusIfEligible(
   } catch {}
 
   return message;
+}
+
+/** Acceptance is sufficient: calls started/answered outside ChatScreen also belong in the chat. */
+export function appendAcceptedChatCallStatus(
+  peerId: string,
+  direction: 'incoming' | 'outgoing',
+  opts?: { callId?: string; at?: number },
+): Promise<ChatMessage | null> {
+  markChatCallBubbleEligible(peerId, direction === 'incoming' ? 'callee' : 'caller', opts?.callId);
+  return appendChatCallStatusIfEligible(peerId, direction, opts);
 }

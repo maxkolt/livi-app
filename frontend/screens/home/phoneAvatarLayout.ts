@@ -1,7 +1,17 @@
-import { PixelRatio } from 'react-native';
+import { NativeModules, PixelRatio } from 'react-native';
 import { modelName } from 'expo-device';
 
 export const PHONE_AVATAR_REFERENCE_WIDTH = 384;
+
+/** Search-only adjustment; unknown physical size keeps the existing geometry. */
+export function searchPhoneAvatarScale(
+  diagonalInches: unknown = NativeModules.LiviAppModule?.screenDiagonalInches,
+): number {
+  return typeof diagonalInches === 'number' &&
+    Number.isFinite(diagonalInches) && diagonalInches > 0 && diagonalInches <= 6.9
+    ? 0.95
+    : 1;
+}
 
 /** Display zoom can make an Ultra report fewer dp than an A35. */
 export function usesLargePhoneAvatar(

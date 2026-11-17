@@ -16,6 +16,7 @@ jest.mock('../../sockets/modules/authState', () => ({
 
 jest.mock('../chat/chatCallEvents', () => ({
   appendChatCallStatusIfEligible: jest.fn(async () => null),
+  appendAcceptedChatCallStatus: jest.fn(async () => null),
 }));
 
 import {

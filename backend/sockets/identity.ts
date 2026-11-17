@@ -23,10 +23,12 @@ import { hasVerifiedSocketInstall } from '../utils/socketInstallAuth';
 import { hashInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL, verifyInstallSecret, isPlausibleInstallSecret, needsInstallSecretRehash } from '../utils/installSecret';
 import { collectUploadedMediaNames, deleteUnreferencedUploadedMedia } from '../utils/uploadedMedia';
 import { UPLOADS_MEDIA_DIR } from '../routes/upload';
+import { acceptsAccountDataGeneration } from '../utils/accountDataGeneration';
 
 type AttachPayload = {
   installId?: string | null;
   installSecret?: string | null;
+  accountDataGeneration?: string;
   profile?: { nick?: string; avatar?: string } | null;
 };
 
@@ -197,6 +199,7 @@ export default function registerIdentitySockets(io: Server) {
 
       try {
         if (!installId || installId.length > 200) return ack?.({ ok: false, error: 'no_installId' });
+        if (!acceptsAccountDataGeneration(payload?.accountDataGeneration)) return ack?.({ ok: false, error: 'account_reset_required' });
         if (!isPlausibleInstallSecret(payload?.installSecret) && !allowLegacyInstallAuth()) return ack?.({ ok: false, error: 'install_secret_required' });
 
         // Защита от дублирования запросов

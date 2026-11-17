@@ -1,0 +1,46 @@
+{
+  "deployed": true,
+  "releaseId": "cbcff62b3-security-prep-f7ed704ca021",
+  "sourceCommit": "cbcff62b3b4b6db1cb7d2b04c1b01755767f79ea",
+  "workingTreeChanges": true,
+  "artifactDigest": "f7ed704ca021ecb9183698c64cc81d91b6076790f873198e4a5dfcb7e94b8144",
+  "deployedAt": "2026-11-17T22:05:19.829168+00:00",
+  "backup": "/opt/backend/backup-release-security-prep-20261117T220518Z",
+  "filesVerified": 225,
+  "environmentUnchanged": true,
+  "dependenciesUnchanged": true,
+  "accountResetActivated": false,
+  "productionDataReset": false,
+  "preDeployActivity": {
+    "rooms": 0,
+    "participants": 0,
+    "queue": 0,
+    "paired": 0,
+    "recentUnfinishedCalls": 0
+  },
+  "service": {
+    "MainPID": "103895",
+    "NRestarts": "0",
+    "ActiveState": "active"
+  },
+  "health": {
+    "ok": true,
+    "mongo": 1,
+    "socketIoRedisAdapter": true,
+    "rateLimit": {
+      "redisConfigured": true,
+      "redisStatus": "ready",
+      "sensitiveFallbackMode": "bounded_memory",
+      "memoryKeys": 0,
+      "memoryMaxKeys": 20000,
+      "redisFallbackCount": 0,
+      "failClosedCount": 0,
+      "lastRedisFallbackAt": 0,
+      "lastRedisFallbackReason": ""
+    },
+    "callKeepAlive": {
+      "users": 0,
+      "sockets": 0
+    }
+  }
+}

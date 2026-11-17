@@ -1,0 +1,30 @@
+{
+  "device": "Samsung Galaxy A35 SM-A356E",
+  "package": "com.kolt12max.livi.dev",
+  "checks": {
+    "profileAvatarSave": "passed: real gallery selection and crop; server avatar version increased",
+    "savedFeedback": "passed: green checkmark appears after successful save",
+    "smallerSavedFeedback": "passed: final 0.32 diameter ratio rendered on A35",
+    "largerDeleteButton": "passed: final 36 dp badge in portrait and landscape",
+    "deletePosition": "passed: lower-right circular edge with slight overlap",
+    "photoContinuity": {
+      "decodedFrames": 645,
+      "profileFrames": 410,
+      "photoVisibleFrames": 382,
+      "blankFramesAfterPhotoAppeared": 0,
+      "greenCheckFrames": 82
+    },
+    "automatedTests": "69 passed; final larger button geometry rerun: 10 passed",
+    "typecheck": "passed",
+    "eslint": "passed"
+  },
+  "limits": [
+    "Physical-device verification covered A35 without an active cosmetic frame. Frame outsets and tablet/phone dimensions were checked by automated geometry tests.",
+    "Video analysis checks for loss of the textured photo after its first visible frame; it is not an exhaustive claim about every UI transition."
+  ],
+  "cleanup": {
+    "originalSavedPhotoRestored": true,
+    "originalRotationSettingsRestored": true,
+    "temporarySharedDeviceFilesRemoved": true
+  }
+}

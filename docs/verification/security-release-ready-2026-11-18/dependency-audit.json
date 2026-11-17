@@ -1,0 +1,80 @@
+{
+  "frontend": {
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 18,
+      "high": 21,
+      "critical": 0,
+      "total": 39
+    },
+    "directAdvisories": [
+      {
+        "package": "ajv",
+        "severity": "moderate",
+        "advisories": [
+          {
+            "title": "ajv has ReDoS when using `$data` option",
+            "url": "https://github.com/advisories/GHSA-2g4f-4pwh-qvx6",
+            "range": ">=7.0.0-alpha.0 <8.18.0"
+          }
+        ]
+      },
+      {
+        "package": "glob",
+        "severity": "moderate",
+        "advisories": [
+          {
+            "title": "Glob: AbortSignal cancellation bypass allows post-timeout filesystem traversal",
+            "url": "https://github.com/advisories/GHSA-3g3m-2fjr-6pw4",
+            "range": ">=9.0.0 <=14.0.1"
+          }
+        ]
+      },
+      {
+        "package": "minimatch",
+        "severity": "moderate",
+        "advisories": [
+          {
+            "title": "minimatch has potential denial of service via globparts amplification",
+            "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249",
+            "range": ">=7.0.0 <11.0.1"
+          }
+        ]
+      },
+      {
+        "package": "picomatch",
+        "severity": "high",
+        "advisories": [
+          {
+            "title": "picomatch vulnerable to ReDoS through single-branch repeated extglobs",
+            "url": "https://github.com/advisories/GHSA-fc5q-39xc-vjpf",
+            "range": "<=4.0.7"
+          }
+        ]
+      },
+      {
+        "package": "uuid",
+        "severity": "moderate",
+        "advisories": [
+          {
+            "title": "uuid: Missing buffer bounds check in v3/v5/v6 when buf is provided",
+            "url": "https://github.com/advisories/GHSA-w5hq-g745-h8pq",
+            "range": "<11.1.1"
+          }
+        ]
+      }
+    ]
+  },
+  "backend": {
+    "counts": {
+      "info": 0,
+      "low": 0,
+      "moderate": 0,
+      "high": 0,
+      "critical": 0,
+      "total": 0
+    },
+    "directAdvisories": []
+  }
+}

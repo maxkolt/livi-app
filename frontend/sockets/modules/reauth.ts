@@ -57,6 +57,11 @@ export async function recoverFromReauthFailure(error?: string): Promise<void> {
   const err = String(error || "");
   if (err !== "user_not_found" && err !== "not_found") return;
 
+  const previousUserId = shared.currentUserId;
+  const { accountDataReset } = await import('../../utils/accountDataResetRuntime');
+  await accountDataReset.refresh();
+  if (shared.currentUserId !== previousUserId) return;
+
   const identity = await import("./identity");
 
   if (err === "not_found" && identity.isCreateUserInProgress()) {

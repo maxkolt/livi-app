@@ -1,0 +1,8 @@
+{
+  "guestUnbound": true,
+  "whoamiIdIsNull": true,
+  "protectedReadRejected": true,
+  "reauthRejected": true,
+  "protectedEventsReceived": 0,
+  "accountsCreated": 0
+}

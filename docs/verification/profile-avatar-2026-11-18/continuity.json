@@ -1,0 +1,2059 @@
+{
+  "blankFramesAfterPhotoAppeared" : 0,
+  "decodedFrames" : 645,
+  "greenCheckFrames" : 82,
+  "photoVisibleFrames" : 382,
+  "profileFrames" : 410,
+  "samples" : [
+    {
+      "greenSamples" : 0,
+      "photoStd" : 4.2635822982095126,
+      "time" : 4.1476222222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0.048760137614586356,
+      "time" : 4.3040777777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0.048760137614586356,
+      "time" : 4.3115555555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3205888888888886
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3289555555555559
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0.64384844204712288,
+      "time" : 4.338111111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0.23957871187501945,
+      "time" : 4.3467333333333329
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3574111111111113
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3681111111111113
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3776222222222225
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3860111111111113
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.3956
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.404811111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4125777777777779
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4219999999999997
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4288777777777781
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4374111111111114
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.445322222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.454533333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4624444444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4714
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4801000000000002
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.4917666666666669
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.5009888888888892
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.5117555555555553
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.5206555555555559
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 4.5291555555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 0,
+      "time" : 5.0792111111111113
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.1193333333333335
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.1608777777777775
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.186066666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.2026000000000003
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.4523333333333337
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.465355555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.4776666666666669
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.4927999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.504377777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5210111111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5365666666666664
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5460222222222226
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5613999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5710333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5801999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.5858888888888885
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.595188888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6034222222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6122444444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.620622222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6287444444444441
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6452222222222224
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6551111111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6617111111111109
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6773777777777781
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6862777777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.6958000000000002
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7032999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7131666666666669
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7273666666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7359777777777774
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7440333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7537666666666665
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7622222222222224
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7766666666666664
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 5.7854777777777775
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.2855777777777782
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3140111111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.327177777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3372999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3465888888888893
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3605222222222224
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3703777777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3796999999999997
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.3954111111111107
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4045777777777779
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4109888888888893
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4196888888888886
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4284777777777782
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4361888888888892
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4454777777777776
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4532999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4709888888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4797666666666665
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4894999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.4939666666666671
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5026777777777776
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5122777777777774
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5206777777777774
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.529233333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5435999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5529333333333337
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5613333333333337
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5769888888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.5859444444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6021111111111113
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6109999999999998
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6202888888888891
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6281888888888885
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6374222222222219
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6438444444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6600999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6703555555555551
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6779333333333337
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6872888888888893
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.6948333333333334
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7039222222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.712244444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7276888888888893
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7374777777777775
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7443555555555559
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7527888888888885
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7617222222222226
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7701555555555553
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7853111111111115
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.7946222222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8027333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8133444444444446
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8197222222222225
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8356777777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8452222222222225
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8600777777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.870222222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8775444444444442
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.8936222222222225
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9040555555555558
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9188111111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9356555555555559
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9449111111111108
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9544444444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9695777777777774
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9795222222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 6.9941111111111107
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0042333333333335
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0185555555555554
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0281666666666665
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0353111111111115
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0528777777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0612777777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0769888888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0872222222222225
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.0950444444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1035777777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1123111111111115
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1195666666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1269444444444447
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.136333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1451666666666664
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1550333333333329
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1616111111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1782111111111115
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1867555555555551
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.1948999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.2031444444444448
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.2111333333333336
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.220366666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.2285222222222218
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.2441555555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.2521333333333331
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.4518777777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.4700222222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.4765111111111109
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.6862555555555554
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.7023999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.7112999999999996
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 7.7265111111111109
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.722094365465779,
+      "time" : 8.490733333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 57.075518978513607,
+      "time" : 8.5195777777777781
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 57.023216097916283,
+      "time" : 8.5275333333333325
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 55.607653244132941,
+      "time" : 8.5353666666666665
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 55.458394443814498,
+      "time" : 8.5446333333333335
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 54.720104141703814,
+      "time" : 8.5540333333333329
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 54.172181787259021,
+      "time" : 8.5608555555555554
+    },
+    {
+      "greenSamples" : 12,
+      "photoStd" : 54.082215908291154,
+      "time" : 8.5771444444444445
+    },
+    {
+      "greenSamples" : 12,
+      "photoStd" : 53.848752024144645,
+      "time" : 8.5857111111111113
+    },
+    {
+      "greenSamples" : 13,
+      "photoStd" : 54.899721224029818,
+      "time" : 8.5940444444444442
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 54.630202356606816,
+      "time" : 8.6027555555555555
+    },
+    {
+      "greenSamples" : 21,
+      "photoStd" : 56.61421122761643,
+      "time" : 8.6112666666666673
+    },
+    {
+      "greenSamples" : 20,
+      "photoStd" : 56.132833801726463,
+      "time" : 8.6198666666666668
+    },
+    {
+      "greenSamples" : 20,
+      "photoStd" : 57.723628186561591,
+      "time" : 8.6281999999999996
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 57.281420163246366,
+      "time" : 8.6367333333333338
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 58.394808495136573,
+      "time" : 8.6445888888888884
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 57.441211135688071,
+      "time" : 8.6527888888888889
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 56.810199980009813,
+      "time" : 8.6611333333333338
+    },
+    {
+      "greenSamples" : 21,
+      "photoStd" : 56.378758236343849,
+      "time" : 8.6693111111111119
+    },
+    {
+      "greenSamples" : 20,
+      "photoStd" : 55.90521685951002,
+      "time" : 8.6776444444444447
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 55.987181125148076,
+      "time" : 8.6859888888888896
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 55.616022638711399,
+      "time" : 8.6942444444444451
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 55.723064717373525,
+      "time" : 8.7024888888888885
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 55.714685767794478,
+      "time" : 8.7118666666666673
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.748614979287538,
+      "time" : 8.7195333333333327
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.520870629973047,
+      "time" : 8.7279777777777774
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.419232589565212,
+      "time" : 8.7359444444444438
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.357366782957236,
+      "time" : 8.7443000000000008
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.295685245801238,
+      "time" : 8.7523999999999997
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.372643310671783,
+      "time" : 8.7608444444444444
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.37318461267747,
+      "time" : 8.7691444444444446
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.373956230085533,
+      "time" : 8.7772555555555556
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.371310844388098,
+      "time" : 8.7856444444444453
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.347420737672365,
+      "time" : 8.7940888888888882
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.347420737672365,
+      "time" : 8.8023777777777781
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.349493068981189,
+      "time" : 8.8111999999999995
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.322212131313407,
+      "time" : 8.8191444444444436
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.318818574110693,
+      "time" : 8.827688888888888
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.31895425620408,
+      "time" : 8.8359000000000005
+    },
+    {
+      "greenSamples" : 25,
+      "photoStd" : 55.341312778068421,
+      "time" : 8.8442777777777781
+    },
+    {
+      "greenSamples" : 26,
+      "photoStd" : 55.38207421989501,
+      "time" : 8.8522999999999996
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.294863460994904,
+      "time" : 8.8605555555555551
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.298858053677897,
+      "time" : 8.8687888888888882
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.312759380997583,
+      "time" : 8.8775555555555563
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.326938364991221,
+      "time" : 8.8855888888888881
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.361143025978578,
+      "time" : 8.8939444444444451
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.405051772421999,
+      "time" : 8.9022444444444453
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.40532181762223,
+      "time" : 8.910733333333333
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.439372603717992,
+      "time" : 8.9191555555555553
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.457078543178035,
+      "time" : 8.927311111111111
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.466604048074281,
+      "time" : 8.9355888888888888
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.483975274351934,
+      "time" : 8.9441333333333333
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.485156702362431,
+      "time" : 8.9523222222222216
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.500066623726632,
+      "time" : 8.9605555555555547
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.508067465382879,
+      "time" : 8.9693333333333332
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.515586822730327,
+      "time" : 8.9779666666666671
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.526060156133752,
+      "time" : 8.986022222222223
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.540247103333272,
+      "time" : 8.9941777777777769
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.542696201755859,
+      "time" : 9.0025111111111116
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.590238792251931,
+      "time" : 9.0108111111111118
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.592220684914828,
+      "time" : 9.0193888888888889
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.603332077270679,
+      "time" : 9.0280888888888882
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.601489274333375,
+      "time" : 9.0364333333333331
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.605095334968034,
+      "time" : 9.0440666666666658
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.608802354660796,
+      "time" : 9.0526777777777774
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.60614649381089,
+      "time" : 9.0603888888888893
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.599602669504783,
+      "time" : 9.0692222222222227
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.599602669504783,
+      "time" : 9.0773777777777784
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.600339070565973,
+      "time" : 9.0851444444444436
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.581522745857725,
+      "time" : 9.0934444444444438
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.677686825191309,
+      "time" : 9.1098555555555549
+    },
+    {
+      "greenSamples" : 24,
+      "photoStd" : 55.688706124275491,
+      "time" : 9.1184777777777786
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.69005134714476,
+      "time" : 9.1349444444444448
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 55.598367023198243,
+      "time" : 9.1514333333333333
+    },
+    {
+      "greenSamples" : 23,
+      "photoStd" : 55.94058440589864,
+      "time" : 9.1683666666666674
+    },
+    {
+      "greenSamples" : 19,
+      "photoStd" : 55.898115833554684,
+      "time" : 9.1848111111111113
+    },
+    {
+      "greenSamples" : 22,
+      "photoStd" : 56.350683461078027,
+      "time" : 9.2015888888888888
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 56.734678203761362,
+      "time" : 9.2270666666666674
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 56.963745613203088,
+      "time" : 9.2444000000000006
+    },
+    {
+      "greenSamples" : 18,
+      "photoStd" : 57.565190675885205,
+      "time" : 9.2610888888888887
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 57.98478027497746,
+      "time" : 9.2777888888888889
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 58.131645730825049,
+      "time" : 9.2942666666666671
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 58.161101963706408,
+      "time" : 9.3108000000000004
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 57.750147456889806,
+      "time" : 10.048388888888889
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 55.474946591409413,
+      "time" : 10.079544444444444
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 54.18187519198397,
+      "time" : 10.085455555555555
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 54.195778571453211,
+      "time" : 10.102277777777777
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 52.789678838166232,
+      "time" : 10.1153
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 52.789678838166232,
+      "time" : 10.137466666666667
+    },
+    {
+      "greenSamples" : 17,
+      "photoStd" : 51.709599642987911,
+      "time" : 10.156622222222222
+    },
+    {
+      "greenSamples" : 15,
+      "photoStd" : 51.10422544666342,
+      "time" : 10.171011111111111
+    },
+    {
+      "greenSamples" : 4,
+      "photoStd" : 51.17217966931684,
+      "time" : 10.178755555555556
+    },
+    {
+      "greenSamples" : 1,
+      "photoStd" : 51.847367162013668,
+      "time" : 10.185955555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 52.940888342597724,
+      "time" : 10.195288888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 52.940888342597724,
+      "time" : 10.2036
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 54.380182133232502,
+      "time" : 10.211577777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 54.377673201941455,
+      "time" : 10.221144444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 55.924253065663564,
+      "time" : 10.22868888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 55.924253065663564,
+      "time" : 10.243644444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 57.337788740821495,
+      "time" : 10.252922222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.239913587623711,
+      "time" : 10.261177777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.239913587623711,
+      "time" : 10.271366666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.2781
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.286122222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.302277777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.311833333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.3188
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.327400000000001
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.337133333333334
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.343977777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.353
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.361244444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.368866666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.378322222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.386799999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.396277777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.404266666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.4123
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.426922222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 10.662788888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.18751111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.212966666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.219411111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.231355555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.247266666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.261122222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.277333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.294288888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.304788888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.310577777777779
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.3193
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.327311111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.336544444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.343722222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.353455555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.3606
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.369466666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.377933333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.386911111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.394722222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.403122222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.411344444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.420266666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.428466666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.437555555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.446011111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.455277777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.463088888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.471644444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.479211111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 12.485844444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 13.689988888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.08991111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.117888888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.128744444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.1441
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.154322222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.174266666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.188033333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.202111111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.210988888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.218166666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.227377777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.236222222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.245666666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.261333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.269633333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.278322222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.286422222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.295855555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.303133333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.313055555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.321533333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.329344444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.337999999999999
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.346066666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.64847832812103,
+      "time" : 14.354611111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.646330463812895,
+      "time" : 14.363133333333334
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.646330463812895,
+      "time" : 14.372733333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.646330463812895,
+      "time" : 14.380277777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.646330463812895,
+      "time" : 14.393577777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 14.401455555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.439122222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.461388888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.477211111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.485855555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.495355555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.511155555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.519
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.527511111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.536066666666667
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.544011111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.552300000000001
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.561122222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.568444444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.577722222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.585077777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.594333333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.602844444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.612044444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.620144444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.628466666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.63721111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.645555555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.654544444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.662711111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.670177777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.675082439820464,
+      "time" : 15.678588888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.687866666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.702644444444445
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.711122222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.720433333333334
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.728122222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.736922222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.743022222222223
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 15.751555555555555
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.061888888888888
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.081266666666668
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.101144444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.114322222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.12798888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.147711111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.161011111111112
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.171144444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.188300000000002
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.201544444444444
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.210177777777776
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.219777777777779
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.2272
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.236011111111111
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.243988888888889
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.25297777777778
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.261055555555554
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.270533333333333
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.277422222222221
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.286200000000001
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.294666666666668
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.301477777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.310322222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.318055555555556
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.327022222222222
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.334977777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.344177777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.351966666666666
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.360877777777777
+    },
+    {
+      "greenSamples" : 0,
+      "photoStd" : 58.674888705696311,
+      "time" : 18.368055555555557
+    }
+  ]
+}

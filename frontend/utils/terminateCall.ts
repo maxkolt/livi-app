@@ -170,6 +170,9 @@ const PRESETS: Record<TerminateCallReason, SurfacePlan> = {
     addEndedId: true,
   },
   call_ended_surfaces: {
+    // An established call has no outgoing screen to return from. Teardown may
+    // run in system PiP above another app and must not bring Main to the front.
+    skipMainReturn: true,
     callKeepEnd: true,
     setCallKeepAvailableTrue: true,
     incomingRingtone: true,

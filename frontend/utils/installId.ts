@@ -2,14 +2,12 @@ import 'react-native-get-random-values';
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getAndroidId, getIosIdForVendorAsync } from 'expo-application';
 
 const KEY = 'livi.installId';
 /** Секрет установки (installSecret): случайное значение высокой энтропии, доказывающее
  * владение installId серверу (identity:attach). Хранится ТОЛЬКО в SecureStore (Keychain/Keystore) —
  * никогда в AsyncStorage — и никогда не логируется целиком. См. backend/utils/installSecret.ts. */
 const SECRET_KEY = 'livi.installSecret';
-const randomId = () => `inst_${Math.random().toString(36).slice(2, 10)}`;
 
 function randomHex(byteLength: number): string {
   const bytes = new Uint8Array(byteLength);
@@ -30,8 +28,8 @@ export function wasInstallSecretCreatedThisRun(): boolean {
   return installSecretCreatedThisRun;
 }
 
-/** Возвращает (создавая при первом вызове) секрет установки. На web возвращает null —
- * SecureStore недоступен, эти клиенты остаются в legacy-режиме (без installSecret). */
+/** Возвращает (создавая при первом вызове) секрет установки. На web возвращает null:
+ * SecureStore недоступен; строгий сервер не разрешает такой установке вход. */
 export async function getInstallSecret(): Promise<string | null> {
   if (Platform.OS === 'web') return null;
   if (installSecretCache) return installSecretCache;
@@ -60,51 +58,6 @@ let installIdLoggedOnce = false;
 /** Сериализуем параллельные getInstallId(), чтобы не создать два разных id до записи в SecureStore. */
 let installIdLoadPromise: Promise<string> | null = null;
 
-/** На Android при первом запуске (нет сохранённого id) используем стабильный Android ID,
- * чтобы после переустановки приложения тот же телефон получил тот же installId и подтянул данные из MongoDB. */
-function getStableAndroidInstallIdSync(): string | null {
-  if (Platform.OS !== 'android') return null;
-  try {
-    const androidId = getAndroidId();
-    if (androidId && typeof androidId === 'string' && androidId.length > 0) {
-      return `inst_android_${androidId}`;
-    }
-  } catch {
-    // getAndroidId throws on non-Android or if unavailable
-  }
-  return null;
-}
-
-/** С повторной попыткой после задержки — на первом запуске после установки нативный модуль может ещё не отдать ANDROID_ID. */
-async function getStableAndroidInstallId(): Promise<string | null> {
-  if (Platform.OS !== 'android') return null;
-  let id = getStableAndroidInstallIdSync();
-  if (id) return id;
-  await new Promise((r) => setTimeout(r, 400));
-  id = getStableAndroidInstallIdSync();
-  if (__DEV__ && !installIdLoggedOnce) {
-    installIdLoggedOnce = true;
-    if (id) console.log('[installId] Using stable Android ID (data will restore after reinstall)');
-    else console.warn('[installId] Android ID unavailable after retry — using random ID (data will not restore after reinstall)');
-  }
-  return id;
-}
-
-/** На iOS при первом запуске (нет сохранённого id) используем IDFV — после переустановки
- * он может сохраниться (если не удалены все приложения вендора), тогда данные подтянутся из MongoDB. */
-async function getStableIosInstallId(): Promise<string | null> {
-  if (Platform.OS !== 'ios') return null;
-  try {
-    const idfv = await getIosIdForVendorAsync();
-    if (idfv && typeof idfv === 'string' && idfv.length > 0) {
-      return `inst_ios_${idfv}`;
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
 async function getSecure(k: string) { try { return await SecureStore.getItemAsync(k); } catch { return null; } }
 async function setSecure(k: string, v: string) { try { await SecureStore.setItemAsync(k, v); } catch {} }
 async function delSecure(k: string) { try { await SecureStore.deleteItemAsync(k); } catch {} }
@@ -113,13 +66,10 @@ async function loadOrCreateInstallId(): Promise<string> {
   let id = Platform.OS !== 'web' ? await getSecure(KEY) : null;
   if (!id) id = (await AsyncStorage.getItem(KEY)) || '';
   if (!id) {
-    if (Platform.OS === 'ios') {
-      id = (await getStableIosInstallId()) ?? randomId();
-    } else if (Platform.OS === 'android') {
-      id = (await getStableAndroidInstallId()) ?? randomId();
-    } else {
-      id = randomId();
-    }
+    // Keep stored installations intact. A genuinely new installation gets a new
+    // random identity, including after reinstall when its old secret is gone.
+    // A hardware-derived ID cannot prove ownership of that previous account.
+    id = `inst_${randomHex(16)}`;
   }
 
   if (Platform.OS !== 'web') await setSecure(KEY, id);
@@ -157,9 +107,9 @@ export async function regenerateRandomInstallId(): Promise<string> {
   installSecretCache = null;
   const id = `inst_${randomHex(12)}`;
   if (Platform.OS !== 'web') {
-    await setSecure(KEY, id);
+    await SecureStore.setItemAsync(KEY, id);
     // Старый секрет больше ни к чему не привязан: следующий getInstallSecret() создаст новый.
-    await delSecure(SECRET_KEY);
+    await SecureStore.deleteItemAsync(SECRET_KEY);
   }
   await AsyncStorage.setItem(KEY, id);
   return id;

@@ -1,0 +1,52 @@
+{
+  "negativeHttp": [
+    {
+      "path": "/.env",
+      "status": 404,
+      "expected": 404
+    },
+    {
+      "path": "/backend/.env",
+      "status": 404,
+      "expected": 404
+    },
+    {
+      "path": "/api/cosmetics/me",
+      "status": 401,
+      "expected": 401
+    },
+    {
+      "path": "/api/debug/push-log",
+      "status": 404,
+      "expected": 404
+    },
+    {
+      "path": "POST /api/app-settings/latest-version",
+      "status": 401,
+      "expected": 401
+    }
+  ],
+  "latestAppVersion": "211",
+  "resetMarkerAbsent": true,
+  "settingsCacheControl": "no-store",
+  "health": {
+    "ok": true,
+    "mongo": 1,
+    "socketIoRedisAdapter": true,
+    "rateLimit": {
+      "redisConfigured": true,
+      "redisStatus": "ready",
+      "sensitiveFallbackMode": "bounded_memory",
+      "memoryKeys": 0,
+      "memoryMaxKeys": 20000,
+      "redisFallbackCount": 0,
+      "failClosedCount": 0,
+      "lastRedisFallbackAt": 0,
+      "lastRedisFallbackReason": ""
+    },
+    "callKeepAlive": {
+      "users": 0,
+      "sockets": 0
+    }
+  }
+}

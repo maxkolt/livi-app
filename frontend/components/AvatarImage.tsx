@@ -109,6 +109,8 @@ interface AvatarImageProps {
   fallbackText?: string;
   fallbackTextStyle?: StyleProp<TextStyle>;
   containerStyle?: StyleProp<ViewStyle>;
+  /** Own profile: the selected file stays painted while its server version arrives. */
+  preserveImageOnVersionChange?: boolean;
   /** Search splash: parent ждёт decode, не только prefetch. */
   onDisplayLoad?: () => void;
   /** Радар Поиска: из этого строится текстура для рассыпания аватара. */
@@ -132,6 +134,7 @@ const AvatarImage = memo<AvatarImageProps>(({
   fallbackText,
   fallbackTextStyle,
   containerStyle,
+  preserveImageOnVersionChange = false,
   onDisplayLoad,
   onDisplayChange,
   displayHidden,
@@ -225,7 +228,9 @@ const AvatarImage = memo<AvatarImageProps>(({
    * при каждом замере раскладки, поэтому от него ключ зависеть не должен.
    * Идентичность аватара определяют userId и avatarVer.
    */
-  const key = `avatar_${userId || 'none'}_v${avatarVer || 0}`;
+  const key = preserveImageOnVersionChange
+    ? `avatar_${userId || 'none'}_profile`
+    : `avatar_${userId || 'none'}_v${avatarVer || 0}`;
 
   // Буква только если аватара точно нет. При avatarVer>0 кэш может быть пуст на кадр —
   // логи показывали paintMode:"letter" + #2A2C31 до прихода data URI.

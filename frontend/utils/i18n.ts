@@ -39,6 +39,12 @@ export const languages: ReadonlyArray<{ code: Lang; name: string; native: string
 // 5) Словарь переводов для всех LANGS
 const dict: Partial<Record<Lang, Record<string, string>>> = {
   ru: {
+    accountResetTitle: 'Новый старт LiVi',
+    accountResetMessage: 'Мы обновили систему аккаунтов и удалили прежние профили и историю. Создайте новый профиль, чтобы продолжить. Старые данные на этом устройстве будут очищены.',
+    accountResetContinue: 'Создать новый профиль',
+    accountResetFailedTitle: 'Не удалось подготовить новый профиль',
+    accountResetFailedMessage: 'Закройте и снова откройте LiVi или повторите попытку.',
+    accountResetRetry: 'Повторить',
     callingYouCall: 'Вы звоните {name}',
     callingWaiting: 'Ожидаем ответа…',
     cancelCall: 'Отменить',
@@ -576,6 +582,12 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Следующий фон',
   },
   en: {
+    accountResetTitle: 'A fresh start for LiVi',
+    accountResetMessage: 'We updated the account system and removed previous profiles and history. Create a new profile to continue. Old account data on this device will be cleared.',
+    accountResetContinue: 'Create a new profile',
+    accountResetFailedTitle: 'Could not prepare a new profile',
+    accountResetFailedMessage: 'Close and reopen LiVi, or try again.',
+    accountResetRetry: 'Try again',
     callingYouCall: 'Calling {name}',
     callingWaiting: 'Waiting for answer…',
     cancelCall: 'Cancel',

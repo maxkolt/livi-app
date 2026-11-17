@@ -2,7 +2,7 @@ import type { HomeUiGlobals } from './types';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getCurrentUserId } from '../../sockets/modules/authState';
 import { CALL_LOG_KEY } from './constants';
-import { appendChatCallStatusIfEligible } from '../chat/chatCallEvents';
+import { appendChatCallStatusIfEligible, appendAcceptedChatCallStatus } from '../chat/chatCallEvents';
 
 export type CallLogDirection = 'outgoing' | 'incoming' | 'missed' | 'cancelled' | 'no_answer';
 
@@ -274,7 +274,7 @@ export function subscribeCallLog(cb: (entries: CallLogEntry[]) => void): () => v
 }
 
 export function recordCallLog(
-  input: { peerId: string; direction: CallLogDirection; at?: number; silent?: boolean },
+  input: { peerId: string; direction: CallLogDirection; at?: number; silent?: boolean; callId?: string },
 ): void {
   const peerId = String(input.peerId || '').trim();
   if (!peerId) return;
@@ -332,9 +332,12 @@ export function recordCallLog(
   if (memory && memoryUid === uid) apply(memory);
   else void ensureLoaded(uid).then(apply);
 
-  // Финальные статусы в открытой переписке → локальное облако (не silent outgoing при старте).
-  if (!silent && (input.direction === 'incoming' || input.direction === 'missed')) {
-    void appendChatCallStatusIfEligible(peerId, input.direction, { at });
+  // An accepted incoming call belongs in its chat even when answered from Home/native UI.
+  // Use the call id so native/socket acceptance replay keeps the same durable message id.
+  if (!silent && input.direction === 'incoming') {
+    void appendAcceptedChatCallStatus(peerId, 'incoming', { at, callId: input.callId });
+  } else if (!silent && input.direction === 'missed') {
+    void appendChatCallStatusIfEligible(peerId, 'missed', { at });
   }
 }
 

@@ -18,13 +18,13 @@ import AdaptiveText from '../../components/AdaptiveText';
 import AppReviewCard from '../../components/AppReviewCard';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { FontAwesome, Ionicons } from '@expo/vector-icons';
-import { Image as ExpoImage } from 'expo-image';
 import * as Clipboard from 'expo-clipboard';
 import AvatarImage, { activeFrameOutset } from '../../components/AvatarImage';
 import { AvatarGlyph } from '../../components/AvatarGlyph';
 import { TextInput as PaperInput } from 'react-native-paper';
 import { getCurrentUserId } from '../../sockets/socket';
 import { t, languages, type Lang } from '../../utils/i18n';
+import { accountDataReset } from '../../utils/accountDataResetRuntime';
 import { getPrivacyPolicyUrl } from '../../utils/privacyPolicyUrl';
 import {
   getCurrentAppVersion,
@@ -51,6 +51,7 @@ import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter, displayName } from './friendHelpers';
 import { hasProfilePhoto } from './HomeCenterProfile';
 import { PHONE_AVATAR_REFERENCE_WIDTH, usesLargePhoneAvatar } from './phoneAvatarLayout';
+import { ProfileAvatar } from './ProfileAvatar';
 import {
   WelcomeProfileRow,
   WelcomeProfileSection,
@@ -72,9 +73,7 @@ import {
 const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const SUPPORT_TELEGRAM_URL = 'https://t.me/livi_app';
-const CAMERA_BTN_SIZE = 32;
-/** Урна на аватаре чуть внутрь от угла — ближе к самому кругу, а не в пустом углу. */
-const CAMERA_BTN_INSET = 7;
+const CAMERA_BTN_SIZE = 36;
 /** Красный «удалить» строки «Удалить профиль». */
 const WELCOME_DELETE_ICON = '#A63A48';
 /** Строк в hub-профиле: 4 секции по 2 строки. */
@@ -139,7 +138,7 @@ const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
 
 const HUB_PRESET_TABLET: HubMetricsPreset = {
   avatarSize: 132,
-  cameraBtnSize: 34,
+  cameraBtnSize: 38,
   // Прирост аватара (+8) съеден из отступов — карточки на месте.
   gapTop: 22,
   gapUnderAvatar: 16,
@@ -415,6 +414,7 @@ type HomeWelcomeProfileViewProps = {
   handleSaveProfile: () => void;
   saving?: boolean;
   savedToast?: boolean;
+  avatarSaveSuccessId?: number;
   setSavedToast?: (show: boolean) => void;
   onSelectLang: (code: Lang) => void;
   onLogOutAccount?: () => void;
@@ -446,6 +446,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     handleSaveProfile,
     saving,
     savedToast,
+    avatarSaveSuccessId = 0,
     setSavedToast,
     onSelectLang,
     onLogOutAccount,
@@ -470,7 +471,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     if (props.openAppUpdatesRequest) setScreen('about');
   }, [props.openAppUpdatesRequest]);
   const callKeepAlive = useCallKeepAliveState(active);
-  const [accountOpen, setAccountOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(() => accountDataReset.shouldOpenProfile());
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const hubOrientationKey = isLandscape ? 'landscape' : 'portrait';
   // Замер панели — отдельно на портрет/landscape: иначе после поворота ещё
@@ -541,7 +542,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     [hubOrientationKey],
   );
 
-  const hasActiveFrame = !!activeFrameId;
   const displayNick = displayName(savedNick || nick);
   const letter = displayAvatarLetter(savedNick || nick);
   const busy = !!saving || !!wiping;
@@ -683,8 +683,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const hasLocalAvatarPreview = avatarUri && /^(file|content|ph|assets-library):\/\//i.test(avatarUri);
   /** Урну показываем, только когда есть что удалять. */
   const hasAvatarPhoto = !!hasLocalAvatarPreview || hasProfilePhoto(avatarUri, myAvatarVer);
-  // Только что выбранное фото идёт мимо AvatarImage.
-  const localPreviewPhoto = !(myUserId && hasActiveFrame) && hasLocalAvatarPreview ? avatarUri : '';
 
   const avatarInner = (
     <View
@@ -699,31 +697,15 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         },
       ]}
     >
-      {myUserId && hasActiveFrame ? (
+      {hasAvatarPhoto || activeFrameId ? (
         <AvatarImage
-          key="avatar-framed"
-          userId={myUserId}
+          userId={myUserId || undefined}
           avatarVer={myAvatarVer}
           uri={hasLocalAvatarPreview ? avatarUri : myFullAvatarUri || undefined}
           size={avatarSize}
           frameSize={avatarFrameSize}
           frameId={activeFrameId}
-          fallbackText={letter}
-          containerStyle={homeStyles.centerAvatarImg}
-          fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
-        />
-      ) : hasLocalAvatarPreview ? (
-        localPreviewPhoto ? (
-          <ExpoImage source={{ uri: localPreviewPhoto }} style={homeStyles.centerAvatarImg} cachePolicy="memory-disk" />
-        ) : null
-      ) : myUserId && myAvatarVer > 0 ? (
-        <AvatarImage
-          key="avatar-plain"
-          userId={myUserId}
-          avatarVer={myAvatarVer}
-          uri={myFullAvatarUri || undefined}
-          size={avatarContainerSize}
-          frameId={activeFrameId || null}
+          preserveImageOnVersionChange
           fallbackText={letter}
           containerStyle={homeStyles.centerAvatarImg}
           fallbackTextStyle={{ fontSize: avatarSize > 110 ? 34 : 28, fontWeight: '800' }}
@@ -817,40 +799,20 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   );
 
   const hubAvatarBody = (
-      <View style={styles.avatarWrap}>
-        <Pressable
-          onPress={() => openAvatarSheet?.()}
-          disabled={busy}
-          style={[
-            styles.avatarRing,
-            {
-              width: avatarFrameSize,
-              height: avatarFrameSize,
-              borderRadius: avatarFrameSize / 2,
-            },
-          ]}
-        >
-          {avatarInner}
-        </Pressable>
-        {hasAvatarPhoto && onDeleteAvatar ? (
-          <Pressable
-            style={[
-              styles.cameraBtn,
-              {
-                width: cameraBtnSize,
-                height: cameraBtnSize,
-                borderRadius: cameraBtnSize / 2,
-              },
-            ]}
-            onPress={onDeleteAvatar}
-            disabled={busy}
-            accessibilityRole="button"
-            accessibilityLabel={t('deleteAvatarTitle', lang)}
-          >
-            <Ionicons name="trash-outline" size={Math.round(cameraBtnSize / 2)} color={WELCOME_PROFILE_ROW_ICON} />
-          </Pressable>
-        ) : null}
-      </View>
+    <ProfileAvatar
+      diameter={avatarFrameSize}
+      buttonSize={cameraBtnSize}
+      disabled={busy}
+      active={active && screen === 'hub'}
+      saveSuccessId={avatarSaveSuccessId}
+      savedLabel={t('saved', lang)}
+      deleteLabel={t('deleteAvatarTitle', lang)}
+      deleteColor={WELCOME_PROFILE_ROW_ICON}
+      onPress={openAvatarSheet}
+      onDelete={hasAvatarPhoto ? onDeleteAvatar : undefined}
+    >
+      {avatarInner}
+    </ProfileAvatar>
   );
 
   const hubAvatarSection = hubStage < 1 ? null : (
@@ -1533,23 +1495,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
   },
   hubListStackNickOpen: { marginTop: 8 },
-  avatarWrap: { position: 'relative' },
-  avatarRing: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'visible',
-  },
-  cameraBtn: {
-    position: 'absolute',
-    right: CAMERA_BTN_INSET,
-    bottom: CAMERA_BTN_INSET,
-    width: CAMERA_BTN_SIZE,
-    height: CAMERA_BTN_SIZE,
-    borderRadius: CAMERA_BTN_SIZE / 2,
-    backgroundColor: 'rgba(0, 0, 0, 0.52)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   accountPanel: {
     marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
     marginTop: 10,

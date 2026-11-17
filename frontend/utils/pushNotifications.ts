@@ -1329,6 +1329,17 @@ export async function drainPendingNavigations(): Promise<void> {
   }
 }
 
+/** A retired account's notification tap must not override new-profile entry. */
+export async function clearPendingNotificationNavigationForAccountReset(): Promise<void> {
+  pendingNavigations.clear();
+  if (pendingNavigationDrainTimer) clearTimeout(pendingNavigationDrainTimer);
+  pendingNavigationDrainTimer = null;
+  const { getNotificationHomeRequest, completeNotificationHome } = await import('./notificationHome');
+  const request = getNotificationHomeRequest();
+  if (request) completeNotificationHome(request.id);
+  await Notifications.clearLastNotificationResponseAsync();
+}
+
 async function runWhenNavReady(
   key: string,
   run: (nav: ReadyNavigation) => void | Promise<void>,

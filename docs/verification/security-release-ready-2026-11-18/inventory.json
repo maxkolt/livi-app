@@ -1,0 +1,29 @@
+{
+  "mode": "dry-run",
+  "database": "videochat",
+  "remove": {
+    "users": 924,
+    "installs": 908,
+    "messages": 0,
+    "offlinemessages": 4,
+    "friendshipmessages": 86,
+    "friendshipmessageitems": 1455,
+    "friendship_edges": 92,
+    "pushtokens": 698,
+    "missed_calls": 7,
+    "call_timelines": 440,
+    "userreports": 1,
+    "fliq_user_state": 28,
+    "installmigrationproofs": 0,
+    "release_diagnostics": 1412,
+    "release_diagnostic_reports": 0,
+    "cosmetic_purchases": 13,
+    "intellectmoney_cosmetic_purchases": 1
+  },
+  "preserve": {
+    "appconfig": 1,
+    "fliq_videos": 53297,
+    "fliq_collect_state": 82
+  },
+  "unknown": []
+}

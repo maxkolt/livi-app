@@ -44,7 +44,7 @@ jest.mock('../utils/dataUriToFileUri', () => ({
   resolveDataUriForAndroid: (uri: string) => mockResolve(uri),
 }));
 jest.mock('../utils/avatarCache', () => ({ getAvatarUri: jest.fn(async () => null) }));
-jest.mock('../utils/imageOptimization', () => ({ getAvatarImageProps: (uri: string) => ({ source: { uri } }) }));
+jest.mock('../utils/imageOptimization', () => ({ getAvatarImageProps: (uri: string, key: string) => ({ source: { uri }, recyclingKey: key }) }));
 jest.mock('../utils/cosmeticCatalog', () => ({ getCosmeticFrame: (id: string) =>
   id ? { colors: ['#ffffff', '#888888'] } : null }));
 jest.mock('../utils/cosmetics', () => ({ useUserActiveFrame: () => '' }));
@@ -68,6 +68,11 @@ function imageUri(node: React.ReactNode): string | undefined {
   if (!React.isValidElement<{ source?: { uri?: string }; children?: React.ReactNode }>(node)) return;
   if ((node.type as unknown) === 'ExpoImage') return node.props.source?.uri;
   return React.Children.toArray(node.props.children).map(imageUri).find(Boolean);
+}
+function imageNode(node: React.ReactNode): React.ReactElement<{ recyclingKey: string; children?: React.ReactNode }> | undefined {
+  if (!React.isValidElement<{ recyclingKey: string; children?: React.ReactNode }>(node)) return;
+  if ((node.type as unknown) === 'ExpoImage') return node;
+  return React.Children.toArray(node.props.children).map(imageNode).find(Boolean);
 }
 const avatar = (id: string, version: number, uri: string) => render(() =>
   AvatarImage({ userId: id, avatarVer: version, uri, fallbackText: 'A' }));
@@ -173,4 +178,23 @@ it.each([2.625, 3.5, 4])('keeps a small frame centered at density %s', density =
 it('preserves the dimensions of a large framed avatar', () => {
   const tree = render(() => AvatarImage({ size: 121, frameSize: 141, frameId: 'fire', uri: 'file:///large-avatar.jpg' })) as FramedAvatarTree;
   expect(tree.props.children.props).toMatchObject({ size: 141, photoSize: 121, style: { left: -10, top: -10 } });
+});
+
+it('keeps the profile photo mounted when upload confirmation assigns a new version', () => {
+  const props = { userId: 'upload-self', uri: 'file:///selected-profile.jpg', preserveImageOnVersionChange: true };
+  const before = imageNode(render(() => AvatarImage({ ...props, avatarVer: 0 })));
+  const after = imageNode(render(() => AvatarImage({ ...props, avatarVer: 5 })));
+  expect(after).toBeDefined();
+  expect(after?.key).toBe(before?.key);
+  expect(after?.props.recyclingKey).toBe(before?.props.recyclingKey);
+});
+
+it('still recycles ordinary avatars on a version change and profiles on a user change', () => {
+  const props = { userId: 'recycling-a', uri: 'file:///recycling.jpg' };
+  const a = imageNode(render(() => AvatarImage({ ...props, avatarVer: 1 })));
+  const b = imageNode(render(() => AvatarImage({ ...props, avatarVer: 2 })));
+  expect(a?.props.recyclingKey).not.toBe(b?.props.recyclingKey);
+  const c = imageNode(render(() => AvatarImage({ ...props, preserveImageOnVersionChange: true })));
+  const d = imageNode(render(() => AvatarImage({ ...props, userId: 'recycling-b', preserveImageOnVersionChange: true })));
+  expect(c?.props.recyclingKey).not.toBe(d?.props.recyclingKey);
 });

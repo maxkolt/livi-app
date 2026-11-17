@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "scenario": "atomic_reset_preserves_service_settings",
+      "ok": true
+    },
+    {
+      "scenario": "public_reset_marker",
+      "ok": true
+    },
+    {
+      "scenario": "old_registration_rejected_without_recreating_users",
+      "ok": true
+    },
+    {
+      "scenario": "new_empty_account_with_hashed_secret",
+      "ok": true
+    },
+    {
+      "scenario": "http_requires_original_secret",
+      "ok": true
+    },
+    {
+      "scenario": "wrong_secret_cannot_replace_new_account",
+      "ok": true
+    }
+  ]
+}

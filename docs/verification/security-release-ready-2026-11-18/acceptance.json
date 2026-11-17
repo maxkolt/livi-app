@@ -1,0 +1,44 @@
+{
+  "scenarios": [
+    {
+      "scenario": "compatibility_deployment_preserves_legacy_access_before_cutover",
+      "ok": true
+    },
+    {
+      "scenario": "uncommitted_generation_cannot_publish_marker_or_accept_requests",
+      "ok": true
+    },
+    {
+      "scenario": "atomic_reset_preserves_service_settings",
+      "ok": true
+    },
+    {
+      "scenario": "mismatched_database_generation_refuses_startup",
+      "ok": true
+    },
+    {
+      "scenario": "public_reset_marker",
+      "ok": true
+    },
+    {
+      "scenario": "old_registration_rejected_without_recreating_users",
+      "ok": true
+    },
+    {
+      "scenario": "new_empty_account_with_hashed_secret",
+      "ok": true
+    },
+    {
+      "scenario": "http_requires_original_secret",
+      "ok": true
+    },
+    {
+      "scenario": "wrong_secret_cannot_replace_new_account",
+      "ok": true
+    },
+    {
+      "scenario": "registered_account_survives_restart_without_another_reset",
+      "ok": true
+    }
+  ]
+}

@@ -1,0 +1,31 @@
+{
+  "device": "Samsung Galaxy A35 (SM-A356E)",
+  "serial": "RFCX306PWLE",
+  "package": "com.kolt12max.livi.dev",
+  "screenDiagonalInches": 6.640610367712442,
+  "requestedScale": 0.92,
+  "before": {
+    "width": 1080,
+    "height": 2340,
+    "diameterPx": 362,
+    "leftPx": 359,
+    "rightPx": 720,
+    "sampleRowPx": 956
+  },
+  "after": {
+    "width": 1080,
+    "height": 2340,
+    "diameterPx": 336,
+    "leftPx": 372,
+    "rightPx": 707,
+    "sampleRowPx": 956
+  },
+  "reductionPercent": 7.182320441988955,
+  "checks": {
+    "apkBuild": "passed",
+    "installPreservingData": "passed",
+    "searchVisible": "passed",
+    "avatarCentered": "passed",
+    "nicknameAndButtonVisible": "passed"
+  }
+}
