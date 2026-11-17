@@ -3,7 +3,11 @@ import { shared } from "./shared";
 import type { SocketReauthResponse } from "./types";
 import { REAUTH_FRESH_MS } from "./reauthConstants";
 import { applyMissedFromReauth } from "./missedCalls";
-import { emitAck } from "./emit";
+import { emitAck, ensureSocketConnected } from "./emit";
+import { socket } from "./socketCore";
+
+let reauthSocketId: string | undefined;
+let reauthUserId: string | undefined;
 
 /** Один reauth за раз на всех вызывающих (connect, boot, friends:fetch, …). */
 export async function emitReauthDeduped(
@@ -13,27 +17,38 @@ export async function emitReauthDeduped(
 ): Promise<SocketReauthResponse> {
   const uid = String(userId || "").trim();
   if (!uid) return { ok: false, error: "no_userId" };
-  if (shared.reauthInFlight) return shared.reauthInFlight;
+  const socketId = socket.id;
+  if (shared.reauthInFlight && reauthSocketId === socketId && reauthUserId === uid) return shared.reauthInFlight;
 
-  const p = (async (): Promise<SocketReauthResponse> => {
+  let p!: Promise<SocketReauthResponse>;
+  p = (async (): Promise<SocketReauthResponse> => {
     try {
       const installSecret = await getInstallSecret();
+      if (socket.id !== socketId) return { ok: false, error: "connection_changed" };
       const res = await emitAck<SocketReauthResponse>("reauth", { userId: uid, installSecret }, timeoutMs, retries);
+      if (!socket.connected || socket.id !== socketId || shared.currentUserId !== uid) return { ok: false, error: "connection_changed" };
       if (res?.ok) {
         shared.lastSuccessfulReauthAt = Date.now();
+        shared.lastSuccessfulReauthSocketId = socketId;
+        shared.lastSuccessfulReauthUserId = uid;
         if (res.legacyMigrationRequired) void import('../../utils/migrateLegacyInstall').then(m => m.migrateLegacyInstall(uid)).catch(() => {});
         // Also drain native history after identity becomes available, even without server backlog.
         applyMissedFromReauth(res).catch(() => {});
+      } else {
+        shared.lastSuccessfulReauthAt = 0;
       }
       return res && typeof res.ok === "boolean" ? res : { ok: false, error: "bad_response" };
     } catch (e: unknown) {
+      if (socket.id === socketId) shared.lastSuccessfulReauthAt = 0;
       return { ok: false, error: String((e as { message?: string } | null)?.message || e || "reauth_failed") };
     } finally {
-      shared.reauthInFlight = null;
+      if (shared.reauthInFlight === p) shared.reauthInFlight = null;
     }
   })();
 
   shared.reauthInFlight = p;
+  reauthSocketId = socketId;
+  reauthUserId = uid;
   return p;
 }
 
@@ -68,11 +83,16 @@ export async function recoverFromReauthFailure(error?: string): Promise<void> {
 }
 
 // После разрыва Manager шлёт `reconnect`, а namespace socket всегда шлёт `connect` — reauth делаем только в обработчике `connect` (через emitReauthDeduped), иначе двойной emit.
-export async function ensureReauthBeforePrivilegedSocketOp(): Promise<boolean> {
+export async function ensureReauthBeforePrivilegedSocketOp(force = false): Promise<boolean> {
   const uid = String(shared.currentUserId || "").trim();
   if (!uid) return false;
+  if (!socket.connected) await ensureSocketConnected();
+  if (!socket.connected) return false;
   const now = Date.now();
-  if (now - shared.lastSuccessfulReauthAt < REAUTH_FRESH_MS) return true;
+  if (!force && socket.id && shared.lastSuccessfulReauthSocketId === socket.id &&
+      shared.lastSuccessfulReauthUserId === uid &&
+      now - shared.lastSuccessfulReauthAt < REAUTH_FRESH_MS) return true;
   const res = await emitReauthDeduped(uid);
-  return !!res.ok;
+  return !!res.ok && socket.connected && !!socket.id && shared.lastSuccessfulReauthSocketId === socket.id &&
+    shared.lastSuccessfulReauthUserId === shared.currentUserId;
 }

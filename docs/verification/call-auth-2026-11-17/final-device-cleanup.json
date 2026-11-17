@@ -1,0 +1,30 @@
+{
+  "collectedAtUtc": "2026-11-17T14:30:02.813263+00:00",
+  "devices": [
+    {
+      "device": "a35",
+      "androidRelease": "17",
+      "audioMode": "MODE_NORMAL",
+      "activeCallService": false,
+      "incomingCallService": false,
+      "activeCallWakeLock": false,
+      "liviProximityWakeLock": false,
+      "vpnActive": false,
+      "mobileData": "1",
+      "wifi": "1"
+    },
+    {
+      "device": "s25",
+      "androidRelease": "16",
+      "audioMode": "MODE_NORMAL",
+      "activeCallService": false,
+      "incomingCallService": false,
+      "activeCallWakeLock": false,
+      "liviProximityWakeLock": false,
+      "vpnActive": false,
+      "mobileData": "1",
+      "wifi": "1"
+    }
+  ],
+  "emulator": "not connected during final two-phone checks"
+}

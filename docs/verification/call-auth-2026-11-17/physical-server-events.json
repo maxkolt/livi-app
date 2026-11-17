@@ -1,0 +1,90 @@
+{
+  "NEGOTIATE_FAILED": 0,
+  "unauthorized": 0,
+  "events": [
+    {
+      "atUtc": "2026-11-17T14:10:29+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:10:30+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:10:30+00:00",
+      "event": "participant active",
+      "connectTime": "909.259695ms"
+    },
+    {
+      "atUtc": "2026-11-17T14:10:31+00:00",
+      "event": "participant active",
+      "connectTime": "1.111008825s"
+    },
+    {
+      "atUtc": "2026-11-17T14:12:34+00:00",
+      "event": "participant closing",
+      "reason": "PEER_CONNECTION_DISCONNECTED"
+    },
+    {
+      "atUtc": "2026-11-17T14:12:54+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:12:55+00:00",
+      "event": "participant active",
+      "connectTime": "901.754279ms"
+    },
+    {
+      "atUtc": "2026-11-17T14:23:44+00:00",
+      "event": "participant closing",
+      "reason": "PEER_CONNECTION_DISCONNECTED"
+    },
+    {
+      "atUtc": "2026-11-17T14:24:20+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:24:22+00:00",
+      "event": "participant active",
+      "connectTime": "1.475557745s"
+    },
+    {
+      "atUtc": "2026-11-17T14:26:08+00:00",
+      "event": "participant closing",
+      "reason": "CLIENT_REQUEST_LEAVE"
+    },
+    {
+      "atUtc": "2026-11-17T14:26:09+00:00",
+      "event": "participant closing",
+      "reason": "CLIENT_REQUEST_LEAVE"
+    },
+    {
+      "atUtc": "2026-11-17T14:27:19+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:27:19+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T14:27:20+00:00",
+      "event": "participant active",
+      "connectTime": "902.819958ms"
+    },
+    {
+      "atUtc": "2026-11-17T14:27:20+00:00",
+      "event": "participant active",
+      "connectTime": "763.453657ms"
+    },
+    {
+      "atUtc": "2026-11-17T14:28:59+00:00",
+      "event": "participant closing",
+      "reason": "CLIENT_REQUEST_LEAVE"
+    },
+    {
+      "atUtc": "2026-11-17T14:28:59+00:00",
+      "event": "participant closing",
+      "reason": "CLIENT_REQUEST_LEAVE"
+    }
+  ]
+}

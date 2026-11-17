@@ -14,6 +14,13 @@ vm.runInNewContext(compile(path.join(__dirname, 'videoCall/constants.ts')), {
 });
 const constants = constantsModule.exports;
 const heartbeat = jest.fn();
+class NativeStream {
+  tracks: Array<{ kind: string }> = [];
+  getTracks() { return this.tracks; }
+  addTrack(track: { kind: string }) { this.tracks.push(track); }
+  getVideoTracks() { return this.tracks.filter(track => track.kind === 'video'); }
+  getAudioTracks() { return this.tracks.filter(track => track.kind === 'audio'); }
+}
 
 function prototype(): object {
   const mod = { exports: {} as { VideoCallSession: { prototype: object } } };
@@ -21,6 +28,7 @@ function prototype(): object {
     module: mod, exports: mod.exports, Date, setTimeout, clearTimeout, setInterval, clearInterval,
     require: (name: string) => {
       if (name === './videoCall/constants') return constants;
+      if (name === '@livekit/react-native-webrtc') return { MediaStream: NativeStream };
       if (name.endsWith('/SimpleEventEmitter')) return { SimpleEventEmitter: class {} };
       if (name.endsWith('/logger')) return { logger: { info: jest.fn(), warn: jest.fn() } };
       if (name.endsWith('/capacityClientMetrics')) return { sendClientMetrics: async () => {} };
@@ -51,6 +59,7 @@ function fixture() {
     runMediaReconnectAttemptsLocked: jest.fn(async () => {}),
     kickMediaRejoinFromNetworkRestore: jest.fn(async () => {}),
     waitForLiveKitSelfRecovery: jest.fn(), handleCallEnded: jest.fn(),
+    isSameRemoteParticipant: (participant: { identity: string }) => participant.identity === 'peer',
   };
   type Methods = {
     beginWaitingForRemotePeerRejoin: (reason: string) => void;
@@ -60,12 +69,66 @@ function fixture() {
     onMediaReconnectSucceeded: () => void;
     noteRemotePeerRejoined: (source: string) => void;
     runMediaReconnectAttempts: (url: string, token: string, room: string) => Promise<void>;
+    onRemoteParticipantDisconnected: (room: object, participant: { identity: string }) => void;
+    refreshLocalPreviewFromTracks: () => void;
   };
   return Object.assign(Object.create(prototype()) as Methods, state);
 }
 
 beforeEach(() => { jest.useFakeTimers(); heartbeat.mockClear(); });
 afterEach(() => { jest.clearAllTimers(); jest.useRealTimers(); });
+
+it('rebinds direct-call preview to the SDK replacement without touching camera or microphone', () => {
+  const oldVideo = { kind: 'video', readyState: 'ended' };
+  const video = { kind: 'video', readyState: 'live', enabled: false };
+  const audio = { kind: 'audio', readyState: 'live', enabled: false };
+  const oldStream = new NativeStream();oldStream.addTrack(oldVideo);oldStream.addTrack(audio);
+  const notifyLocalStreamChange = jest.fn();
+  const s = Object.assign(fixture(), {
+    localStream: oldStream, localVideoTrack: { mediaStreamTrack: video, stop: jest.fn() },
+    localAudioTrack: { mediaStreamTrack: audio, stop: jest.fn() }, notifyLocalStreamChange,
+  });
+  s.refreshLocalPreviewFromTracks();
+  expect(s.localStream).not.toBe(oldStream);
+  expect(s.localStream.getTracks()).toEqual([video, audio]);
+  expect(notifyLocalStreamChange).toHaveBeenCalledTimes(1);
+  expect(video.enabled).toBe(false);expect(audio.enabled).toBe(false);
+  expect(s.localVideoTrack.stop).not.toHaveBeenCalled();
+  expect(s.localAudioTrack.stop).not.toHaveBeenCalled();
+  const current=s.localStream;s.refreshLocalPreviewFromTracks();
+  expect(s.localStream).toBe(current);
+  expect(notifyLocalStreamChange).toHaveBeenCalledTimes(1);
+});
+
+it('does not restore a direct-call preview after teardown starts', () => {
+  const s=Object.assign(fixture(), { localVideoTrack:{mediaStreamTrack:{kind:'video',readyState:'live'}},
+    localStream:null, ended:true, notifyLocalStreamChange:jest.fn() });
+  s.refreshLocalPreviewFromTracks();
+  expect(s.localStream).toBeNull();expect(s.notifyLocalStreamChange).not.toHaveBeenCalled();
+});
+
+it('continues answering SFU offers while the remote peer is offline and after it rejoins', async () => {
+  const s = fixture();
+  const client = { onOffer: jest.fn(), onAnswer: jest.fn(), onTrickle: jest.fn() };
+  const room = Object.assign(s.room, { engine: { client } });
+  const callbacks = { ...client };
+
+  s.onRemoteParticipantDisconnected(room, { identity: 'peer' });
+  // SFU removes the departed microphone before the peer returns. Those offers must
+  // still be answered, or it forces full reconnects on the otherwise healthy survivor.
+  expect(client).toEqual(callbacks);
+  await jest.advanceTimersByTimeAsync(constants.REMOTE_PARTICIPANT_DISCONNECT_CONFIRM_MS);
+  expect(s.waitingForRemotePeerRejoin).toBe(true);
+  expect(client).toEqual(callbacks);
+
+  room.remoteParticipants.set('peer', { identity: 'peer' });
+  s.noteRemotePeerRejoined('ParticipantConnected');
+  expect(s.waitingForRemotePeerRejoin).toBe(false);
+  expect(client).toEqual(callbacks);
+  client.onOffer();
+  expect(callbacks.onOffer).toHaveBeenCalledTimes(1);
+  expect(s.handleCallEnded).not.toHaveBeenCalled();
+});
 
 it('keeps the survivor waiting and renewing the server lease for a five-minute outage', async () => {
   const s = fixture();

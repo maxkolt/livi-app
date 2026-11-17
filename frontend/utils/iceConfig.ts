@@ -2,6 +2,7 @@
 import { Platform } from 'react-native';
 import { API_BASE } from '../sockets/socket';
 import { getInstallAuthHeaders } from './installId';
+import { hasFreshTurnCredentials, iceCacheDeadline, isTurnUrl } from './turnCredentialLifetime';
 
 /** Existing app configuration, including the legacy timeout field. */
 type CallRTCConfiguration = RTCConfiguration & { iceGatheringTimeout?: number };
@@ -23,7 +24,7 @@ function iceConfigHasTurn(cfg: CallRTCConfiguration | null | undefined): boolean
   return servers.some((s) => {
     const u = s?.urls;
     const list = Array.isArray(u) ? u : typeof u === 'string' ? [u] : [];
-    return list.some((url: string) => typeof url === 'string' && url.startsWith('turn:'));
+    return list.some((url: string) => typeof url === 'string' && isTurnUrl(url));
   });
 }
 
@@ -57,7 +58,7 @@ function getEnvFallbackConfiguration(options?: { forceRelayOnly?: boolean }): Ca
   const username = process.env.EXPO_PUBLIC_TURN_USERNAME || '';
   const credential = process.env.EXPO_PUBLIC_TURN_CREDENTIAL || '';
   const icePolicyEnv = (process.env.EXPO_PUBLIC_ICE_POLICY || '').trim().toLowerCase();
-  const hasTurnCredentials = !!(username && credential);
+  const hasTurnCredentials = hasFreshTurnCredentials({ urls: [], username, credential }, Date.now());
 
   let turnUrls: string[] = rawTurn ? rawTurn.split(/[\,\s]+/).filter(Boolean) : [];
   let turnTcpUrls: string[] = rawTurnTcp ? rawTurnTcp.split(/[\,\s]+/).filter(Boolean) : [];
@@ -287,11 +288,11 @@ async function fetchIceConfiguration(
           const cleanedIceServers = j.iceServers.filter((s) => {
             const urls = s?.urls;
             const list: string[] = Array.isArray(urls) ? urls : (typeof urls === 'string' ? [urls] : []);
-            const hasTurnUrl = list.some((u) => typeof u === 'string' && u.startsWith('turn:'));
+            const hasTurnUrl = list.some((u) => typeof u === 'string' && isTurnUrl(u));
             if (!hasTurnUrl) return true; // STUN/прочее оставляем
-            const okCreds = !!(s?.username && s?.credential);
+            const okCreds = hasFreshTurnCredentials(s, Date.now());
             if (!okCreds) {
-              console.warn('[ICE Config] Dropping TURN server without credentials:', { urls: list });
+              console.warn('[ICE Config] Dropping TURN server with missing or expiring credentials');
             }
             return okCreds;
           });
@@ -299,8 +300,8 @@ async function fetchIceConfiguration(
           // Проверяем наличие TURN серверов
           const hasTurn = cleanedIceServers.some((server) =>
             server.urls && (
-              (Array.isArray(server.urls) && server.urls.some((u: string) => u.startsWith('turn:'))) ||
-              (typeof server.urls === 'string' && server.urls.startsWith('turn:'))
+              (Array.isArray(server.urls) && server.urls.some(isTurnUrl)) ||
+              (typeof server.urls === 'string' && isTurnUrl(server.urls))
             )
           );
           
@@ -334,8 +335,7 @@ async function fetchIceConfiguration(
             iceGatheringTimeout: 5000, // Уменьшено с 10s до 5s для быстрого подключения
           } satisfies CallRTCConfiguration;
           cachedConfig = cfg;
-          const ttlSec = Math.max(60, Math.min(Number(j.ttl || 300), 3600));
-          cacheUntil = now + Math.floor(ttlSec * 900); // 90% of ttl in ms
+          cacheUntil = iceCacheDeadline(cleanedIceServers, j.ttl, now);
           return cfg;
         } else {
           console.warn('[ICE Config] Invalid server response format:', j);
@@ -385,7 +385,7 @@ async function fetchIceConfiguration(
       const hasTurn = (fallbackConfig.iceServers)?.some?.((s) => {
         const u = s?.urls;
         const list = Array.isArray(u) ? u : (typeof u === 'string' ? [u] : []);
-        return list.some((url: string) => typeof url === 'string' && url.startsWith('turn:'));
+        return list.some((url: string) => typeof url === 'string' && isTurnUrl(url));
       });
       if (hasTurn) {
         (fallbackConfig).iceTransportPolicy = 'relay';
@@ -397,6 +397,6 @@ async function fetchIceConfiguration(
   }
   
   cachedConfig = fallbackConfig;
-  cacheUntil = now + 5 * 60 * 1000;
+  cacheUntil = iceCacheDeadline(fallbackConfig.iceServers || [], 300, now);
   return cachedConfig;
 }

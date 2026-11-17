@@ -1,0 +1,15 @@
+{
+  "observedAtUtc": "2026-11-17T14:59:41.107Z",
+  "qaStandalone": true,
+  "apiDecodeSucceeded": true,
+  "reason": "periodic",
+  "packageName": "com.kolt12max.livi.dev",
+  "app": "UNRECOGNIZED_VERSION",
+  "device": "MEETS_DEVICE_INTEGRITY",
+  "licensing": "UNEVALUATED",
+  "activity": "missing",
+  "packageOk": true,
+  "hashOk": true,
+  "ageMs": -3010,
+  "pass": false
+}

@@ -2120,7 +2120,9 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
   @ReactMethod
   fun setSystemPiPCaptureFrameReady(ready: Boolean) {
     LiviAppModule.setSystemPiPCaptureFrameReadyStatic(ready)
-    (currentActivity as? MainActivity)?.let { activity ->
+    // The React activity reference can be cleared after onPause while the
+    // same MainActivity still owns the system PiP window.
+    ((currentActivity as? MainActivity) ?: MainActivity.lastResumedInstance)?.let { activity ->
       activity.runOnUiThread {
         // Video auto-enter нельзя держать включённым на обычном VideoCall: тогда Android
         // успевает захватить controls до React compact. Включаем его только после clean onLayout.
@@ -4315,10 +4317,15 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     fun getSystemPiPCapturePlaceholderOnly(): Boolean = systemPiPCapturePlaceholderOnly
     @JvmStatic
     internal fun setSystemPiPCapturePlaceholderOnlyStatic(value: Boolean) {
+      val readinessOverride = SystemPiPAutoEnterPolicy.captureFrameReadyOverride(
+        systemPiPCapturePlaceholderOnly, value,
+      )
       systemPiPCapturePlaceholderOnly = value
-      // Logo backdrop готов сразу. Переход logo/full UI → video всегда требует нового
-      // подтверждения onLayout чистого capture-слоя; старый ready переносить нельзя.
-      systemPiPCaptureFrameReady = value
+      // Reset only on an actual logo -> video transition. Reapplying video mode
+      // after the clean layout ACK must not cover a live PiP forever. A fresh
+      // capture cycle independently resets readiness in emitAboutToEnterSystemPiP.
+      // Do not rewrite the current Boolean on no-op: the ACK can arrive concurrently.
+      if (readinessOverride != null) systemPiPCaptureFrameReady = readinessOverride
       try {
         val activity =
           (reactContextRef?.currentActivity as? MainActivity) ?: MainActivity.lastResumedInstance

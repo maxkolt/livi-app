@@ -24,14 +24,16 @@ jest.mock('@livekit/react-native-webrtc', () => {
 });
 jest.mock('livekit-client', () => ({
   Track: { Kind: { Video: 'video', Audio: 'audio' } },
+  TrackEvent: { Restarted: 'restarted' },
   RoomEvent: Object.fromEntries(['Reconnected', 'Reconnecting', 'SignalReconnecting', 'ParticipantConnected',
-    'ParticipantDisconnected', 'TrackSubscribed', 'TrackPublished', 'TrackUnsubscribed', 'Disconnected'].map(x => [x, x])),
+    'ParticipantDisconnected', 'TrackSubscribed', 'TrackPublished', 'TrackUnsubscribed', 'LocalTrackPublished', 'Disconnected'].map(x => [x, x])),
   createLocalTracks: jest.fn(),
 }));
 
 import { RandomChatSession } from './RandomChatSession';
 import { Platform } from 'react-native';
 import socket from '../../../sockets/socket';
+import { MediaStream } from '@livekit/react-native-webrtc';
 
 const track = (kind: string, sid: string) => ({
   sid, kind, isMuted: false,
@@ -39,6 +41,7 @@ const track = (kind: string, sid: string) => ({
     addEventListener: jest.fn(), removeEventListener: jest.fn() },
   mute: jest.fn(async () => {}), unmute: jest.fn(async () => {}),
   stop: jest.fn(),
+  on: jest.fn(), off: jest.fn(),
 });
 function fixture() {
   const callbacks = { onRemoteStreamChange: jest.fn(), onLocalStreamChange: jest.fn() };
@@ -113,6 +116,62 @@ it('rebuilds remote media from live publications after SDK reconnect', () => {
   expect(session.remoteStream.id).not.toBe(oldStream.id);
   expect(session.remoteStream.getVideoTracks()).toEqual([fresh.mediaStreamTrack]);
   expect(session.roomReconnecting).toBe(false);
+});
+
+it('rebinds the local preview when SDK reconnect replaces the native camera track', () => {
+  const { session, room, handlers, callbacks } = fixture();
+  const video = track('video', 'camera'), audio = track('audio', 'mic');
+  const oldStream = new MediaStream();
+  oldStream.addTrack(video.mediaStreamTrack as any);
+  oldStream.addTrack(audio.mediaStreamTrack as any);
+  Object.assign(session, { localVideoTrack: video, localAudioTrack: audio, localStream: oldStream });
+  const oldNative = video.mediaStreamTrack;
+  oldNative.readyState = 'ended';
+  video.mediaStreamTrack = track('video', 'restarted-camera').mediaStreamTrack;
+  session.registerRoomEvents(room);
+  handlers.get('Reconnected')!();
+  expect(session.localStream).not.toBe(oldStream);
+  expect(session.localStream.getVideoTracks()).toEqual([video.mediaStreamTrack]);
+  expect(session.localStream.getAudioTracks()).toEqual([audio.mediaStreamTrack]);
+  expect(callbacks.onLocalStreamChange).toHaveBeenLastCalledWith(session.localStream);
+  expect(video.stop).not.toHaveBeenCalled();
+});
+
+it('rebinds a restarted SDK camera without reconnecting and ignores retired track events', () => {
+  const { session } = fixture();
+  const video = track('video', 'camera');
+  Object.assign(session, { localVideoTrack: video });
+  session.attachLocalVideoEndedListener(video);
+  const restart = video.on.mock.calls.find(([event]: any[]) => event === 'restarted')?.[1];
+  expect(restart).toEqual(expect.any(Function));
+  const oldNative = video.mediaStreamTrack;
+  oldNative.readyState = 'ended';
+  video.mediaStreamTrack = track('video', 'new-native').mediaStreamTrack;
+  restart!();
+  expect(session.localStream.getVideoTracks()).toEqual([video.mediaStreamTrack]);
+  expect(oldNative.removeEventListener).toHaveBeenCalledWith('ended', expect.any(Function));
+  const preview = session.localStream;
+  session.localVideoTrack = track('video', 'new-call-camera');
+  restart!();
+  expect(session.localStream).toBe(preview);
+  expect(video.stop).not.toHaveBeenCalled();
+});
+
+it('keeps a healthy local preview stable and does not revive it after Stop or room replacement', () => {
+  const { session, room, handlers, callbacks } = fixture();
+  const video = track('video', 'camera');
+  const stream = new MediaStream();stream.addTrack(video.mediaStreamTrack as any);
+  Object.assign(session, { localVideoTrack: video, localStream: stream });
+  session.registerRoomEvents(room);
+  handlers.get('Reconnected')!();
+  expect(session.localStream).toBe(stream);
+  session.started = false;session.localStream = null;
+  handlers.get('LocalTrackPublished')!({ track: video });
+  expect(session.localStream).toBeNull();
+  session.started = true;session.room = { state: 'connected' };
+  handlers.get('Reconnected')!();
+  expect(session.localStream).toBeNull();
+  expect(callbacks.onLocalStreamChange).not.toHaveBeenCalled();
 });
 
 it('keeps recovery visible when the room returns before the remote participant', () => {

@@ -1,0 +1,26 @@
+{
+  "scenario": "offline_sender_process_restart",
+  "sender": "A35",
+  "receiver": "S25",
+  "marker": "QA_1711_OFFLINE_RESTART_ONCE",
+  "networkRestored": true,
+  "optimistic": {
+    "device": "A35",
+    "marker": "QA_1711_OFFLINE_RESTART_ONCE",
+    "visibleCopies": 1
+  },
+  "senderMessageId": "chat-message-1794927858244-gge74nl",
+  "persistedAfterProcessRestart": {
+    "device": "A35",
+    "marker": "QA_1711_OFFLINE_RESTART_ONCE",
+    "visibleCopies": 1
+  },
+  "offlineSeconds": 35.33,
+  "delivered": {
+    "device": "S25",
+    "marker": "QA_1711_OFFLINE_RESTART_ONCE",
+    "visibleCopies": 1
+  },
+  "receiverMessageId": "chat-message-1794927858244-gge74nl",
+  "singleIdentityBothDevices": true
+}

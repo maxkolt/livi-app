@@ -1,0 +1,7 @@
+{
+  "scenario": "random_fixed_vpn_network_loss_before_rotation",
+  "disabledAtEpoch": 1794931514.613079,
+  "offlineSeconds": 31.01,
+  "restoredAtEpoch": 1794931545.906282,
+  "networkRestored": true
+}

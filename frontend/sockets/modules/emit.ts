@@ -1,4 +1,4 @@
-import { getInstallId } from "../../utils/installId";
+import { getInstallId, getInstallSecret } from "../../utils/installId";
 import { logger } from "../../utils/logger";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
@@ -15,7 +15,7 @@ export async function waitForConnect(ms = 8000): Promise<void> {
   // Some codepaths call waitForConnect() (emitAck) which triggers socket.connect().
   // Without installId in handshake server can treat client as guest and return empty profile/avatar.
   try {
-    const installId = await getInstallId();
+    const [installId, installSecret] = await Promise.all([getInstallId(), getInstallSecret()]);
 
     const prevAuth =
       (socket)?.auth && typeof (socket).auth === "object" ? (socket).auth : {};
@@ -23,9 +23,11 @@ export async function waitForConnect(ms = 8000): Promise<void> {
     socket.auth = {
       ...prevAuth,
       installId,
+      installSecret,
       ...(shared.currentUserId ? { userId: shared.currentUserId } : {}),
     };
   } catch {}
+  if (socket.connected) return;
   return new Promise((resolve, reject) => {
     const onOk = () => {
       cleanup();
@@ -65,7 +67,7 @@ export function warmCallSignaling(): void {
   // Если сокет уже disconnected — всегда мягко подталкиваем connect().
   void (async () => {
     try {
-      const installId = await getInstallId();
+      const [installId, installSecret] = await Promise.all([getInstallId(), getInstallSecret()]);
 
       const prevAuth =
         (socket)?.auth && typeof (socket).auth === "object" ? (socket).auth : {};
@@ -73,6 +75,7 @@ export function warmCallSignaling(): void {
       socket.auth = {
         ...prevAuth,
         installId,
+        installSecret,
         ...(shared.currentUserId ? { userId: shared.currentUserId } : {}),
       };
     } catch {}

@@ -1,0 +1,56 @@
+{
+  "mode": "random-recovered-vpn",
+  "startedAtEpoch": 1794931696.235054,
+  "steps": [
+    {
+      "rotatedDevice": "A35",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794931696.61467
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931709.056931
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794931721.297749
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931733.753692
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794931746.103005
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931758.465962
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794931770.752913
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931782.9560902
+    }
+  ],
+  "settingsRestored": true,
+  "finishedAtEpoch": 1794931795.678761
+}

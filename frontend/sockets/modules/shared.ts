@@ -21,6 +21,8 @@ export const shared = {
   bootInProgress: false,
   createUserPromise: null as Promise<string | null> | null,
   lastSuccessfulReauthAt: 0,
+  lastSuccessfulReauthSocketId: undefined as string | undefined,
+  lastSuccessfulReauthUserId: undefined as string | undefined,
   reauthInFlight: null as Promise<SocketReauthResponse> | null,
 
   // socket flags (instance lives in socketCore)

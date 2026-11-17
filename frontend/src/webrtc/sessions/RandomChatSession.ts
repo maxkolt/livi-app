@@ -7,6 +7,7 @@ import {
   Room,
   RoomEvent,
   Track,
+  TrackEvent,
   type RemoteParticipant,
   type RemoteTrack,
   type RemoteTrackPublication,
@@ -37,6 +38,7 @@ import { prewarmApiConnections } from '../../../utils/warmConnections';
 import { sendClientMetrics } from '../../utils/capacityClientMetrics';
 import { getIceConfiguration, enableForcedRelayFallback, prefetchIceConfiguration } from '../../../utils/iceConfig';
 import { buildLiveKitConnectOptions } from './videoCall/iceConnectOptions';
+import { IceCredentialRefresh } from './videoCall/IceCredentialRefresh';
 import { buildLiveKitSignalProxyUrl } from './videoCall/signalProxy';
 import { LIVEKIT_APPLY_CLIENT_ICE } from './videoCall/constants';
 import { getPreferredVideoCaptureOptions } from '../videoCaptureProfile';
@@ -83,6 +85,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
+  private readonly iceCredentialRefresh = new IceCredentialRefresh(() => getIceConfiguration(true));
   private localVideoTrack: LocalVideoTrack | null = null;
   private localAudioTrack: LocalAudioTrack | null = null;
   private localStream: MediaStream | null = null;
@@ -1938,12 +1941,30 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     return this.queueLocalCameraOperation(() => this.ensureLocalTracksInner(force));
   }
 
+  /** SDK restart keeps the LocalTrack but replaces its native MediaStreamTrack. */
+  private refreshLocalPreviewFromTracks(): void {
+    if (!this.started || this.stopRequested || this.isDisconnecting) return;
+    const tracks = [this.localVideoTrack?.mediaStreamTrack, this.localAudioTrack?.mediaStreamTrack]
+      .filter((track): track is NonNullable<typeof track> => !!track && track.readyState === 'live');
+    if (!tracks.length) return;
+    try {
+      const existing = this.localStream?.getTracks();
+      if (existing?.length === tracks.length && tracks.every(track => existing.includes(track as NativeLiveKitMediaTrack))) return;
+    } catch { /* A native stream may already be disposed by the SDK. */ }
+    const stream = new MediaStream();
+    for (const track of tracks) stream.addTrack(track as NativeLiveKitMediaTrack);
+    this.localStream = stream;
+    this.notifyLocalStreamChange(stream);
+    this.emit('localStream', stream);
+  }
+
   private async ensureLocalTracksInner(force = false): Promise<void> {
     // КРИТИЧНО: Проверяем что треки не только существуют, но и активны
     const videoActive = this.localVideoTrack && this.localVideoTrack.mediaStreamTrack?.readyState !== 'ended';
     const audioActive = this.localAudioTrack && this.localAudioTrack.mediaStreamTrack?.readyState !== 'ended';
     
     if (videoActive && audioActive && !force) {
+      this.refreshLocalPreviewFromTracks();
       this.emit('localStream', this.localStream);
       this.notifyLocalStreamChange(this.localStream);
       return;
@@ -2142,7 +2163,14 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
     };
     
     mediaTrack.addEventListener('ended', handler);
+    const restarted = () => {
+      if (track !== this.localVideoTrack || !this.started || this.stopRequested) return;
+      this.refreshLocalPreviewFromTracks();
+      this.attachLocalVideoEndedListener(track);
+    };
+    track?.on(TrackEvent.Restarted, restarted);
     this.detachLocalVideoEnded = () => {
+      track?.off(TrackEvent.Restarted, restarted);
       try {
         mediaTrack.removeEventListener('ended', handler);
       } catch {}
@@ -3041,6 +3069,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         reconnectCycleId: this.reconnectCycleId,
       });
       this.roomConnectedAt = Date.now();
+      this.iceCredentialRefresh.start(room, () => this.room === room && this.started && !this.isDisconnecting);
       this.scheduleIceTransportLogging(room, `connect:${connectSource}`);
       this.remoteMediaFirstSeenAt = 0;
       const joinTimeMs = this.roomConnectedAt - connectStartTime;
@@ -3303,6 +3332,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user', source = 'unknown'): Promise<void> {
+    this.iceCredentialRefresh.stop();
     this.logReconnectTrace('disconnect_requested', { reason, source });
     this.clearIceTransportLogTimers();
     if (this.disconnectPromise) return this.disconnectPromise;
@@ -3330,6 +3360,7 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
   }
 
   private async safeDisconnect(room: Room): Promise<void> {
+    if (this.room === room) this.iceCredentialRefresh.stop();
     if (this.room === room) this.resetRemoteState();
     await disposeRoom(room, this.started);
   }
@@ -3405,6 +3436,8 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
           roomName: room.name || null,
         });
         void sendClientMetrics(API_BASE, { roomReconnected: true, reconnect: true }).catch(() => {});
+        this.refreshLocalPreviewFromTracks();
+        this.attachLocalVideoEndedListener(this.localVideoTrack);
         this.refreshCurrentRemoteParticipant(room);
         for (const participant of room.remoteParticipants.values()) {
           if (participant.isLocal) continue;
@@ -3417,6 +3450,10 @@ export class RandomChatSession extends SimpleEventEmitter<RandomChatSessionEvent
         this.partnerAwayLiveKit = !this.currentRemoteParticipant && this.hasActivePair();
         this.updateReconnectingState();
         this.scheduleIceTransportLogging(room, 'reconnected');
+      })
+      .on(RoomEvent.LocalTrackPublished, () => {
+        if (this.room !== room) return;
+        this.refreshLocalPreviewFromTracks();
       })
       .on(RoomEvent.ParticipantConnected, (participant) => {
         if (this.room !== room) return;

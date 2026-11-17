@@ -1504,6 +1504,12 @@ class MainActivity : ReactActivity() {
         val callId = intent.getStringExtra(LiviFirebaseMessagingService.EXTRA_CALL_ID)
         (context as? MainActivity)?.runOnUiThread {
           val self = context as? MainActivity ?: return@runOnUiThread
+          // FCM may arrive after redial or after switching to Random Chat. Check
+          // identity before touching global teardown/PiP flags or dismissing UI.
+          if (!CallEndEventPolicy.matchesCurrentCall(callId, LiviAppModule.pipCallId)) {
+            android.util.Log.d("MainActivity", "ignore terminal push for a different/inactive call")
+            return@runOnUiThread
+          }
           LiviAppModule.setEndingCallInProgressStatic(true)
           LiviAppModule.setPiPOnLeaveHintEnabled(false)
           LiviAppModule.emitRemoteCallEndedInSystemPiP(callId)

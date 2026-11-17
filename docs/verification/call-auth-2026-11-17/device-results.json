@@ -1,0 +1,113 @@
+{
+  "date": "2026-11-17",
+  "timezone": "Europe/Moscow",
+  "devices": [
+    "Samsung A35",
+    "Pixel_10_Pro Android emulator on macOS"
+  ],
+  "testPackage": "com.kolt12max.livi.dev",
+  "runtime": "production JS/Hermes, DEBUG=false, no Metro",
+  "baselineApkSha256": "f6d6678021d2d7263262574ede5bf6d0caf9e522302b8b68ab48a1b13225a112",
+  "baselineCallStartedAtUtc": "2026-11-17T12:59:18Z",
+  "baselineHumanAudio": {
+    "wifi": "bidirectional confirmed by user",
+    "vpn": "bidirectional confirmed by user; HIRO France/Austria tunnel observed",
+    "vpnRemoved": "bidirectional confirmed by user"
+  },
+  "originalNetworkLoss": {
+    "disabledAtUtc": "2026-11-17T13:10:07.634276Z",
+    "restoredAtUtc": "2026-11-17T13:10:33.377780Z",
+    "seconds": 25.743504,
+    "uiOffline": "Слабая сеть",
+    "uiRecovered": true,
+    "humanAudio": "FAIL; initial neither, clarified no audio at A35",
+    "server": "repeated SUBSCRIBER negotiation timed out / NEGOTIATE_FAILED",
+    "diagnosedCode": "SDP callbacks disabled on peer disconnect while local room remains alive"
+  },
+  "firstCallCleanup": {
+    "bothDevices": {
+      "audioMode": "MODE_NORMAL",
+      "activeCallService": false,
+      "incomingCallService": false,
+      "activeCallWakeLock": false
+    }
+  },
+  "fixedApkSha256": "d9734bbc819d1d009cd6a9d152ed4400ebda5261adba03d5e95142898711a9ec",
+  "fixedCallAcceptedAtUtc": "2026-11-17T13:22:47.381Z",
+  "fixedCallHumanAudio": "bidirectional confirmed by user before network interruption",
+  "fixedNetworkLoss": {
+    "disabledAtUtc": "2026-11-17T13:35:56.751777+00:00",
+    "restoredAtUtc": "2026-11-17T13:36:27.648698+00:00",
+    "seconds": 30.896921,
+    "uiRecoveredBothDevices": true,
+    "humanAudio": "FAIL: user confirms no audio at A35",
+    "serverNegotiationFailuresObserved": 0,
+    "rtcActiveAfterRestoreSecondsApprox": 28
+  },
+  "physicalDevices": {
+    "models": [
+      "Samsung A35 SM-A356E",
+      "Samsung S25 Ultra SM-S938B"
+    ],
+    "sameApkSha256": "d9734bbc819d1d009cd6a9d152ed4400ebda5261adba03d5e95142898711a9ec",
+    "testPackage": "com.kolt12max.livi.dev",
+    "callAcceptTappedAtUtc": "2026-11-17T14:10:28.389397Z",
+    "baselineHumanAudio": "bidirectional confirmed by user; both on Wi-Fi without VPN",
+    "networkLossA35HumanAudio": "PASS: bidirectional confirmed by user after 31-second outage",
+    "networkLossA35Events": [
+      {
+        "event": "a35_internet_disabled",
+        "utc": "2026-11-17T14:12:12.969225+00:00"
+      },
+      {
+        "event": "a35_internet_restored",
+        "utc": "2026-11-17T14:12:43.956992+00:00"
+      }
+    ],
+    "vpnOnS25": {
+      "package": "com.privatasolutions.vpn",
+      "serverUi": "Нидерланды / Адаптивный",
+      "androidValidated": true,
+      "uidCoverage": "0-99999 includes LiVi",
+      "interface": "tun0",
+      "humanAudio": "PASS: bidirectional confirmed by user"
+    },
+    "screenLock": {
+      "seconds": 300,
+      "samples": 22,
+      "nativeChecksPass": true,
+      "finalActiveWakeLocks": {
+        "a35": true,
+        "s25": true
+      },
+      "displayObserved": {
+        "a35": "OFF",
+        "s25": "DOZE_SUSPEND (Always On Display)"
+      },
+      "humanAudioAfterWake": "PASS: bidirectional confirmed by user"
+    },
+    "networkLossS25WithVpn": {
+      "events": [
+        {
+          "event": "s25_internet_disabled",
+          "utc": "2026-11-17T14:23:22.597158+00:00"
+        },
+        {
+          "event": "s25_internet_restored",
+          "utc": "2026-11-17T14:23:53.597681+00:00"
+        }
+      ],
+      "humanAudio": "PASS: bidirectional confirmed by user",
+      "rtcActiveAfterRestoreSecondsApprox": 29,
+      "vpnPresentAfterRecovery": true
+    },
+    "backgroundIncoming": {
+      "incomingPath": "native_activity",
+      "callInitiatedAtUtc": "2026-11-17T14:27:14.356862+00:00",
+      "acceptTappedAtUtc": "2026-11-17T14:27:17.804856+00:00",
+      "action": "Принять",
+      "processAbsentBeforeCall": true,
+      "humanAudio": "PASS: bidirectional confirmed by user"
+    }
+  }
+}

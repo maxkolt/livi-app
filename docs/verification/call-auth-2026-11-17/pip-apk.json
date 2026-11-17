@@ -1,0 +1,5 @@
+{
+  "apk": "/private/tmp/livi-hardening-20261117/livi-pip-commit-qa.apk",
+  "sha256": "a442f068c95a8672b9b4712f6961af198cefebb2b03ce6ef008003cacdf9b0d4",
+  "change": "PiP native mode commit outside animation frame"
+}

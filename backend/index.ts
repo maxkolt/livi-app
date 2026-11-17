@@ -121,6 +121,7 @@ import { getWelcomeOnlinePresenceSnapshot } from './utils/welcomeOnlinePresence'
 import { createRequestBodyParsers } from './utils/requestBodyParsers';
 import { securityHeaders } from './utils/httpSecurity';
 import { hasVerifiedSocketInstall, socketInstallCredentials } from './utils/socketInstallAuth';
+import { installSocketAuthorization } from './utils/socketAuthorization';
 import { matchesSecret, isAdminRequest } from './utils/adminAuth';
 import { attachMongoMatchProfile, MATCH_PROFILE_ENABLED } from './utils/matchPerformance';
 import { attachLiveKitSignalProxy } from './utils/livekitSignalProxy';
@@ -915,8 +916,9 @@ async function resolveCalleeSocketForAccept(
   const sockUid = normalizeMongoObjectId(String((sock)?.data?.userId || ''));
   if (sockUid && sockUid === linkB) return sock;
 
-  const found = findSocketForUser(io, linkB);
-  if (found) return found;
+  // Only the socket proving the callee's identity can accept. Another online
+  // callee socket must never authorize the sender of this request.
+  if (sockUid) return undefined;
 
   // Accepting socket still unbound: map installId → user and bind sync path if matches callee.
   try {
@@ -3247,19 +3249,7 @@ app.post('/api/calls/provider-delivered', (req, res) => {
 
 /* ========= Socket.IO ========= */
 io.on('connection', async (sock: AuthedSocket) => {
-  sock.use((packet, next) => {
-    if (packet.length === 1 || packet[1] == null) packet[1] = {};
-    if (sock.data.verifiedInstallSecretHash === LEGACY_INSTALL_SEAL &&
-        ['identity:wipeMe', 'e2e:publish', 'e2e:disable', 'e2e:enable'].includes(packet[0])) {
-      const ack = packet[packet.length - 1];
-      if (typeof ack === 'function') ack({ ok: false, error: 'account_proof_required' });
-      return;
-    }
-    if (['identity:attach', 'reauth', 'whoami', 'user:exists'].includes(packet[0]) ||
-        (sock.data.verifiedInstallId && sock.data.verifiedInstallSecretHash && sock.data.userId)) return next();
-    const ack = packet[packet.length - 1];
-    if (typeof ack === 'function') ack({ ok: false, error: 'unauthorized' });
-  });
+  installSocketAuthorization(sock);
   capacityMetrics.recordSocketConnected();
   sock.on('disconnect', (reason) => capacityMetrics.recordSocketDisconnected(reason));
   sock.on('whoami', (payload?: unknown, ack?: (result: { _id: string | null }) => void) => {
@@ -3580,6 +3570,21 @@ io.on('connection', async (sock: AuthedSocket) => {
           receivedCallId: callId,
           resolvedRoomId: resolvedRoomId || null
         });
+        return;
+      }
+      const actor = normalizeMongoObjectId(String(sock.data.userId || ''));
+      const controlCallId = (callId ? String(callId).trim() : '') || resolveCallIdFromEndIdentifier(id) || '';
+      const controlLink = controlCallId ? await getCallLinkFromAnyStore(controlCallId) : null;
+      const controlLease = controlCallId ? getActiveCallLease(controlCallId) : null;
+      const controlTimeline = controlCallId ? getCallTimeline(controlCallId) : null;
+      const controlRoom = parseDirectCallRoomParticipants(id);
+      const participantPairs = [
+        controlLink, controlLease, controlRoom,
+        controlTimeline ? { a: controlTimeline.callerId, b: controlTimeline.calleeId } : null,
+      ].filter((pair): pair is { a: string; b: string } => !!pair);
+      if (!actor || participantPairs.some(pair => actor !== pair.a && actor !== pair.b) ||
+          (!participantPairs.length && id !== sock.data.roomId && id !== activeCallBySocket.get(sock.id))) {
+        logger.warn('[call:end] rejected non-participant');
         return;
       }
       // С callId дубль определяем только по нему: метка комнаты могла остаться от прошлого звонка пары.
@@ -4670,6 +4675,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       ack?.({ ok: false, error: 'not_found' });
       return;
     }
+    if (String(sock.data.userId || '') !== link.b) return ack?.({ ok: false, error: 'forbidden' });
 
     logger.debug('Call accepted', { callId: id });
 
@@ -5059,6 +5065,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     const id = String(callId || '');
     const link = await getCallLinkFromAnyStore(id);
     if (!link) return;
+    if (String(sock.data.userId || '') !== link.b) return;
     const shouldProcess = transitionCall(id, 'declined', {
       actionKey: `socket_decline:${id}:${String((sock)?.data?.userId || '')}`,
       source: 'socket_decline',
@@ -5089,6 +5096,7 @@ io.on('connection', async (sock: AuthedSocket) => {
     const id = String(callId || '');
     const link = await getCallLinkFromAnyStore(id);
     if (!link) return;
+    if (String(sock.data.userId || '') !== link.a) return;
     const shouldProcess = transitionCall(id, 'canceled', {
       actionKey: `socket_cancel:${id}:${String((sock)?.data?.userId || '')}`,
       source: 'socket_cancel',

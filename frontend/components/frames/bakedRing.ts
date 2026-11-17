@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { Image, PixelRatio } from 'react-native';
+import { PixelRatio } from 'react-native';
+import { Asset } from 'expo-asset';
 import { Skia, type SkImage } from '@shopify/react-native-skia';
 
 /**
@@ -19,10 +20,16 @@ const LARGE_RING_MIN_PX = 220;
 const decoded = new Map<number, SkImage>();
 const decoding = new Map<number, Promise<SkImage | null>>();
 
-function loadRing(source: number): Promise<SkImage | null> {
+export function loadBakedRing(source: number): Promise<SkImage | null> {
   let task = decoding.get(source);
   if (!task) {
-    task = Skia.Data.fromURI(Image.resolveAssetSource(source).uri)
+    // Android standalone resources can resolve to a resource identifier rather
+    // than a URL. Materialize through Expo Asset before passing a URI to Skia.
+    task = Asset.fromModule(source).downloadAsync()
+      .then(asset => {
+        if (!asset.localUri) throw new Error('frame_asset_not_local');
+        return Skia.Data.fromURI(asset.localUri);
+      })
       .then((data) => Skia.Image.MakeImageFromEncoded(data))
       .then((image) => {
         if (image) decoded.set(source, image);
@@ -48,7 +55,7 @@ export function useBakedRing(sources: BakedRingSources, sideDp: number): SkImage
       return;
     }
     let alive = true;
-    void loadRing(source).then((loaded) => {
+    void loadBakedRing(source).then((loaded) => {
       if (alive && loaded) setImage(loaded);
     });
     return () => {

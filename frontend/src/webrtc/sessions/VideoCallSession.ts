@@ -168,6 +168,7 @@ import {
 } from './videoCall/connectErrors';
 import { CallFlowMetrics } from './videoCall/CallFlowMetrics';
 import { IceTransportLogger } from './videoCall/IceTransportLogger';
+import { IceCredentialRefresh } from './videoCall/IceCredentialRefresh';
 import { NetworkReachabilityMonitor } from './videoCall/NetworkReachabilityMonitor';
 import { LocalVideoHealthWatchdog } from './videoCall/LocalVideoHealthWatchdog';
 import { RemoteTrackSubscriber } from './videoCall/RemoteTrackSubscriber';
@@ -222,6 +223,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
   private hasLoggedLiveKitApiKeyWarning = false;
   private config: WebRTCSessionConfig;
   private room: Room | null = null;
+  private readonly iceCredentialRefresh = new IceCredentialRefresh(() => getIceConfiguration(true));
   /**
    * Автоматическое E2EE звонка: ключ кадров выводится из эфемерных
    * ключей обеих сторон и callId. Ключи чата и его настройки на звонок не влияют.
@@ -6008,6 +6010,23 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
     this.notifyLocalStreamChange(stream);
   }
 
+  /** Rebind native replacements made by SDK reconnect without restarting capture. */
+  private refreshLocalPreviewFromTracks(): void {
+    if (this.ended || this.endCallInProgress || this.cleaned || this.isDisconnecting) return;
+    const tracks = [this.localVideoTrack?.mediaStreamTrack, this.localAudioTrack?.mediaStreamTrack]
+      .filter((track): track is NonNullable<typeof track> => !!track && track.readyState === 'live');
+    if (!tracks.length) return;
+    try {
+      const existing = this.localStream?.getTracks();
+      if (existing?.length === tracks.length && tracks.every(track => existing.includes(track as NativeLiveKitMediaTrack))) return;
+    } catch { /* The SDK can already have disposed the old native stream. */ }
+    const stream = new MediaStream();
+    for (const track of tracks) stream.addTrack(track as NativeLiveKitMediaTrack);
+    this.localStream = stream;
+    this.emit('localStream', stream);
+    this.notifyLocalStreamChange(stream);
+  }
+
   private async ensureLocalTracks(force = false): Promise<void> {
     if (this.ended || this.endCallInProgress || this.cleaned) return;
     if (!force && this.ensureLocalTracksPromise) {
@@ -7317,6 +7336,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
         });
       }
     } catch (_) {}
+    this.iceCredentialRefresh.start(room, () => this.room === room && !this.ended && !this.isDisconnecting);
     this.iceTransportLogger.schedule(room, options?.reason ? `connect:${options.reason}` : 'connect');
     this.scheduleRemoteMediaWatchdog({
       url,
@@ -8014,6 +8034,7 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
   }
 
   private async disconnectRoom(reason: 'user' | 'server' = 'user'): Promise<void> {
+    this.iceCredentialRefresh.stop();
     this.stopCallLeaseHeartbeat();
     this.clearMediaReconnectGrace();
     this.localVideoWatchdog.clear();
@@ -8132,6 +8153,9 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
       .on(RoomEvent.SignalReconnecting, () => this.onRoomSignalReconnecting(room))
       .on(RoomEvent.Reconnecting, () => this.onRoomReconnecting(room))
       .on(RoomEvent.Reconnected, () => this.onRoomReconnected(room))
+      .on(RoomEvent.LocalTrackPublished, () => {
+        if (this.room === room) this.refreshLocalPreviewFromTracks();
+      })
       .on(RoomEvent.ParticipantConnected, (participant) => this.onRemoteParticipantConnected(room, participant))
       .on(RoomEvent.TrackPublished, (publication, participant) => this.onRemoteTrackPublished(room, publication, participant))
       .on(RoomEvent.TrackSubscribed, (track, publication, participant) => this.onRoomTrackSubscribed(room, track, publication, participant))
@@ -8182,6 +8206,8 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
 
   /** Комната вернулась: снимаем «восстановление», чиним локальные треки, пересобираем подписки. */
   private onRoomReconnected(room: Room): void {
+    if (this.room !== room || this.ended || this.isDisconnecting) return;
+    this.refreshLocalPreviewFromTracks();
     this.liveKitReconnecting = false;
     // Старый room.connect() мог ещё висеть в очереди — не даём ему обнулить уже живую комнату.
     this.connectRequestId++;
@@ -8532,9 +8558,10 @@ export class VideoCallSession extends SimpleEventEmitter<VideoCallSessionEvents>
           return;
         }
 
-        // Не принимать late SDP от SFU, пока ждём confirm disconnect — иначе createAnswer
-        // гоняется с последующим disconnectRoom и даёт "unable to set answer".
-        this.abortIncomingSdpNegotiation(room);
+        // The local room stays alive while the peer is offline. SFU still negotiates
+        // removal/replacement of its tracks; disabling SDP here makes those offers
+        // time out and starts alternating full reconnects on both participants.
+        // Only disconnectRoom may suppress SDP once actual teardown begins.
 
         // Подтверждаем disconnect через короткую задержку (избегаем ложного срабатывания при reconnect).
         // Не PiP/hangup сразу: peer может быть в airplane — ждём rejoin в grace.

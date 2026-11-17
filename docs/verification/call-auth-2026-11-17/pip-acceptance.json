@@ -1,0 +1,314 @@
+{
+  "apk": {
+    "apk": "/private/tmp/livi-hardening-20261117/livi-pip-commit-qa.apk",
+    "sha256": "a442f068c95a8672b9b4712f6961af198cefebb2b03ce6ef008003cacdf9b0d4",
+    "change": "PiP native mode commit outside animation frame"
+  },
+  "devices": [
+    "A35 Android 17",
+    "S25 Ultra Android 16"
+  ],
+  "vpn": {
+    "A35": false,
+    "S25": "PrivataVPN active"
+  },
+  "call": {
+    "receiver": "A35",
+    "receiverCold": true,
+    "initiatedAtUtc": "2026-11-17T17:08:11Z",
+    "incomingUiSeconds": 2.14,
+    "path": "native-activity",
+    "acceptedAtSeconds": 2.87
+  },
+  "baselinePair": {
+    "rooms": [
+      {
+        "roomKey": "b41a2e14c3ec",
+        "roomKind": "direct",
+        "participants": 2,
+        "onlyOwnDevices": true,
+        "bothOwnDevices": true,
+        "tracks": [
+          {
+            "peerKey": "860186569b20",
+            "type": "A35",
+            "state": 2,
+            "tracks": [
+              {
+                "type": 0,
+                "muted": false,
+                "width": 0,
+                "height": 0
+              },
+              {
+                "type": 1,
+                "muted": false,
+                "width": 640,
+                "height": 360
+              }
+            ]
+          },
+          {
+            "peerKey": "3c24d9f765ec",
+            "type": "S25",
+            "state": 2,
+            "tracks": [
+              {
+                "type": 0,
+                "muted": false,
+                "width": 0,
+                "height": 0
+              },
+              {
+                "type": 1,
+                "muted": false,
+                "width": 640,
+                "height": 360
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "queue": 0,
+    "paired": 0
+  },
+  "nativeSnapshots": {
+    "pip-commit-full": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-full",
+        "atEpoch": 1794935346.1889799,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-full",
+        "atEpoch": 1794935346.097345,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ],
+    "pip-commit-system": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-system",
+        "atEpoch": 1794935382.236464,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-system",
+        "atEpoch": 1794935380.926589,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ],
+    "pip-commit-in-app": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-in-app",
+        "atEpoch": 1794935565.78641,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-in-app",
+        "atEpoch": 1794935565.384058,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ],
+    "pip-commit-in-app-to-system": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-in-app-to-system",
+        "atEpoch": 1794935762.6299891,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-in-app-to-system",
+        "atEpoch": 1794935760.251612,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ],
+    "pip-commit-in-app-to-system-settled": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-in-app-to-system-settled",
+        "atEpoch": 1794935834.694004,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-in-app-to-system-settled",
+        "atEpoch": 1794935833.452815,
+        "pinned": true,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ],
+    "pip-commit-system-to-in-app": [
+      {
+        "device": "A35",
+        "phase": "pip-commit-system-to-in-app",
+        "atEpoch": 1794936128.656258,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      },
+      {
+        "device": "S25",
+        "phase": "pip-commit-system-to-in-app",
+        "atEpoch": 1794936128.029276,
+        "pinned": false,
+        "audioMode": "MODE_IN_COMMUNICATION",
+        "cameraActive": true,
+        "activeCallService": true,
+        "route": "earpiece"
+      }
+    ]
+  },
+  "maestro": {
+    "A35": "\nWaiting for flows to complete...\n[Passed] assert-full-call (4s)\n[Passed] pip-roundtrip-fast (12s)\n[Passed] pip-minimize-fast (7s)\n\n3/3 Flows Passed in 23s\n\n",
+    "S25": "\nWaiting for flows to complete...\n[Passed] assert-full-call (3s)\n[Passed] pip-roundtrip-fast (6s)\n[Passed] pip-minimize-fast (3s)\n\n3/3 Flows Passed in 12s\n\n",
+    "A35SystemToInApp": "Running on RFCX306PWLE\n > Flow assert-in-app-pip\nAssert that id: pip-expand is visible... COMPLETED\nAssert that \"minimize\" is not visible... COMPLETED\n",
+    "S25SystemToInApp": "Running on R5GL550T4TB\n > Flow assert-in-app-pip\nAssert that id: pip-expand is visible... COMPLETED\nAssert that \"minimize\" is not visible... COMPLETED\n"
+  },
+  "human": {
+    "fullToSystem": "bidirectional audio and moving video confirmed by user",
+    "systemToFullThenInApp": "bidirectional audio and moving video confirmed by user",
+    "inAppToSystem": "bidirectional audio and moving video confirmed by user",
+    "systemToInApp": "bidirectional audio and moving video confirmed by user"
+  },
+  "status": "functional transition matrix passed; work paused at user request after call cleanup",
+  "endPair": {
+    "rooms": [
+      {
+        "roomKey": "b41a2e14c3ec",
+        "roomKind": "direct",
+        "participants": 2,
+        "onlyOwnDevices": true,
+        "bothOwnDevices": true,
+        "tracks": [
+          {
+            "peerKey": "860186569b20",
+            "type": "A35",
+            "state": 2,
+            "tracks": [
+              {
+                "type": 0,
+                "muted": false,
+                "width": 0,
+                "height": 0
+              },
+              {
+                "type": 1,
+                "muted": false,
+                "width": 640,
+                "height": 360
+              }
+            ]
+          },
+          {
+            "peerKey": "3c24d9f765ec",
+            "type": "S25",
+            "state": 2,
+            "tracks": [
+              {
+                "type": 0,
+                "muted": false,
+                "width": 0,
+                "height": 0
+              },
+              {
+                "type": 1,
+                "muted": false,
+                "width": 640,
+                "height": 360
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "queue": 0,
+    "paired": 0
+  },
+  "sameParticipantsAcrossTransitions": true,
+  "cleanup": {
+    "atEpoch": 1794936363.051807,
+    "devices": [
+      {
+        "device": "A35",
+        "audioMode": "MODE_NORMAL",
+        "cameraActive": false,
+        "callServices": [],
+        "callWakeLocks": [],
+        "pinned": false,
+        "topActivity": [
+          "topResumedActivity=ActivityRecord{27592162 u0 com.kolt12max.livi.dev/com.kolt12max.livi.MainActivity t397}"
+        ],
+        "wifi": "1",
+        "mobileData": "1"
+      },
+      {
+        "device": "S25",
+        "audioMode": "MODE_NORMAL",
+        "cameraActive": false,
+        "callServices": [],
+        "callWakeLocks": [],
+        "pinned": false,
+        "topActivity": [
+          "topResumedActivity=ActivityRecord{41738921 u0 com.kolt12max.livi.dev/com.kolt12max.livi.MainActivity t1633}"
+        ],
+        "wifi": "1",
+        "mobileData": "1"
+      }
+    ]
+  },
+  "limitations": [
+    "Final PiP matrix used S25 PrivataVPN active and A35 VPN inactive; a fresh final-APK PiP run with both VPNs off was not performed.",
+    "Early in-app -> system transition screenshots contain app chrome before video capture settles; transition duration was not measured.",
+    "After remote end, S25 MainActivity was foreground despite opening Settings before ending; focus behavior remains for separate diagnosis.",
+    "Remaining non-PiP hardening checks paused by user; no Play publication or commit/push."
+  ]
+}

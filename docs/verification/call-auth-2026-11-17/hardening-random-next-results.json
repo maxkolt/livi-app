@@ -1,0 +1,173 @@
+[
+  {
+    "trial": 1,
+    "secondsToVerifiedPair": 11.53,
+    "pair": {
+      "rooms": [
+        {
+          "roomKey": "c32940826c82",
+          "roomKind": "random",
+          "participants": 2,
+          "onlyOwnDevices": true,
+          "bothOwnDevices": true,
+          "tracks": [
+            {
+              "peerKey": "e20976052847",
+              "type": "S25",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            },
+            {
+              "peerKey": "15cb92f446c4",
+              "type": "A35",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "queue": 0,
+      "paired": 0
+    }
+  },
+  {
+    "trial": 2,
+    "secondsToVerifiedPair": 11.81,
+    "pair": {
+      "rooms": [
+        {
+          "roomKey": "c32940826c82",
+          "roomKind": "random",
+          "participants": 2,
+          "onlyOwnDevices": true,
+          "bothOwnDevices": true,
+          "tracks": [
+            {
+              "peerKey": "e69274be71fd",
+              "type": "S25",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            },
+            {
+              "peerKey": "b845749799aa",
+              "type": "A35",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "queue": 0,
+      "paired": 0
+    }
+  },
+  {
+    "trial": 3,
+    "secondsToVerifiedPair": 12.24,
+    "pair": {
+      "rooms": [
+        {
+          "roomKey": "c32940826c82",
+          "roomKind": "random",
+          "participants": 2,
+          "onlyOwnDevices": true,
+          "bothOwnDevices": true,
+          "tracks": [
+            {
+              "peerKey": "fb0ba3909e7c",
+              "type": "S25",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            },
+            {
+              "peerKey": "965c8920aa10",
+              "type": "A35",
+              "state": 2,
+              "tracks": [
+                {
+                  "type": 0,
+                  "muted": false,
+                  "width": 0,
+                  "height": 0
+                },
+                {
+                  "type": 1,
+                  "muted": false,
+                  "width": 1280,
+                  "height": 720
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "queue": 0,
+      "paired": 0
+    }
+  }
+]

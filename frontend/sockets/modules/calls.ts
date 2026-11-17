@@ -47,8 +47,10 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
 
   callLifecycle.outgoingStarted(to);
 
-  const viaSocket = () =>
-    emitAck<CallInitiateResponse>(
+  const viaSocket = async (): Promise<CallInitiateResponse> => {
+    const { ensureReauthBeforePrivilegedSocketOp } = await import("./reauth");
+    if (!await ensureReauthBeforePrivilegedSocketOp()) return { ok: false, error: "unauthorized" };
+    return emitAck<CallInitiateResponse>(
       "call:initiate",
       payload,
       20000,
@@ -56,6 +58,7 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
       // (cleanupStaleRinging) → callee отвечает на старый → not_found.
       0,
     );
+  };
 
   const viaHttp = async (): Promise<CallInitiateResponse> => {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(await getInstallAuthHeaders()) };
@@ -97,7 +100,8 @@ export function startCall(toUserId: string, options?: { media?: DirectCallMedia;
     } else {
       try {
         const socketResp = await viaSocket();
-        result = socketResp;
+        result = socketResp?.error === "unauthorized" || socketResp?.error === "no_userId"
+          ? await viaHttp() : socketResp;
       } catch (e: unknown) {
         logger.warn("[call:initiate] socket initiate failed, trying HTTP fallback", {
           error: (e as { message?: string } | null)?.message || String(e),
@@ -214,9 +218,8 @@ async function waitForCurrentUserId(ms = 8000): Promise<string | null> {
 }
 
 /**
- * call:accept: connect + identity обязательны; reauth не блокирует первый emit,
- * если сокет уже с userId (сервер умеет bind по installId). Иначе initiator ждёт
- * лишний RTT reauth (~0.5–1.5s) пока callee ещё «звонит».
+ * A connected transport and cached user ID do not prove ownership on a new socket.
+ * Reuse a successful reauth only on this connection; otherwise wait before accept.
  */
 export async function emitCallAcceptAck(
   callId: string,
@@ -235,23 +238,16 @@ export async function emitCallAcceptAck(
   if (!socket.connected) {
     await ensureSocketConnected(CALL_SIGNALING_CONNECT_MS);
   }
-  // Без await, если userId уже есть: любой await на «Принять» ставит emit в очередь
-  // за монтированием экрана звонка (~0.5 с под нагрузкой JS).
   const uid = String(shared.currentUserId || "").trim() || (await waitForCurrentUserId(8000));
   if (!uid) {
     logger.warn("[socket] call:accept deferred — no currentUserId yet", { callId: id });
+    return { ok: false, error: "identity_unavailable" };
   }
 
-  const kickReauth = async (): Promise<boolean> => {
+  const kickReauth = async (force = false): Promise<boolean> => {
     try {
       const { ensureReauthBeforePrivilegedSocketOp } = await import("./reauth");
-      const reauthed = await ensureReauthBeforePrivilegedSocketOp();
-      if (!reauthed && shared.reauthInFlight) {
-        try {
-          await shared.reauthInFlight;
-        } catch {}
-      }
-      return !!reauthed || !!shared.lastSuccessfulReauthAt;
+      return await ensureReauthBeforePrivilegedSocketOp(force);
     } catch (e: unknown) {
       logger.warn("[socket] call:accept reauth wait failed", {
         callId: id,
@@ -277,37 +273,16 @@ export async function emitCallAcceptAck(
     return resp;
   };
 
-  // Fast path: сокет + uid уже есть — emit сразу, reauth параллельно.
-  if (socket.connected && uid) {
-    const reauthP = kickReauth();
-    try {
-      const resp = await tryEmit();
-      const out = normalize(resp);
-      if (out.ok) {
-        void reauthP;
-        return out;
-      }
-      // Auth/bind race — дождаться reauth и один retry.
-      await reauthP;
-      const retry = await tryEmit();
-      return normalize(retry);
-    } catch (e: unknown) {
-      await reauthP;
-      try {
-        const retry = await tryEmit();
-        return normalize(retry);
-      } catch (e2: unknown) {
-        return { ok: false, error: (e2 as { message?: string } | null)?.message || (e as { message?: string } | null)?.message || "accept_failed" };
-      }
-    }
-  }
-
-  // Cold: сначала bind, потом emit.
-  await kickReauth();
+  if (!await kickReauth()) return { ok: false, error: "unauthorized" };
   try {
-    const resp = await tryEmit();
-    return normalize(resp);
+    const out = normalize(await tryEmit());
+    if (out.ok || !["unauthorized", "callee_socket_not_found"].includes(out.error || "")) return out;
+    if (!await kickReauth(true)) return out;
+    return normalize(await tryEmit());
   } catch (e: unknown) {
+    if (await kickReauth(true)) {
+      try { return normalize(await tryEmit()); } catch {}
+    }
     return { ok: false, error: (e as { message?: string } | null)?.message || "accept_failed" };
   }
 }
@@ -336,16 +311,11 @@ export function beginEarlyIncomingCallAccept(callId: string): void {
       return result;
     } catch (e: unknown) {
       clearIncomingAcceptSent(id);
-      logger.warn("[socket] early call:accept failed, fallback emit", {
+      logger.warn("[socket] early call:accept failed", {
         callId: id,
         error: (e as { message?: string } | null)?.message || String(e),
       });
-      try {
-        const e2ee = await getOrCreateIncomingCallE2eeDeclaration(id);
-        socket.emit("call:accept", { callId: id, e2ee });
-      } catch {}
-      // Оптимистично: emit мог дойти; VideoCallSession всё равно дождётся call:accepted / recover.
-      return { ok: true };
+      return { ok: false, error: "early_accept_failed" };
     }
   })();
   shared.earlyIncomingCallAcceptById.set(id, work);

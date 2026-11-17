@@ -1,0 +1,8 @@
+{
+  "receiver": "A35",
+  "receiverCold": true,
+  "initiatedAtUtc": "2026-11-17T15:20:33Z",
+  "incomingUiSeconds": 2.01,
+  "path": "native-activity",
+  "acceptedAtSeconds": 2.84
+}

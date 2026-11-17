@@ -28,7 +28,10 @@ export type IntegrityPayload = {
 };
 
 type OAuthTokenResponse = { access_token?: string; expires_in?: number | string; error?: string };
-type IntegrityDecodeResponse = { tokenPayloadExternal?: IntegrityPayload | null; error?: { status?: string } };
+type IntegrityDecodeResponse = {
+  tokenPayloadExternal?: IntegrityPayload | null;
+  error?: { status?: unknown; details?: Array<{ reason?: unknown }> };
+};
 type HttpJsonResult<T> = { status: number; ok: boolean; json: T | null };
 
 /** Тот же сервисный аккаунт, что у FCM (utils/push.ts): его проект привязан к Play Integrity в Play Console. */
@@ -106,8 +109,17 @@ export async function decodeIntegrityToken(packageName: string, integrityToken: 
       body: JSON.stringify({ integrityToken }),
     }
   );
-  if (!ok) throw new Error(`decode_${status}_${json?.error?.status || ''}`);
+  if (!ok) throw new Error(integrityDecodeErrorCode(status, json));
   return json?.tokenPayloadExternal ?? null;
+}
+
+/** Retain Google's actionable error reason without logging tokens or raw response bodies. */
+export function integrityDecodeErrorCode(status: number, payload: IntegrityDecodeResponse | null): string {
+  const safe = (value: unknown): string => typeof value === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(value) ? value : '';
+  const code = safe(payload?.error?.status) || 'UNKNOWN';
+  const details = payload?.error?.details;
+  const reason = Array.isArray(details) ? details.map(detail => safe(detail?.reason)).find(Boolean) : '';
+  return `decode_${status}_${code}${reason ? `_${reason}` : ''}`;
 }
 
 export type IntegritySummary = {

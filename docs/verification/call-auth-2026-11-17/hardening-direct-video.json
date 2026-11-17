@@ -1,0 +1,12 @@
+{
+  "device": "S25",
+  "scenario": "direct_video_network_loss_with_vpn",
+  "disabledAtUtc": "2026-11-17T15:28:15Z",
+  "offlineSeconds": 31.01,
+  "restoredAtUtc": "2026-11-17T15:28:46Z",
+  "networkRestored": true,
+  "userConfirmedBaselineAudioAndMovingVideoBothDirections": true,
+  "userConfirmedAfterVpnEnabled": true,
+  "userConfirmedAfterNetworkRecovery": true,
+  "sameCall": true
+}

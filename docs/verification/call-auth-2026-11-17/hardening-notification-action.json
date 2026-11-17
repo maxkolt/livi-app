@@ -1,0 +1,10 @@
+{
+  "receiver": "A35",
+  "receiverCold": true,
+  "startedAtEpoch": 1794932049.950284,
+  "noPermissionChanges": true,
+  "incomingUiSeconds": 2.25,
+  "controlledHeadsUpModeRequested": true,
+  "notificationAcceptTappedAtSeconds": 11.41,
+  "acceptedViaNotificationAction": true
+}

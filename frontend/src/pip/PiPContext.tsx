@@ -94,6 +94,7 @@ import {
   setActiveHomePiPTraceId,
 } from '../../utils/systemPiPHomeTrace';
 import { mergeActiveVideoCallParams } from '../../utils/appNavigationGuard';
+import { createSystemPiPModeCommitter } from './systemPiPModeCommit';
 
 type MediaStreamLike = MediaStream;
 
@@ -466,10 +467,11 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
     return () => {};
   }, []);
 
-  // КРИТИЧНО: Обновление state в том же тике, что и нативный переход в PiP, приводит к "forEach of null"
-  // (Animated/React при смене transform или перестроении дерева). Откладываем на следующий тик.
+  // Defer outside the native event, but never wait for animation frames: the
+  // activity can already be paused while its system PiP window is visible.
   useEffect(() => {
     if (Platform.OS !== 'android') return () => {};
+    const modeCommitter = createSystemPiPModeCommitter();
     const emitter = new NativeEventEmitter(NativeModules.LiviAppModule);
     const sub = emitter.addListener('SystemPiPModeChanged', (payload: { isInPiP?: boolean }) => {
       const inPiP = !!payload?.isInPiP;
@@ -844,13 +846,12 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           } catch (_) {}
         }
       };
-      if (typeof requestAnimationFrame !== 'undefined') {
-        requestAnimationFrame(() => run());
-      } else {
-        setTimeout(run, 0);
-      }
+      modeCommitter.schedule(run);
     });
-    return () => sub.remove();
+    return () => {
+      modeCommitter.dispose();
+      sub.remove();
+    };
   }, [resolveStablePiPIds]);
 
   // SystemPiPExpanded обрабатывается только в App.tsx через __pipReturnToCallRef.current().

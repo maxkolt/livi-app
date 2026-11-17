@@ -1,0 +1,58 @@
+{
+  "mode": "direct-stable-vpn",
+  "startedAtEpoch": 1794932134.724103,
+  "steps": [
+    {
+      "rotatedDevice": "A35",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794932135.109169
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794932142.070316
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794932149.14945
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794932156.1662982
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794932162.89858
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794932169.6458938
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794932176.849243
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794932183.773271
+    }
+  ],
+  "settingsRestored": true,
+  "finishedAtEpoch": 1794932191.3381062,
+  "userConfirmedFourMovingViewsAndBidirectionalAudio": true,
+  "xmlAssertionsExcluded": "UIAutomator can return stale hierarchy on animated video; use fresh screenshots, actual display rotation, EGL and human confirmation"
+}

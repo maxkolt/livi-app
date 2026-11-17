@@ -54,6 +54,9 @@ class IncomingCallActivity : AppCompatActivity() {
     private var closeHandled = false
     private var incomingShownReported = false
     private var incomingShownInFlight = false
+    private var incomingShownAttempts = 0
+    private val incomingShownHandler = Handler(Looper.getMainLooper())
+    private var incomingShownRetry: Runnable? = null
     private var incomingDeadlineAtMs: Long = 0L
     private var closingForCompletion: Boolean = false
     private var minimizedToShade: Boolean = false
@@ -349,6 +352,8 @@ class IncomingCallActivity : AppCompatActivity() {
         callAnsweredReceiver = null
         stopRemoteRingtoneReceiver?.let { try { unregisterReceiver(it) } catch (_: Exception) {} }
         stopRemoteRingtoneReceiver = null
+        incomingShownRetry?.let { incomingShownHandler.removeCallbacks(it) }
+        incomingShownRetry = null
         clearIncomingTimeout()
         stopCallRingtone()
         stopRepeatingVibration()
@@ -452,17 +457,23 @@ class IncomingCallActivity : AppCompatActivity() {
 
     /** Отправить backend-ack: входящий экран реально показан (работает даже при неактивном/спящем JS). */
     private fun reportIncomingShownFromNative(callId: String) {
-        if (incomingShownReported || incomingShownInFlight || callId.isBlank()) return
+        if (incomingShownReported || incomingShownInFlight || incomingShownAttempts >= 4 ||
+            callId.isBlank() || callId != currentCallId || isFinishing || isDestroyed || closeHandled ||
+            EndedCallIds.isEnded(applicationContext, callId)) return
         val prefs = applicationContext.getSharedPreferences(LiviAppModule.PREFS_NAME, Context.MODE_PRIVATE)
         val installId = prefs.getString(LiviAppModule.KEY_INSTALL_ID, null)?.takeIf { it.isNotBlank() }
         val installSecret = prefs.getString(LiviAppModule.KEY_INSTALL_SECRET, null)?.takeIf { it.isNotBlank() }
         val serverUrl = LiviAppModule.resolveServerBaseUrl(applicationContext)
         val userIdHeader = prefs.getString(LiviAppModule.KEY_USER_ID_FOR_DECLINE, null)?.takeIf { it.isNotBlank() }
         if (installId == null || serverUrl == null) return
+        incomingShownRetry?.let { incomingShownHandler.removeCallbacks(it) }
+        incomingShownRetry = null
+        incomingShownAttempts += 1
         incomingShownInFlight = true
         Thread {
             try {
                 var ok = false
+                var retryable = true
                 val payload = "{\"callId\":\"${callId.replace("\"", "\\\"")}\"}"
                 val endpoints = listOf(
                     "$serverUrl/api/calls/incoming-shown",
@@ -480,6 +491,7 @@ class IncomingCallActivity : AppCompatActivity() {
                             ok = true
                             break
                         }
+                        retryable = code < 0 || code == 408 || code >= 500
                         // 404 на втором endpoint бесполезен, а 401/403 не ретраим.
                         if (code == 401 || code == 403 || code == 400) break
                     } catch (_: Exception) {
@@ -492,15 +504,28 @@ class IncomingCallActivity : AppCompatActivity() {
                         incomingShownReported = true
                     } else {
                         android.util.Log.w(TAG, "incoming-shown HTTP failed callId=$callId")
+                        if (retryable) scheduleIncomingShownRetry(callId)
                     }
                 }
             } catch (e: Exception) {
                 runOnUiThread {
                     incomingShownInFlight = false
                     android.util.Log.w(TAG, "incoming-shown HTTP exception callId=$callId", e)
+                    scheduleIncomingShownRetry(callId)
                 }
             }
         }.start()
+    }
+
+    /** DNS/route discovery may finish just after the first cold-process request. */
+    private fun scheduleIncomingShownRetry(callId: String) {
+        if (incomingShownReported || incomingShownAttempts >= 4 || isFinishing || isDestroyed ||
+            closeHandled || callId != currentCallId || EndedCallIds.isEnded(applicationContext, callId)) return
+        incomingShownRetry?.let { incomingShownHandler.removeCallbacks(it) }
+        incomingShownRetry = Runnable {
+            incomingShownRetry = null
+            reportIncomingShownFromNative(callId)
+        }.also { incomingShownHandler.postDelayed(it, incomingShownAttempts * 1000L) }
     }
 
     /**

@@ -1,0 +1,71 @@
+{
+  "mode": "random-stable",
+  "startedAtEpoch": 1794931298.2251148,
+  "steps": [
+    {
+      "rotatedDevice": "A35",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794931298.58999
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931310.8400881
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794931323.2859142
+    },
+    {
+      "rotatedDevice": "A35",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931335.3417652
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 1,
+      "actualOrientation": 1,
+      "atEpoch": 1794931347.3390431
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931359.700883
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 3,
+      "actualOrientation": 3,
+      "atEpoch": 1794931371.8824902
+    },
+    {
+      "rotatedDevice": "S25",
+      "rotation": 0,
+      "actualOrientation": 0,
+      "atEpoch": 1794931384.221468
+    }
+  ],
+  "settingsRestored": true,
+  "finishedAtEpoch": 1794931396.856776,
+  "nativeRenderEvidence": {
+    "A35": {
+      "eglSamples": 50,
+      "renderThreadsWithFrames": 2,
+      "cameraStopEvents": 0,
+      "minReportedRenderFps": 1.5
+    },
+    "S25": {
+      "eglSamples": 50,
+      "renderThreadsWithFrames": 2,
+      "cameraStopEvents": 0,
+      "minReportedRenderFps": 2.0
+    }
+  },
+  "userConfirmedFourMovingViewsAndBidirectionalAudio": true
+}

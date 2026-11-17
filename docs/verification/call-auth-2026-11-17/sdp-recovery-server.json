@@ -1,0 +1,23 @@
+{
+  "collectedAtUtc": "2026-11-17T13:38:54.036505+00:00",
+  "unexpectedSdpNegotiationFailures": 0,
+  "NEGOTIATE_FAILED": 0,
+  "unauthorized": 0,
+  "rtcSessionsStarted": 1,
+  "events": [
+    {
+      "atUtc": "2026-11-17T13:36:18+00:00",
+      "event": "participant closing",
+      "reason": "PEER_CONNECTION_DISCONNECTED"
+    },
+    {
+      "atUtc": "2026-11-17T13:36:51+00:00",
+      "event": "starting RTC session"
+    },
+    {
+      "atUtc": "2026-11-17T13:36:55+00:00",
+      "event": "participant active",
+      "connectTime": "4.249424228s"
+    }
+  ]
+}

@@ -1,5 +1,5 @@
 import crypto from 'crypto';
-import { buildServiceAccountAssertion, integrityRequestHash, summarizeIntegrity } from './playIntegrity';
+import { buildServiceAccountAssertion, integrityRequestHash, summarizeIntegrity, integrityDecodeErrorCode } from './playIntegrity';
 
 const PACKAGE = 'com.kolt12max.livi';
 const NOW = 1_800_000_000_000;
@@ -21,6 +21,13 @@ function payload(overrides: Record<string, any> = {}) {
 const summarize = (p: any) => summarizeIntegrity(p, { packageName: PACKAGE, requestHash: HASH, nowMs: NOW });
 
 describe('play integrity', () => {
+  it('keeps an actionable Google error code without copying response messages or tokens', () => {
+    const response = { error: { status: 'PERMISSION_DENIED', message: 'private-token-data',
+      details: [{ reason: 'SERVICE_DISABLED', metadata: { token: 'private-token-data' } }] } };
+    expect(integrityDecodeErrorCode(403, response)).toBe('decode_403_PERMISSION_DENIED_SERVICE_DISABLED');
+    expect(integrityDecodeErrorCode(403, { error: { status: 'private-token-data', details: [{ reason: 'private-token-data' }] } })).toBe('decode_403_UNKNOWN');
+    expect(integrityDecodeErrorCode(500, null)).toBe('decode_500_UNKNOWN');
+  });
   it('binds the request hash to install id and secret', () => {
     expect(HASH).toMatch(/^[0-9a-f]{128}$/);
     expect(integrityRequestHash('inst_android_abc', 'secret-2')).not.toBe(HASH);

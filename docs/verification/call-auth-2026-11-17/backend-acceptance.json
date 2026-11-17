@@ -1,0 +1,42 @@
+{
+  "database": "livi_auth_acceptance_1794918128320",
+  "results": [
+    {
+      "scenario": "release211_accept_before_attach",
+      "ok": true,
+      "waitMs": 350
+    },
+    {
+      "scenario": "guessed_identifier_wrong_secret",
+      "ok": true,
+      "accepted": false
+    },
+    {
+      "scenario": "hangup_while_waiting_for_identity",
+      "ok": true,
+      "revived": false
+    },
+    {
+      "scenario": "release211_initiate_before_attach",
+      "ok": true
+    },
+    {
+      "scenario": "third_party_accept",
+      "ok": true,
+      "response": {
+        "ok": false,
+        "error": "forbidden"
+      }
+    },
+    {
+      "scenario": "third_party_cancel_decline_end",
+      "ok": true,
+      "legitimateHangup": true
+    },
+    {
+      "scenario": "complete",
+      "ok": true,
+      "scenarios": 6
+    }
+  ]
+}

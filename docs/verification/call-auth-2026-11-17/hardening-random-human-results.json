@@ -1,0 +1,24 @@
+{
+  "baselineWithoutVpn": {
+    "audioBothDirections": true,
+    "movingVideoBothDirections": true,
+    "userConfirmed": true
+  },
+  "afterThreeSimultaneousNextAndStopStart": {
+    "userConfirmed": true,
+    "audioBothDirections": true,
+    "movingVideoBothDirections": true
+  },
+  "baselineWithVpn": {
+    "userConfirmed": true,
+    "audioBothDirections": true,
+    "movingVideoBothDirections": true
+  },
+  "afterNetworkLossWithVpn": {
+    "userConfirmedRemoteAudioBothDirections": true,
+    "userConfirmedRemoteMovingVideoBothDirections": true,
+    "s25LocalPreviewMissing": true,
+    "userReportedAfterA35Rotation": true,
+    "status": "local-preview defect requires corrected-build regression"
+  }
+}
