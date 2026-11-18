@@ -40,7 +40,7 @@
     },
     "android": {
       "package": "com.kolt12max.livi",
-      "versionCode": 212,
+      "versionCode": 213,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundImage": "./assets/adaptive-icon-background.png"

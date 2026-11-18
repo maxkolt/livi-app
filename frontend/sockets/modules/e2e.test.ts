@@ -222,6 +222,31 @@ describe('between two users with encryption on', () => {
     expect(await toWireMessagePayload(image)).toEqual(image);
   });
 
+  it('protects photo and album captions with the same keys while retaining media geometry', async () => {
+    const image = {
+      to: BOB, type: 'image', text: 'секретная подпись', uri: 'https://x/portrait.jpg',
+      uris: ['https://x/portrait.jpg', 'https://x/landscape.jpg'],
+      imageWidth: 900, imageHeight: 1600,
+      imageSizes: [{ width: 900, height: 1600 }, { width: 1600, height: 900 }],
+      clientMessageId: 'caption-album',
+    };
+    const wire = await toWireMessagePayload(image);
+    expect(wire.enc).toBeDefined();
+    expect(wire.text).toBeUndefined();
+    expect(JSON.stringify(wire)).not.toContain(image.text);
+    expect(wire).toMatchObject({ uri: image.uri, uris: image.uris, imageSizes: image.imageSizes });
+    as(BOB);
+    expect(await decryptIncomingMessage(delivered(wire), placeholder)).toMatchObject({ text: image.text, imageWidth: 900, imageHeight: 1600 });
+    as(ALICE);
+    expect(await decryptIncomingMessage(delivered(wire), placeholder)).toMatchObject({ text: image.text });
+  });
+
+  it('queues an image caption instead of leaking it when the peer key is unavailable', async () => {
+    mockSocket.connected = false;
+    await expect(toWireMessagePayload({ to: 'cccccccccccccccccccccccc', type: 'image', text: 'caption', clientMessageId: 'photo-unavailable' }))
+      .rejects.toBeInstanceOf(E2eUnavailableError);
+  });
+
   it('encrypts edits for the chat peer', async () => {
     const wire: any = await toWireEditPayload('cm_1', 'исправлено', BOB);
     expect(wire.text).toBeUndefined();

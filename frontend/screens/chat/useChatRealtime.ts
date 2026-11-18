@@ -1,5 +1,6 @@
 import type { ChatSessionState } from './useChatSessionState';
 import type { ChatMessage } from './chatMessageTypes';
+import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
 /** Realtime socket listeners for an open chat. */
 
 import React from "react";
@@ -76,6 +77,7 @@ export function useChatRealtime({ session, setSelectedMessageIds, resolveMediaUr
           text: message.text,
           type: message.type,
           uri: message.uri,
+          ...normalizeChatImageMetadata(message.type, message, getMessageImageUris(message)),
           uris: Array.isArray(message.uris) && message.uris.length > 1
             ? message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, CHAT_ALBUM_MAX)
             : undefined,
@@ -331,6 +333,10 @@ export function useChatRealtime({ session, setSelectedMessageIds, resolveMediaUr
             ...msg,
             uri: primary || msg.uri,
             uris: nextUris.length > 1 ? nextUris : undefined,
+            imageWidth: undefined,
+            imageHeight: undefined,
+            imageSizes: undefined,
+            ...normalizeChatImageMetadata('image', data.imageWidth ? { ...data, uris: nextUris } : msg, nextUris.length ? nextUris : primary ? [primary] : []),
           };
         }),
       );

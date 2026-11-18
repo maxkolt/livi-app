@@ -1,0 +1,112 @@
+{
+  "versionCode": 213,
+  "date": "2026-11-18",
+  "frontend": {
+    "suites": 152,
+    "tests": 1471,
+    "passed": true,
+    "typecheck": true,
+    "eslint": true,
+    "diffCheck": true
+  },
+  "device": {
+    "final213-mobile-vpn": {
+      "completedTabTransitions": 12,
+      "decodedFrames": 2139,
+      "measuredListFrames": 609,
+      "blankFirstAvatarFramesWithVisibleRow": 0,
+      "invalidPrefetchUriErrors": 0
+    },
+    "final213-a35-wifi": {
+      "completedTabTransitions": 12,
+      "decodedFrames": 297,
+      "measuredListFrames": 9,
+      "blankFirstAvatarFramesWithVisibleRow": 0,
+      "invalidPrefetchUriErrors": 0
+    },
+    "wifi213PreQuoteFix": {
+      "completedTabTransitions": 12,
+      "decodedFrames": 256,
+      "invalidPrefetchUriErrors": 0,
+      "note": "Same navigation code; final APK differs only in Android quoted-photo outline sizing."
+    },
+    "finalS25WifiRun": {
+      "completed": false,
+      "reason": "Foreground changed to Telegram; guard stopped navigation."
+    },
+    "postCallS25": {
+      "decodedFrames": 187,
+      "measuredListFrames": 2,
+      "blankFirstAvatarFramesWithVisibleRow": 0,
+      "transitions": [
+        "end call",
+        "Friends",
+        "Chats",
+        "Calls",
+        "Search"
+      ]
+    }
+  },
+  "photoPreview": {
+    "singlePhotos": "contain within stable 4:3 bounds",
+    "albums": "contain within existing grid tiles",
+    "composer": "existing contain preserved",
+    "androidQuotedPhotoBorder": "outer width includes highlight padding",
+    "realTestMessagesSent": false,
+    "awaitingPermissionForTestMessages": false,
+    "deviceEvidence": "Existing portrait photo in QA conversation inspected on final213; complete frame visible with side padding. Generated test images not sent."
+  },
+  "call": {
+    "direction": "A35 -> S25",
+    "s25Network": "WiFi + VPN",
+    "a35Network": "WiFi, no VPN",
+    "incomingDelivered": true,
+    "accepted": true,
+    "stableConnectionObservedSeconds": 206,
+    "humanAudibilityConfirmation": "User confirmed speech in both directions",
+    "firstAttempt": "Ended by extra injected touch after call acceptance; not used as a stability result.",
+    "endedNormally": true,
+    "callServicesAfterEnd": {
+      "A35": 0,
+      "S25": 0
+    },
+    "audioModeAfterEnd": {
+      "A35": "MODE_NORMAL (0)",
+      "S25": "MODE_NORMAL"
+    }
+  },
+  "artifact": {
+    "aab": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "exportedAab": "/private/tmp/livi-release-213/livi-213-release.aab",
+    "package": "com.kolt12max.livi",
+    "versionCode": 213,
+    "versionName": "1.1.22",
+    "debuggable": false,
+    "sizeBytes": 127439873,
+    "sha256": "b766789905045fd999ecb5cb931edce0b5411c134a3aa35fa4bf1fa8c21d799f",
+    "qaApk": "/private/tmp/livi-release-213/livi-213-qa.apk",
+    "qaApkSizeBytes": 87688628,
+    "qaApkSha256": "aca5fe5593d758055f6dd90396cce49478d45db3cd9beb718875fbbe7122ca07",
+    "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+    "matchesPreviousProductionSigner": true,
+    "differsFromQaDebugSigner": true,
+    "jarSignatureVerified": true,
+    "bundletoolValidationPassed": true,
+    "bundletoolVersion": "1.17.2",
+    "embeddedHermesSha256": "de486682d3b4f775b5a1caaa6b3603b840048207280e3f418ef39e79872b723c",
+    "sameJavaScriptAsQaApk": true,
+    "nativeAbis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ]
+  },
+  "cleanup": {
+    "wifiRestored": true,
+    "temporaryPhoneImagesRemoved": true,
+    "temporaryPhoneVideosRemoved": true,
+    "originalPhotosPreserved": true,
+    "playPackage211Preserved": true
+  }
+}

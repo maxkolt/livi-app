@@ -62,4 +62,33 @@ describe('outboxPendingRows', () => {
     expect(messages).toHaveLength(1);
     expect(sendingIds).toEqual(['222-xyz']);
   });
+
+  it('restores the complete captioned album and positional dimensions after leaving the chat', () => {
+    const caption = '  Отпуск 🏖️\nВторая строка\n';
+    const uris = ['https://api.test/first.jpg', 'https://api.test/second.jpg', 'https://api.test/third.jpg'];
+    const { messages, sendingIds } = mergePendingOutboxIntoMessages([], [{
+      id: 'outbox-album', optimisticUiId: 'album-ui', createdAt: 1,
+      payload: { to: 'peer', type: 'image', uri: uris[0], uris, text: caption,
+        imageWidth: 800, imageHeight: 1200,
+        imageSizes: [{ width: 800, height: 1200 }, null, { width: 1600, height: 900 }],
+        replyTo: { id: 'quoted', text: 'reply', from: 'peer' },
+      },
+    }], 'me');
+    expect(sendingIds).toEqual(['album-ui']);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ id: 'album-ui', uri: uris[0], uris, text: caption,
+      imageWidth: 800, imageHeight: 1200,
+      imageSizes: [{ width: 800, height: 1200 }, null, { width: 1600, height: 900 }],
+      replyTo: { id: 'quoted', text: 'reply', from: 'peer', isOwn: false },
+    });
+  });
+
+  it('restores a natural-size single photo without requiring a caption or dimension lookup', () => {
+    const built = messageFromPendingOutboxItem({ id: 'single', createdAt: 1,
+      payload: { to: 'peer', type: 'image', uri: 'https://api.test/portrait.jpg', imageWidth: 900, imageHeight: 1600 },
+    }, 'me');
+    expect(built?.message).toMatchObject({ type: 'image', imageWidth: 900, imageHeight: 1600 });
+    expect(built?.message.uris).toBeUndefined();
+    expect(built?.message.text).toBeUndefined();
+  });
 });

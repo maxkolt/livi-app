@@ -39,6 +39,7 @@ export const languages: ReadonlyArray<{ code: Lang; name: string; native: string
 // 5) Словарь переводов для всех LANGS
 const dict: Partial<Record<Lang, Record<string, string>>> = {
   ru: {
+    addPhotoCaption: 'Добавить подпись…',
     accountResetTitle: 'Новый старт LiVi',
     accountResetMessage: 'Мы обновили систему аккаунтов и удалили прежние профили и историю. Создайте новый профиль, чтобы продолжить. Старые данные на этом устройстве будут очищены.',
     accountResetContinue: 'Создать новый профиль',
@@ -582,6 +583,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Следующий фон',
   },
   en: {
+    addPhotoCaption: 'Add a caption…',
     accountResetTitle: 'A fresh start for LiVi',
     accountResetMessage: 'We updated the account system and removed previous profiles and history. Create a new profile to continue. Old account data on this device will be cleared.',
     accountResetContinue: 'Create a new profile',
@@ -1126,6 +1128,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
   },
   
   es: {
+    addPhotoCaption: 'Añadir un pie de foto…',
     callingYouCall: 'Llamando a {name}',
     callingWaiting: 'Esperando respuesta…',
     cancelCall: 'Cancelar',
@@ -1606,6 +1609,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Fondo siguiente',
   },
   de: {
+    addPhotoCaption: 'Bildunterschrift hinzufügen…',
     callingYouCall: 'Du rufst {name} an',
     callingWaiting: 'Warten auf Antwort…',
     cancelCall: 'Abbrechen',
@@ -2086,6 +2090,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Nächster Hintergrund',
   },
   fr: {
+    addPhotoCaption: 'Ajouter une légende…',
     callingYouCall: 'Appel de {name}',
     callingWaiting: 'En attente de réponse…',
     cancelCall: 'Annuler',
@@ -2566,6 +2571,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Fond suivant',
   },
   it: {
+    addPhotoCaption: 'Aggiungi una didascalia…',
     callingYouCall: 'Chiamata a {name}',
     callingWaiting: 'In attesa di risposta…',
     cancelCall: 'Annulla',
@@ -3047,6 +3053,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Sfondo successivo',
   },
   pt: {
+    addPhotoCaption: 'Adicionar legenda…',
     callingYouCall: 'Ligando para {name}',
     callingWaiting: 'Aguardando resposta…',
     cancelCall: 'Cancelar',
@@ -3528,6 +3535,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
   },
 
   tr: {
+    addPhotoCaption: 'Açıklama ekle…',
     callingYouCall: '{name} aranıyor',
     callingWaiting: 'Yanıt bekleniyor…',
     cancelCall: 'İptal',
@@ -4007,6 +4015,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Sonraki arka plan',
   },
   ar: {
+    addPhotoCaption: 'إضافة تعليق…',
     callingYouCall: 'تتصل بـ {name}',
     callingWaiting: 'بانتظار الرد…',
     cancelCall: 'إلغاء',
@@ -4487,6 +4496,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'الخلفية التالية',
   },
   ja: {
+    addPhotoCaption: 'キャプションを追加…',
     callingYouCall: '{name} に発信中',
     callingWaiting: '応答を待っています…',
     cancelCall: 'キャンセル',
@@ -4967,6 +4977,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: '次の背景',
   },
   ko: {
+    addPhotoCaption: '설명 추가…',
     callingYouCall: '{name}에게 전화 중',
     callingWaiting: '응답 대기 중…',
     cancelCall: '취소',
@@ -5447,6 +5458,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: '다음 배경',
   },
   zh: {
+    addPhotoCaption: '添加说明…',
     callingYouCall: '正在呼叫 {name}',
     callingWaiting: '等待接听…',
     cancelCall: '取消',
@@ -5927,6 +5939,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: '下一个背景',
   },
   'zh-TW': {
+    addPhotoCaption: '加入說明…',
     callingYouCall: '正在撥打 {name}',
     callingWaiting: '等待接聽…',
     cancelCall: '取消',
@@ -6407,6 +6420,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: '下一個背景',
   },
   hi: {
+    addPhotoCaption: 'कैप्शन जोड़ें…',
     callingYouCall: '{name} को कॉल कर रहे हैं',
     callingWaiting: 'उत्तर की प्रतीक्षा…',
     cancelCall: 'रद्द करें',
@@ -6887,6 +6901,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'अगला बैकग्राउंड',
   },
   vi: {
+    addPhotoCaption: 'Thêm chú thích…',
     callingYouCall: 'Đang gọi {name}',
     callingWaiting: 'Đang chờ trả lời…',
     cancelCall: 'Hủy',
@@ -7366,6 +7381,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'Hình nền sau',
   },
   th: {
+    addPhotoCaption: 'เพิ่มคำบรรยาย…',
     callingYouCall: 'กำลังโทรหา {name}',
     callingWaiting: 'กำลังรอรับสาย…',
     cancelCall: 'ยกเลิก',
@@ -7846,6 +7862,7 @@ const dict: Partial<Record<Lang, Record<string, string>>> = {
     wallpaperNextA11y: 'พื้นหลังถัดไป',
   },
   id: {
+    addPhotoCaption: 'Tambahkan keterangan…',
     callingYouCall: 'Memanggil {name}',
     callingWaiting: 'Menunggu jawaban…',
     cancelCall: 'Batal',

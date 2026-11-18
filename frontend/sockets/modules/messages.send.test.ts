@@ -125,6 +125,31 @@ describe('sendMessage', () => {
     expect(mockStore.has('chat_message_outbox_v1')).toBe(false);
   });
 
+  it('persists image captions and every album size before attempting the network', async () => {
+    jest.useFakeTimers();
+    mockSocket.connected = false;
+    mockPost.mockRejectedValue(new TypeError('Network request failed'));
+    const image = {
+      to: 'peer', type: 'image' as const, text: 'caption before sending', uri: 'https://x/a',
+      uris: ['https://x/a', 'https://x/b'], imageWidth: 900, imageHeight: 1600,
+      imageSizes: [{ width: 900, height: 1600 }, { width: 1600, height: 900 }],
+      clientUiMessageId: `${UI_ID}-album`,
+    };
+    const sending = sendMessage(image);
+    await jest.advanceTimersByTimeAsync(1500);
+    await expect(sending).resolves.toMatchObject({ ok: true, queued: true });
+    expect(JSON.parse(mockStore.get('chat_message_outbox_v1')!)).toMatchObject([
+      { payload: { text: image.text, uris: image.uris, imageWidth: 900, imageHeight: 1600, imageSizes: image.imageSizes } },
+    ]);
+    mockSocket.connected = true;
+    mockPost.mockImplementation(async (_path: string, payload: { clientMessageId: string }) => ({ ok: true, messageId: payload.clientMessageId }));
+    mockEmitAck.mockImplementation(async (_event: string, payload: { clientMessageId: string }) => ({ ok: true, messageId: payload.clientMessageId }));
+    const { drainMessageOutbox } = require('./outbox') as typeof import('./outbox');
+    await drainMessageOutbox();
+    const attempts = [...mockPost.mock.calls, ...mockEmitAck.mock.calls].map(call => call[1]);
+    expect(attempts).toContainEqual(expect.objectContaining({ text: image.text, imageWidth: 900, imageHeight: 1600, imageSizes: image.imageSizes }));
+  });
+
   it('gives every message an id the server can deduplicate retries by', async () => {
     mockEmitAck.mockImplementation(async (_e: string, p: any) => ({ ok: true, messageId: p.clientMessageId }));
     const r = await sendMessage({ to: 'peer', type: 'text', text: 'forwarded' });

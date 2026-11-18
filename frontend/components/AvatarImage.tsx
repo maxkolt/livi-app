@@ -1,7 +1,7 @@
 // components/AvatarImage.tsx
-import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
+import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PixelRatio, StyleSheet, View, StyleProp, ViewStyle, TextStyle, ImageStyle } from 'react-native';
-import { Image as ExpoImage } from 'expo-image';
+import { Image as ExpoImage, type ImageProps } from 'expo-image';
 import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 'react-native-svg';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
@@ -378,32 +378,39 @@ const AvatarImage = memo<AvatarImageProps>(({
     </Svg>
   ) : null;
 
+  // ExpoImage is a PureComponent. Keep its native source, callbacks and style
+  // stable when list status/badges or the surrounding tab shell rerenders.
+  const imageProps = useMemo(() => getAvatarImageProps(displayUri, key), [displayUri, key]);
+  const imageStyle = useMemo<StyleProp<ImageStyle>>(() => [
+    StyleSheet.absoluteFillObject,
+    { borderRadius: avatarRadius },
+    style,
+  ], [avatarRadius, style]);
+  const handleImageLoad = useCallback(() => {
+    if (onDisplayLoad) setLoadedDisplayUri(displayUri);
+    if (!onDisplayLoad || photoSize < 90) return;
+    logger.info('[search-avatar] image-onLoad', {
+      size: photoSize,
+      displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+      displayLen: displayUri.length,
+    });
+  }, [displayUri, onDisplayLoad, photoSize]);
+  const handleImageError = useCallback<NonNullable<ImageProps['onError']>>((event) => {
+    if (!onDisplayLoad || photoSize < 90) return;
+    logger.warn('[search-avatar] image-onError', {
+      size: photoSize,
+      displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
+      error: String(event?.error ?? event ?? ''),
+    });
+  }, [displayUri, onDisplayLoad, photoSize]);
+
   const avatarContent = displayUri ? (
     <ExpoImage
       key={key}
-      {...getAvatarImageProps(displayUri, key)}
-      onLoad={() => {
-        if (onDisplayLoad) setLoadedDisplayUri(displayUri);
-        if (!onDisplayLoad || photoSize < 90) return;
-        logger.info('[search-avatar] image-onLoad', {
-          size: photoSize,
-          displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
-          displayLen: displayUri.length,
-        });
-      }}
-      onError={(e) => {
-        if (!onDisplayLoad || photoSize < 90) return;
-        logger.warn('[search-avatar] image-onError', {
-          size: photoSize,
-          displayKind: /^file:/i.test(displayUri) ? 'file' : 'other',
-          error: String((e)?.error ?? e ?? ''),
-        });
-      }}
-      style={[
-        StyleSheet.absoluteFillObject,
-        { borderRadius: avatarRadius },
-        style,
-      ]}
+      {...imageProps}
+      onLoad={handleImageLoad}
+      onError={handleImageError}
+      style={imageStyle}
     />
   ) : showFallbackLetter ? (
     <AvatarGlyph

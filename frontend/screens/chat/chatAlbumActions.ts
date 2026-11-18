@@ -3,6 +3,7 @@ import type { ChatMessage } from './chatMessageTypes';
 /** Pure album save/forward/delete helpers for chat image actions. */
 
 import { getMessageImageUris } from "./chatAlbum";
+import { normalizeChatImageMetadata } from "../../utils/chatImageMetadata";
 
 export type AlbumScopeKind = "save" | "forward" | "delete";
 
@@ -42,7 +43,11 @@ export function mapMessagesAfterAlbumUrisUpdate(
     return prev.filter((x) => String(x?.id) !== mid);
   }
   const fields = albumMessageFieldsAfterUrisUpdate(nextUris, result.uri);
-  return prev.map((x) => (String(x?.id) === mid ? { ...x, ...fields } : x));
+  return prev.map((x) => (String(x?.id) === mid ? {
+    ...x, imageWidth: undefined, imageHeight: undefined, imageSizes: undefined,
+    ...fields,
+    ...normalizeChatImageMetadata('image', { ...x, uris: getMessageImageUris(x) }, nextUris),
+  } : x));
 }
 
 /** Shape selectedMessage for forward after album multi-pick. */
@@ -51,9 +56,12 @@ export function buildAlbumForwardSelectedMessage(
   pickedUris: string[],
 ): ChatMessage {
   if (!pickedUris.length) return message;
+  const dimensions = normalizeChatImageMetadata('image', { ...message, uris: getMessageImageUris(message) }, pickedUris);
   if (pickedUris.length === 1) {
     return {
       ...message,
+      imageWidth: undefined, imageHeight: undefined, imageSizes: undefined,
+      ...dimensions,
       uri: pickedUris[0],
       uris: undefined,
       __albumForwardOne: true,
@@ -61,6 +69,8 @@ export function buildAlbumForwardSelectedMessage(
   }
   return {
     ...message,
+    imageWidth: undefined, imageHeight: undefined, imageSizes: undefined,
+    ...dimensions,
     uri: pickedUris[0],
     uris: pickedUris,
     __albumForwardOne: false,

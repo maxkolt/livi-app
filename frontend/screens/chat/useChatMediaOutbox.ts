@@ -8,9 +8,13 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import NetInfo from "@react-native-community/netinfo";
 import socket, { sendMessage as sendSocketMessage } from "../../sockets/socket";
 import { uploadMediaToServer } from "../../utils/mediaUpload";
-import { getChatMediaOutboxKey } from "./chatStorageKeys";
+import { getChatMediaOutboxKey, getChatMessagesKey } from "./chatStorageKeys";
 import { outgoingStatusFromSendResult } from "./chatMessageIds";
 import { stickerFieldsFromMessage } from "./chatMessageMeta";
+import { getMessageImageUris } from "./chatAlbum";
+import { normalizeChatImageMetadata } from "../../utils/chatImageMetadata";
+import { patchStoredChatMessage } from "./chatMessageStorageWrite";
+import { getChatMediaSend, trackChatMediaSend } from './chatMediaSendJobs';
 
 type Options = {
   session: ChatSessionState;
@@ -24,6 +28,7 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
     historyReady,
     messages,
     setMessages,
+    latestMessagesForPersistRef,
     uploadStatus,
     setUploadStatus,
     readStatuses,
@@ -39,6 +44,28 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
   const readStatusesRef = React.useRef(readStatuses);
   readStatusesRef.current = readStatuses;
   const drainInFlightRef = React.useRef(false);
+  const mountedRef = React.useRef(true);
+  const activeIdentityRef = React.useRef('');
+  activeIdentityRef.current = `${currentUserId || ''}:${peerId}`;
+  React.useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
+
+  const patchImageMessage = React.useCallback(async (id: string, patch: Partial<ChatMessage>) => {
+    if (mountedRef.current && activeIdentityRef.current === `${currentUserId || ''}:${peerId}`) {
+      const update = (previous: ChatMessage[]) => previous.map(message =>
+        String(message.id) === id ? { ...message, ...patch } : message);
+      latestMessagesForPersistRef.current = update(latestMessagesForPersistRef.current);
+      messagesRef.current = update(messagesRef.current);
+      setMessages(update);
+    }
+    // A completed upload may outlive this screen. Patch only its row, preserving
+    // messages written by a newly opened ChatScreen for the same conversation.
+    if (currentUserId && peerId) {
+      await patchStoredChatMessage(getChatMessagesKey(currentUserId, peerId), id, patch);
+    }
+  }, [currentUserId, peerId, latestMessagesForPersistRef, setMessages]);
 
   const enqueueMediaOutboxId = React.useCallback(
     async (id: string) => {
@@ -95,7 +122,7 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
     }
   }, [currentUserId, peerId]);
 
-  const retryFailedOutgoingMessage = React.useCallback(
+  const performRetryFailedOutgoingMessage = React.useCallback(
     async (m: ChatMessage): Promise<boolean> => {
       try {
         if (!m?.id || !currentUserId || !peerId) return false;
@@ -139,26 +166,49 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
         }
 
         if (type === "image") {
-          const localUri = String(m?.uri || "").trim();
+          const imageUris = getMessageImageUris(m);
+          if (!imageUris.length) {
+            updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
+            setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
+            return false;
+          }
           const fileName = String(m?.name || `file_${Date.now()}`);
           const fileSize = Number(m?.size || 0) || 0;
-
-          let remoteUrl = localUri;
-          const looksRemote = /^https?:\/\//i.test(remoteUrl);
-          if (!looksRemote) {
-            const upload = await uploadMediaToServer(localUri, "image", undefined, currentUserId, peerId);
+          let metadataUris: unknown = m.uris;
+          if (typeof metadataUris === 'string') {
+            try { metadataUris = JSON.parse(metadataUris); } catch { metadataUris = undefined; }
+          }
+          const metadata = normalizeChatImageMetadata('image', { ...m, uris: metadataUris }, imageUris);
+          const caption = typeof m.text === 'string' && m.text.trim() ? m.text : undefined;
+          const remoteUris = [...imageUris];
+          for (let index = 0; index < remoteUris.length; index++) {
+            if (/^https?:\/\//i.test(remoteUris[index])) continue;
+            const upload = await uploadMediaToServer(remoteUris[index], "image", undefined, currentUserId, peerId);
             if (!upload.success || !upload.url) {
               updateReadStatuses((prev) => ({ ...prev, [mid]: "failed" }));
               setUploadStatus((prev) => ({ ...prev, [mid]: "failed" }));
               return false;
             }
-            remoteUrl = upload.url;
+            remoteUris[index] = upload.url;
+            // Keep the entire album, including not-yet-uploaded local members.
+            // Retrying a partial upload must not send only its first image.
+            await patchImageMessage(mid, {
+              uri: remoteUris[0],
+              ...(remoteUris.length > 1 ? { uris: [...remoteUris] } : {}),
+            });
           }
-
+          const replyTo = m.replyTo?.id ? {
+            id: String(m.replyTo.id), text: m.replyTo.text,
+            from: String(m.replyTo.from || ''), isOwn: m.replyTo.isOwn,
+          } : undefined;
           const socketResult = await sendSocketMessage({
             to: peerId,
             type: "image",
-            uri: remoteUrl,
+            uri: remoteUris[0],
+            ...(remoteUris.length > 1 ? { uris: remoteUris } : {}),
+            ...(caption !== undefined ? { text: caption } : {}),
+            ...metadata,
+            ...(replyTo ? { replyTo } : {}),
             name: fileName || undefined,
             size: fileSize || undefined,
             clientUiMessageId: mid,
@@ -169,29 +219,28 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
             return true;
           }
 
-          if (socketResult?.ok && socketResult?.messageId) {
-            const newId = String(socketResult.messageId);
-            setMessages((prev) => {
-              const updated = prev.map((msg: ChatMessage) =>
-                String(msg?.id) === mid
-                  ? { ...msg, id: newId, uri: resolveMediaUri(remoteUrl), from: currentUserId, to: peerId }
-                  : msg,
-              );
-              return updated;
+          if (socketResult?.ok) {
+            const newId = String(socketResult.messageId || mid);
+            const resolvedUris = remoteUris.map(uri => resolveMediaUri(uri) || uri);
+            await patchImageMessage(mid, {
+              id: newId, uri: resolvedUris[0],
+              ...(resolvedUris.length > 1 ? { uris: resolvedUris } : {}),
+              ...metadata,
+              from: currentUserId, to: peerId,
             });
 
             setUploadStatus((prev) => {
               const next = { ...prev };
-              next[newId] = "sent";
               delete next[mid];
+              next[newId] = "sent";
               return next;
             });
 
             updateReadStatuses((prev) => {
               const next = { ...prev };
               const delivery = outgoingStatusFromSendResult(socketResult);
-              next[newId] = delivery;
               delete next[mid];
+              next[newId] = delivery;
               return next;
             });
             return true;
@@ -283,8 +332,15 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
         return false;
       }
     },
-    [currentUserId, peerId, resolveMediaUri, updateReadStatuses, setMessages, setUploadStatus, dequeueMediaOutboxId],
+    [currentUserId, peerId, resolveMediaUri, updateReadStatuses, setUploadStatus, dequeueMediaOutboxId, patchImageMessage],
   );
+
+  const retryFailedOutgoingMessage = React.useCallback((message: ChatMessage): Promise<boolean> => {
+    const mid = String(message.id || '');
+    const pending = getChatMediaSend(currentUserId, peerId, mid);
+    if (pending) return pending;
+    return trackChatMediaSend(currentUserId, peerId, mid, performRetryFailedOutgoingMessage(message));
+  }, [currentUserId, peerId, performRetryFailedOutgoingMessage]);
 
   const drainMediaOutbox = React.useCallback(async () => {
     // До загрузки истории сообщения ещё нет в ленте — иначе удалили бы его из очереди.
@@ -298,12 +354,12 @@ export function useChatMediaOutbox({ session, resolveMediaUri }: Options) {
           await dequeueMediaOutboxId(id);
           continue;
         }
-        const uri = String(msg?.uri || "").trim();
         const type = String(msg?.type || "").trim();
         const isMedia = type === "image" || type === "audio";
+        const uris = type === 'image' ? getMessageImageUris(msg) : [String(msg.uri || '').trim()].filter(Boolean);
         const canRetry =
-          !!uri &&
-          (!/^https?:\/\//i.test(uri) ||
+          uris.length > 0 &&
+          (uris.some(uri => !/^https?:\/\//i.test(uri)) ||
             uploadStatusRef.current[id] === "failed" ||
             readStatusesRef.current[id] === "failed");
         if (!isMedia || !canRetry) continue;

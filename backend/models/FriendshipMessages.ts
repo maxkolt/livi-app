@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
+import type { MessageImageMetadata } from '../utils/messageImageMetadata';
 
 // Реакция на сообщение (эмодзи + кто поставил)
 interface IMessageReaction {
@@ -16,7 +17,7 @@ export interface IReplyTo {
 }
 
 // Интерфейс для отдельного сообщения
-export interface IMessageItem {
+export interface IMessageItem extends MessageImageMetadata {
   id: string; // Уникальный ID сообщения
   from: mongoose.Types.ObjectId;
   to: mongoose.Types.ObjectId;
@@ -93,6 +94,9 @@ const MessageItemSchema = new Schema<IMessageItem>({
     type: [String],
     default: undefined
   },
+  imageWidth: { type: Number, min: 1, max: 32768 },
+  imageHeight: { type: Number, min: 1, max: 32768 },
+  imageSizes: { type: [new Schema({ width: Number, height: Number }, { _id: false })], default: undefined },
   name: {
     type: String
   },

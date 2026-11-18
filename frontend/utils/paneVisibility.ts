@@ -18,8 +18,13 @@ export function usePaneVisibleValue(): SharedValue<boolean> | null {
  */
 export const PaneLiveContext = createContext(true);
 
-const LIVE_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 10, windowSize: 7 } as const;
-const HIDDEN_LIST_WINDOW = { initialNumToRender: 12, maxToRenderPerBatch: 10, windowSize: 1 } as const;
+// Android's native clipping detaches list rows independently of virtualization.
+// Keep-alive panes move offscreen, so detaching their rows can discard an already
+// decoded avatar or Skia surface before the pane is shown again. VirtualizedList
+// still bounds the React window; only the extra native detach pass is disabled.
+const LIST_WINDOW_BASE = { initialNumToRender: 12, maxToRenderPerBatch: 10, removeClippedSubviews: false } as const;
+const LIVE_LIST_WINDOW = { ...LIST_WINDOW_BASE, windowSize: 7 } as const;
+const HIDDEN_LIST_WINDOW = { ...LIST_WINDOW_BASE, windowSize: 1 } as const;
 /** Скрытая вкладка заранее строит только первый экран строк. */
 const HIDDEN_ROWS = 12;
 /** Одна часть за шаг: её нативный mount укладывается в кадр. */

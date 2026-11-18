@@ -1,3 +1,4 @@
+import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
 import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { logger } from "../../utils/logger";
@@ -61,6 +62,7 @@ export const globalMessageStorage = {
             text: message.text,
             type: message.type,
             uri: message.uri,
+            ...normalizeChatImageMetadata(message.type, message, Array.isArray(message.uris) && message.uris.length ? message.uris : message.uri ? [message.uri] : []),
             name: message.name,
             size: message.size,
             duration: message.duration,

@@ -5,6 +5,7 @@ import User from '../models/User';
 import FriendshipMessages, { IFriendshipMessages, type IMessageItem, type ClientMessage } from '../models/FriendshipMessages';
 import FriendshipMessageItem, { type IFriendshipMessageItem } from '../models/FriendshipMessageItem';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
+import { normalizeMessageImageMetadata, type MessageImageMetadata } from '../utils/messageImageMetadata';
 import OfflineMessage from '../models/OfflineMessage';
 import type { ClaimedOfflineMessage, OfflineQueuePort } from './offlineMessageDelivery';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
@@ -122,6 +123,7 @@ function toFriendshipMessageSnapshot(message: Omit<IMessageItem, 'timestamp'> & 
     type: message.type,
     text: message.text,
     uri: message.uri,
+    ...normalizeMessageImageMetadata(message.type, message, normalizeIncomingImageUris(message)),
     name: message.name,
     size: message.size,
     duration: message.duration,
@@ -241,6 +243,7 @@ function legacyMessageToItem(friendshipId: mongoose.Types.ObjectId, message: Leg
     type,
     text: message.text,
     uri: message.uri,
+    ...normalizeMessageImageMetadata(message.type, message, normalizeIncomingImageUris(message)),
     uris: Array.isArray(message.uris)
       ? message.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10)
       : undefined,
@@ -373,7 +376,7 @@ function formatEnvelope(enc: E2eEnvelope) {
   return { v: enc.v, n: enc.n, c: enc.c, spk: enc.spk, rpk: enc.rpk };
 }
 
-function formatMessageForClient(msg: IMessageItem): ClientMessage {
+export function formatMessageForClient(msg: IMessageItem): ClientMessage {
   const uris = Array.isArray(msg.uris)
     ? msg.uris.map((u) => String(u || '').trim()).filter(Boolean).slice(0, 10)
     : undefined;
@@ -384,6 +387,7 @@ function formatMessageForClient(msg: IMessageItem): ClientMessage {
     type: msg.type,
     text: msg.text,
     uri: msg.uri || (uris && uris[0]) || undefined,
+    ...normalizeMessageImageMetadata(msg.type, msg, normalizeIncomingImageUris(msg)),
     ...(uris && uris.length > 1 ? { uris } : {}),
     name: msg.name,
     size: msg.size,
@@ -565,6 +569,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       type: message.type,
       text: message.text,
       uri: message.uri,
+      ...normalizeMessageImageMetadata(message.type, message, normalizeIncomingImageUris(message)),
       name: message.name,
       size: message.size,
       duration: message.duration,
@@ -597,6 +602,7 @@ async function addMessageToFriendship(friendship: IFriendshipMessages, message: 
       type: message.type,
       text: message.text,
       uri: messageItem.uri,
+      ...normalizeMessageImageMetadata(message.type, message, normalizeIncomingImageUris(message)),
       name: message.name,
       size: message.size,
       duration: message.duration,
@@ -1174,7 +1180,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
   });
 
   /** ===== Отправка сообщения другу ===== */
-  sock.on('message:send', async (payload: {
+  sock.on('message:send', async (payload: MessageImageMetadata & {
     to: string;
     text?: string;
     type: 'text' | 'image' | 'audio' | 'sticker' | 'video_note';
@@ -1216,6 +1222,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'invalid_uri' });
       }
       const primaryUri = payload.type === 'image' ? imageUris[0] : payload.uri;
+      const imageMetadata = normalizeMessageImageMetadata(payload.type, payload, imageUris);
       if (payload.type === 'video_note' && !primaryUri) {
         return ack?.({ ok: false, error: 'invalid_uri' });
       }
@@ -1277,6 +1284,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         type: payload.type,
         text: plainText,
         uri: primaryUri,
+        ...imageMetadata,
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
@@ -1307,6 +1315,7 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         type: payload.type,
         text: plainText,
         uri: primaryUri,
+        ...imageMetadata,
         name: payload.name,
         size: payload.size,
         duration: payload.duration,
@@ -1771,14 +1780,14 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       const nextUris = normalizeIncomingImageUris({ uris: payload?.uris });
       const meOid = new mongoose.Types.ObjectId(me);
       let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid })
-        .select('from type friendshipId uri uris')
+        .select('from type friendshipId uri uris imageWidth imageHeight imageSizes')
         .lean();
       if (!doc) {
         const legacyFriendshipId = await findLegacyMessageFriendshipId(messageId);
         if (legacyFriendshipId) {
           await backfillFriendshipMessageItems(legacyFriendshipId);
           doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid })
-            .select('from type friendshipId uri uris')
+            .select('from type friendshipId uri uris imageWidth imageHeight imageSizes')
             .lean();
         }
       }
@@ -1806,9 +1815,13 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       }
 
       const primaryUri = nextUris[0];
-      const setDoc: { uri: string; uris?: string[] } = { uri: primaryUri };
+      const imageMetadata = normalizeMessageImageMetadata('image', doc, nextUris);
+      const setDoc: { uri: string; uris?: string[] } & MessageImageMetadata = { uri: primaryUri, ...imageMetadata };
       if (nextUris.length > 1) setDoc.uris = nextUris;
-      const unsetDoc: { uris?: '' } = nextUris.length > 1 ? {} : { uris: '' };
+      const unsetDoc: Record<string, ''> = nextUris.length > 1 ? {} : { uris: '' };
+      for (const field of ['imageWidth', 'imageHeight', 'imageSizes'] as const) {
+        if (imageMetadata[field] === undefined) unsetDoc[field] = '';
+      }
 
       await FriendshipMessageItem.updateOne(
         { friendshipId, id: messageId },
@@ -1818,22 +1831,25 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         }
       ).exec();
 
-      const lastSet: { 'lastMessage.uri': string; 'lastMessage.uris'?: string[]; lastActivity: Date } = {
+      const lastSet: Record<string, unknown> = {
         'lastMessage.uri': primaryUri,
         lastActivity: new Date(),
       };
       if (nextUris.length > 1) lastSet['lastMessage.uris'] = nextUris;
+      for (const [field, value] of Object.entries(imageMetadata)) lastSet[`lastMessage.${field}`] = value;
+      const lastUnset = Object.fromEntries(Object.keys(unsetDoc).map(field => [`lastMessage.${field}`, '']));
       await FriendshipMessages.updateOne(
         { _id: friendshipId, 'lastMessage.id': messageId },
         {
           $set: lastSet,
-          ...(nextUris.length > 1 ? {} : { $unset: { 'lastMessage.uris': '' } }),
+          ...(Object.keys(lastUnset).length ? { $unset: lastUnset } : {}),
         }
       ).exec();
 
       const payloadOut = {
         messageId,
         uri: primaryUri,
+        ...imageMetadata,
         uris: nextUris.length > 1 ? nextUris : undefined,
       };
       if (u1) io.to(`u:${u1}`).emit('message:uris_updated', payloadOut);

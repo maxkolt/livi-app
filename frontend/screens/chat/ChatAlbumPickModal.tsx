@@ -7,7 +7,7 @@ import {
   StyleSheet,
   ScrollView,
 } from "react-native";
-import { Image as ExpoImage } from "expo-image";
+import { ChatPhotoPreviewImage } from "./ChatPhotoPreviewImage";
 import { Ionicons } from "@expo/vector-icons";
 import { CHAT_ALBUM_GAP, albumGridColumns } from "./chatAlbum";
 import { useModalLayout } from "../../utils/modalLayout";
@@ -187,12 +187,10 @@ export function ChatAlbumPickModal({
                   }}
                 >
                   {tile > 0 ? (
-                    <ExpoImage
+                    <ChatPhotoPreviewImage
                       source={{ uri }}
                       style={{ width: "100%", height: "100%" }}
-                      contentFit="cover"
                       cachePolicy="memory-disk"
-                      transition={0}
                     />
                   ) : null}
                   <View

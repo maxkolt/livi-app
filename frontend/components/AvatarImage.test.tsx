@@ -20,7 +20,21 @@ jest.mock('react', () => ({
     const index = mockCursor++;
     return mockSlots[index] ?? (mockSlots[index] = { current });
   },
-  useCallback: (callback: unknown) => callback,
+  useMemo: (factory: () => unknown, deps: unknown[]) => {
+    const index = mockCursor++;
+    const previous = mockSlots[index] as { deps: unknown[]; value: unknown } | undefined;
+    if (previous && deps.length === previous.deps.length && deps.every((value, i) => Object.is(value, previous.deps[i]))) return previous.value;
+    const value = factory();
+    mockSlots[index] = { deps, value };
+    return value;
+  },
+  useCallback: (callback: unknown, deps: unknown[]) => {
+    const index = mockCursor++;
+    const previous = mockSlots[index] as { deps: unknown[]; value: unknown } | undefined;
+    if (previous && deps.length === previous.deps.length && deps.every((value, i) => Object.is(value, previous.deps[i]))) return previous.value;
+    mockSlots[index] = { deps, value: callback };
+    return callback;
+  },
   useEffect: (effect: () => void | (() => void), deps: unknown[]) => {
     const index = mockCursor++;
     const previous = mockSlots[index] as { deps: unknown[]; cleanup?: () => void } | undefined;
@@ -197,4 +211,20 @@ it('still recycles ordinary avatars on a version change and profiles on a user c
   const c = imageNode(render(() => AvatarImage({ ...props, preserveImageOnVersionChange: true })));
   const d = imageNode(render(() => AvatarImage({ ...props, userId: 'recycling-b', preserveImageOnVersionChange: true })));
   expect(c?.props.recyclingKey).not.toBe(d?.props.recyclingKey);
+});
+
+
+it('does not update native image props when unrelated list state rerenders the avatar', () => {
+  const first = imageNode(render(() => AvatarImage({
+    userId: 'unchanged-image', avatarVer: 8, uri: 'file:///unchanged.jpg', fallbackText: 'A',
+  })))!;
+  const next = imageNode(render(() => AvatarImage({
+    userId: 'unchanged-image', avatarVer: 8, uri: 'file:///unchanged.jpg', fallbackText: 'B',
+    containerStyle: { overflow: 'hidden' },
+  })))!;
+  expect(next.key).toBe(first.key);
+  const before = first.props as Record<string, unknown>;
+  const after = next.props as Record<string, unknown>;
+  expect(Object.keys(after)).toEqual(Object.keys(before));
+  for (const key of Object.keys(after)) expect(after[key]).toBe(before[key]);
 });

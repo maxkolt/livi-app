@@ -14,12 +14,20 @@ import { DeferredHomeLayout } from './HomeLayoutContext';
  */
 const OFFSCREEN_SHIFT = 100000;
 
-const HIDDEN_OFFSCREEN: ViewStyle = {
+// Keep the same Yoga constraints when showing a warmed pane. Switching from
+// absolute fill to flex could briefly resize the native image views; expo-image
+// clears its drawable at zero size, even when the image is already cached.
+const VISIBLE_PANE: ViewStyle = {
   position: 'absolute',
   left: 0,
   right: 0,
   top: 0,
   bottom: 0,
+  minHeight: 0,
+};
+
+const HIDDEN_OFFSCREEN: ViewStyle = {
+  ...VISIBLE_PANE,
   transform: [{ translateX: OFFSCREEN_SHIFT }],
   pointerEvents: 'none',
 };
@@ -27,13 +35,9 @@ const HIDDEN_OFFSCREEN: ViewStyle = {
 /** FlatList: не display:none — иначе layout «догоняет» после тапа. */
 function welcomeListPaneStyle(visible: boolean): ViewStyle {
   return visible
-    ? { flex: 1, minHeight: 0 }
+    ? VISIBLE_PANE
     : {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        top: 0,
-        bottom: 0,
+        ...VISIBLE_PANE,
         opacity: 0,
         pointerEvents: 'none',
       };
@@ -63,7 +67,7 @@ type Props = {
 
 function paneStyle(visible: boolean, mode: NonNullable<Props['mode']>): ViewStyle {
   if (mode === 'block') return welcomeBlockPaneStyle(visible);
-  if (mode === 'offscreen') return visible ? { flex: 1, minHeight: 0 } : HIDDEN_OFFSCREEN;
+  if (mode === 'offscreen') return visible ? VISIBLE_PANE : HIDDEN_OFFSCREEN;
   return welcomeListPaneStyle(visible);
 }
 

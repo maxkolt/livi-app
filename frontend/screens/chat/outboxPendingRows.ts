@@ -2,6 +2,8 @@ import type { ChatMessage } from './chatMessageTypes';
 /** Build chat bubbles from pending outbox rows (recover after leave without persist). */
 
 import type { MessageOutboxItem } from "../../sockets/modules/outboxTypes";
+import { getMessageImageUris } from './chatAlbum';
+import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
 
 export function messageFromPendingOutboxItem(
   item: MessageOutboxItem,
@@ -25,6 +27,12 @@ export function messageFromPendingOutboxItem(
   };
   if (payload?.text != null) message.text = payload.text;
   if (uri) message.uri = uri;
+  if (type === 'image') {
+    const imageUris = getMessageImageUris({ ...payload, uri });
+    if (imageUris.length) message.uri = imageUris[0];
+    if (imageUris.length > 1) message.uris = imageUris;
+    Object.assign(message, normalizeChatImageMetadata(type, payload, imageUris));
+  }
   if (thumbUri) message.thumbUri = thumbUri;
   if (payload?.name) message.name = payload.name;
   if (payload?.size != null) message.size = payload.size;

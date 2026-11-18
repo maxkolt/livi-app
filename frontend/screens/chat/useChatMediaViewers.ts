@@ -15,7 +15,8 @@ export function useChatMediaViewers() {
   const [mediaViewerVisible, setMediaViewerVisible] = React.useState(false);
   const [selectedMedia, setSelectedMedia] = React.useState<ChatSelectedMedia | null>(null);
   const [composeViewerVisible, setComposeViewerVisible] = React.useState(false);
-  const [composeAsset, setComposeAsset] = React.useState<PickedChatImage | null>(null);
+  const [composeAssets, setComposeAssets] = React.useState<PickedChatImage[]>([]);
+  const composeAsset = composeAssets[0] || null;
 
   const openMediaViewer = React.useCallback((media: ChatSelectedMedia) => {
     setSelectedMedia(media);
@@ -27,14 +28,13 @@ export function useChatMediaViewers() {
     setSelectedMedia(null);
   }, []);
 
-  const openComposeViewer = React.useCallback((asset: PickedChatImage) => {
-    setComposeAsset(asset);
+  const openComposeViewer = React.useCallback((asset: PickedChatImage | PickedChatImage[]) => {
+    setComposeAssets(Array.isArray(asset) ? asset : [asset]);
     setComposeViewerVisible(true);
   }, []);
 
   const closeComposeViewer = React.useCallback(() => {
     setComposeViewerVisible(false);
-    setComposeAsset(null);
   }, []);
 
   return {
@@ -47,7 +47,8 @@ export function useChatMediaViewers() {
     composeViewerVisible,
     setComposeViewerVisible,
     composeAsset,
-    setComposeAsset,
+    composeAssets,
+    setComposeAssets,
     openComposeViewer,
     closeComposeViewer,
   };

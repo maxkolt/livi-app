@@ -1,0 +1,465 @@
+{
+  "date": "2026-11-18",
+  "timezone": "Europe/Moscow",
+  "versionCode": 213,
+  "status": "final_artifact_verified_selected_device_scenarios_passed_with_limits",
+  "supersedes": "../release-213-2026-11-18/README.md",
+  "scope": [
+    "natural-aspect single-photo previews",
+    "caption before single-photo or album send",
+    "caption and image dimensions over encrypted message transport",
+    "offline retry and reopening persistence",
+    "prior navigation/avatar stability fixes retained",
+    "photo bubble top radius 12 with inner radius 8 and inset 4, unchanged by grouping",
+    "ready send button uses blue fill and white filled arrow; disabled for empty selection or busy operation"
+  ],
+  "automated": {
+    "backend": {
+      "passedSuites": 39,
+      "skippedSuites": 4,
+      "totalSuites": 43,
+      "passedTests": 280,
+      "skippedTests": 51,
+      "totalTests": 331,
+      "failedTests": 0,
+      "status": "passed_with_skips",
+      "mongoIntegrationTestsSkipped": true,
+      "typecheck": "passed",
+      "build": "passed",
+      "testLog": "/private/tmp/livi-release-213-final-check/backend-tests.log",
+      "limits": [
+        "51 Mongo integration tests were skipped; this run does not demonstrate those scenarios on a live database."
+      ]
+    },
+    "composeSendGuards": {
+      "passedSuites": 1,
+      "passedTests": 4,
+      "failedTests": 0,
+      "status": "passed",
+      "testLog": "/private/tmp/livi-photo-caption-213/compose-guard-tests.log",
+      "scope": [
+        "one send while final image dimensions are being prepared",
+        "close during preparation cancels send",
+        "prepared old image cannot enter a new composer",
+        "Close invalidates work immediately before visibility rerender"
+      ]
+    },
+    "finalFrontendFullRun": {
+      "status": "passed_after_all_changes",
+      "passedTests": 1559,
+      "passedSuites": 164,
+      "failedTests": 0,
+      "testLog": "/private/tmp/livi-release-213-final-check/frontend-tests.log",
+      "finalCodeCovered": true
+    },
+    "finalFrontendTypecheck": "passed",
+    "finalEslint": "passed",
+    "finalDiffCheck": "passed",
+    "finalFrontendTypecheckLog": "/private/tmp/livi-release-213-final-check/typecheck.log",
+    "finalEslintLog": "/private/tmp/livi-release-213-final-check/lint.log",
+    "finalEslintScope": "entire frontend and backend",
+    "photoCorners": {
+      "status": "passed",
+      "passedTests": 24,
+      "scope": [
+        "photo bubble top radius 12 = inner radius 8 + inset 4",
+        "grouping does not tighten photo top corners"
+      ],
+      "reportedBy": "image_loading"
+    },
+    "priorFullChecks": {
+      "frontendTypecheck": "passed",
+      "eslint": "passed",
+      "eslintScope": "frontend and backend",
+      "frontendTypecheckLog": "/private/tmp/livi-photo-caption-213/order-typecheck.log",
+      "eslintLog": "/private/tmp/livi-photo-caption-213/order-lint.log",
+      "finalCornerChangeCovered": false
+    },
+    "finalSourceChecks": {
+      "frontendTypecheck": "passed",
+      "targetedEslint": "passed",
+      "reportedBy": "root",
+      "scope": "all final changes, including compose button spacing",
+      "fullEslint": "passed"
+    },
+    "styleRefinementChecks": {
+      "composeGuardTests": {
+        "passedSuites": 1,
+        "passedTests": 4,
+        "testLog": "/private/tmp/livi-photo-soft-button-213/compose-tests.log"
+      },
+      "frontendTypecheck": "passed",
+      "typecheckLog": "/private/tmp/livi-photo-soft-button-213/typecheck.log",
+      "eslint": "passed",
+      "eslintLog": "/private/tmp/livi-photo-soft-button-213/lint.log",
+      "diffCheck": "passed"
+    }
+  },
+  "backendDeployment": {
+    "status": "deployed_and_verified",
+    "releaseId": "fe5f82cca-photo-caption-213-b86540cbcf55",
+    "sourceBaseCommit": "fe5f82ccac2558c61db42d6fc33e0749888ddc0e",
+    "workingTreeChanges": true,
+    "manifestArtifactSha256": "b86540cbcf55904f22904dc3ef02287410498712384f09cba42a6345c9e75afa",
+    "productionFilesVerified": 214,
+    "changedFiles": [
+      "dist/models/FriendshipMessageItem.js",
+      "dist/models/FriendshipMessages.js",
+      "dist/models/OfflineMessage.js",
+      "dist/routes/messages.js",
+      "dist/sockets/messagesReliable.js",
+      "dist/utils/e2eEnvelope.js",
+      "dist/utils/messageImageMetadata.js",
+      "models/FriendshipMessageItem.ts",
+      "models/FriendshipMessages.ts",
+      "models/OfflineMessage.ts",
+      "routes/messages.ts",
+      "sockets/messagesReliable.ts",
+      "utils/e2eEnvelope.ts",
+      "utils/messageImageMetadata.ts"
+    ],
+    "remoteHashMismatches": [],
+    "environmentUnchanged": true,
+    "dependenciesUnchanged": true,
+    "productionDataReset": false,
+    "accountOrAuthConfigurationChanged": false,
+    "backup": "/opt/backend/backup-photo-caption-213-20261118T141222Z",
+    "rollbackUsed": false,
+    "service": {
+      "MainPID": "111528",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "preDeployActivity": {
+      "rooms": 0,
+      "participants": 0,
+      "queue": 0,
+      "paired": 0,
+      "recentUnfinishedCalls": 0
+    },
+    "publicHealthHttpStatus": 200,
+    "mongoReady": true,
+    "redisReady": true,
+    "socketAdapterReady": true,
+    "approval": "User explicitly approved the named source archive upload to the named current production server and its update.",
+    "evidence": {
+      "summary": "/private/tmp/livi-photo-caption-213/deployment-summary.json",
+      "prepare": "/private/tmp/livi-photo-caption-213/prepare-output.json",
+      "apply": "/private/tmp/livi-photo-caption-213/deployed-output.json",
+      "independentPostflight": "/private/tmp/livi-photo-caption-213/remote-postflight.json",
+      "publicHealth": "/private/tmp/livi-photo-caption-213/public-health.json"
+    }
+  },
+  "artifact": {
+    "status": "verified_final_button_spacing_candidate",
+    "package": "com.kolt12max.livi",
+    "versionCode": 213,
+    "versionName": "1.1.22",
+    "debuggable": false,
+    "aabPath": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "exportedAabPath": "/private/tmp/livi-photo-button-spacing-213/livi-213-release.aab",
+    "aabSha256": "ff8b5ec1acc674737a51ad7db4d49f47faa65e5e1d8109347c88097c0b3eb1d7",
+    "aabSizeBytes": 127446517,
+    "qaApkPath": "/private/tmp/livi-photo-button-spacing-213/livi-213-qa.apk",
+    "qaApkSha256": "2470eb028a777b1249ee601a3aa21ce1dd2ee61b1afd91d25fede840cecdd1ac",
+    "qaApkSizeBytes": 87700548,
+    "embeddedHermesSha256": "e4e41b592c7b8c1ddd44539281435e2b00197c343367772cb76130e2a46141c9",
+    "sameJavaScriptAsQaApk": true,
+    "jarSignatureVerified": true,
+    "bundletoolValidationPassed": true,
+    "bundletoolVersion": "1.17.2",
+    "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+    "productionSignerMatchesPrevious": true,
+    "productionSignerDiffersFromQaDebugSigner": true,
+    "nativeAbis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "hashesAndSizesIndependentlyRechecked": true,
+    "evidence": "/private/tmp/livi-photo-button-spacing-213/aab-results.json",
+    "buildEvidenceRoot": "/private/tmp/livi-photo-button-spacing-213",
+    "note": "Latest style revision keeps the 48dp buttons and translucent background, with compose row paddingTop=14 and paddingBottom=6; buttons move down 4dp while row height stays 68dp."
+  },
+  "deviceAcceptance": {
+    "status": "qa_updated_style_preserved_spacing_code_checked",
+    "qaApkSha256": "2470eb028a777b1249ee601a3aa21ce1dd2ee61b1afd91d25fede840cecdd1ac",
+    "s25": {
+      "finalQaInstalled": true,
+      "lastSpacingChangeVisuallyRemeasured": false
+    },
+    "a35": {
+      "finalQaInstalled": true
+    },
+    "scope": "Last change only shifts the compose button row down 4dp with positive 14dp/6dp vertical insets; prior visual and functional acceptance is retained separately.",
+    "testMessagesSentThisRefinement": 0
+  },
+  "limits": [
+    "Final physical evidence covers selected scenarios, including S25-to-A35 two-photo album delivery over cellular with VPN; reverse-direction album delivery and the complete VPN on/off navigation matrix were not repeated.",
+    "Emoji preservation, full offline/back/reopen recovery, photo-tap and cancel behavior have automated or earlier-QA coverage but were not all physically repeated on the final candidate.",
+    "New photos carry dimensions before optimistic insertion. A legacy photo without dimensions can initially use 4:3 bounds and change height once a native lookup resolves; later opens reuse cached dimensions.",
+    "51 Mongo integration tests were skipped; no claim is made that those scenarios passed.",
+    "Earlier release-213 screenshots, call acceptance and artifact hashes describe superseded candidates; intermediate evidence is labeled separately."
+  ],
+  "priorArtifactBeforeStyleRefinement": {
+    "status": "verified_final_send_ready_candidate",
+    "package": "com.kolt12max.livi",
+    "versionCode": 213,
+    "versionName": "1.1.22",
+    "debuggable": false,
+    "aabPath": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "exportedAabPath": "/private/tmp/livi-photo-send-ready-213/livi-213-release.aab",
+    "aabSha256": "ea2bbff3e1c5911dad65b8969c6c5cbdbd92299abb2c9be8f2f224fbaf893f21",
+    "aabSizeBytes": 127446836,
+    "qaApkPath": "/private/tmp/livi-photo-send-ready-213/livi-213-qa.apk",
+    "qaApkSha256": "1b15ba93f55480278cf84bca2ef08a99ac420acd85051222fd739cd77f5a7d0e",
+    "qaApkSizeBytes": 87700548,
+    "embeddedHermesSha256": "58d91fe87421e837f82168c8dcc1ead77e017904ed5596753193799386bbe820",
+    "sameJavaScriptAsQaApk": true,
+    "jarSignatureVerified": true,
+    "bundletoolValidationPassed": true,
+    "bundletoolVersion": "1.17.2",
+    "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+    "productionSignerMatchesPrevious": true,
+    "productionSignerDiffersFromQaDebugSigner": true,
+    "nativeAbis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "hashesAndSizesIndependentlyRechecked": true,
+    "evidence": "/private/tmp/livi-photo-send-ready-213/aab-results.json",
+    "buildEvidenceRoot": "/private/tmp/livi-photo-send-ready-213",
+    "note": "The final candidate is photo-send-ready-213; earlier release-213, QA order and photo-corners artifact hashes are superseded."
+  },
+  "previousFunctionalDeviceAcceptance": {
+    "status": "selected_final_scenarios_passed_with_limits",
+    "s25": {
+      "finalQaInstalled": true,
+      "passed": [
+        "uniform photo top corners in both message directions",
+        "filled blue send button with white filled arrow is fully visible above caption and full keyboard",
+        "first Back dismisses keyboard and preserves a two-line caption",
+        "two-image album sent once to A35 over cellular with VPN"
+      ],
+      "evidence": [
+        "/private/tmp/livi-photo-send-ready-213/s25-corners.png",
+        "/private/tmp/livi-photo-send-ready-213/compose-keyboard-ready.png",
+        "/private/tmp/livi-photo-send-ready-213/back-caption-ready.png",
+        "/private/tmp/livi-photo-send-ready-213/s25-album-sent.png"
+      ]
+    },
+    "a35": {
+      "finalQaInstalled": true,
+      "passed": [
+        "uniform photo top corners in both message directions",
+        "two-image album received once from S25 with exact two-line caption",
+        "after force-stop and launch, history contains the two-image album with exact two-line caption once"
+      ],
+      "evidence": [
+        "/private/tmp/livi-photo-send-ready-213/a35-corners.png",
+        "/private/tmp/livi-photo-send-ready-213/a35-album-received.png",
+        "/private/tmp/livi-photo-send-ready-213/a35-album-after-restart.png"
+      ]
+    },
+    "realCaptionSendReceive": {
+      "status": "passed_for_final_two_image_album_s25_to_a35",
+      "caption": "LiVi_album_213\nline_2"
+    },
+    "albumCaptionSendReceive": {
+      "status": "passed",
+      "from": "Samsung S25",
+      "to": "Samsung A35",
+      "imageCount": 2,
+      "images": [
+        "wide",
+        "square"
+      ],
+      "caption": "LiVi_album_213\nline_2",
+      "observedOccurrencesPerDevice": 1,
+      "senderTransport": "CELLULAR|VPN",
+      "transportEvidence": "/private/tmp/livi-photo-send-ready-213/s25-vpn-mobile.txt",
+      "wifiRestoredAfterTest": true,
+      "candidateMatchedToFinalArtifact": true,
+      "evidence": [
+        "/private/tmp/livi-photo-send-ready-213/s25-album-sent.png",
+        "/private/tmp/livi-photo-send-ready-213/a35-album-received.png"
+      ]
+    },
+    "keyboardSendVisible": {
+      "status": "passed_on_final_s25",
+      "filledBlueButtonAndWhiteArrowVisible": true,
+      "layoutOrder": [
+        "buttons",
+        "caption",
+        "full keyboard"
+      ],
+      "backPreservesTwoLineCaption": true,
+      "evidence": [
+        "/private/tmp/livi-photo-send-ready-213/compose-keyboard-ready.png",
+        "/private/tmp/livi-photo-send-ready-213/back-caption-ready.png"
+      ]
+    },
+    "captionEmojiAndNewlines": {
+      "newlines": "passed_on_final_album",
+      "emoji": "unit_covered_not_physically_retested_on_final"
+    },
+    "offlineBackReopen": {
+      "status": "unit_covered_not_physically_retested_on_final"
+    },
+    "finalNavigationVpnOnOff": {
+      "status": "full_matrix_not_physically_retested_on_final"
+    },
+    "note": "Final selected scenarios were checked on the QA APK whose Hermes bundle matches the final production-signed AAB. This is not a full device/network/offline matrix.",
+    "intermediateEvidence": [
+      {
+        "status": "passed_on_prior_qa_only",
+        "device": "Samsung A35",
+        "scenario": "An incoming photo caption remains visible after restarting/reloading chat history",
+        "caption": "LiVi_caption_213",
+        "evidence": "/private/tmp/livi-photo-caption-213/a35-history-caption.png",
+        "candidateMatchedToFinalArtifact": false,
+        "limits": [
+          "This is intermediate physical evidence; it does not complete final AAB/APK acceptance."
+        ]
+      },
+      {
+        "status": "passed_on_prior_qa_order_only",
+        "device": "Samsung S25",
+        "scenarios": [
+          "composer buttons remain above caption and full keyboard",
+          "tapping photo keeps composer buttons visible",
+          "first Back dismisses keyboard and preserves caption",
+          "closing composer cancels without sending"
+        ],
+        "evidence": [
+          "/private/tmp/livi-photo-order-213/compose-keyboard.png",
+          "/private/tmp/livi-photo-order-213/back-keeps-caption.png",
+          "/private/tmp/livi-photo-order-213/cancel-no-message.png"
+        ],
+        "candidateMatchedToFinalArtifact": false,
+        "limits": [
+          "Earlier QA order evidence only; final screenshots independently confirm keyboard visibility and Back caption retention, while final photo-tap and cancel were not separately reported."
+        ],
+        "reportedBy": "root physical-device verification"
+      }
+    ],
+    "qaApkSha256": "1b15ba93f55480278cf84bca2ef08a99ac420acd85051222fd739cd77f5a7d0e",
+    "finalHistoryReload": {
+      "status": "passed",
+      "device": "Samsung A35",
+      "sequence": [
+        "force-stop",
+        "launch",
+        "open chat history"
+      ],
+      "imageCount": 2,
+      "caption": "LiVi_album_213\nline_2",
+      "observedOccurrences": 1,
+      "candidateMatchedToFinalArtifact": true,
+      "evidence": "/private/tmp/livi-photo-send-ready-213/a35-album-after-restart.png",
+      "reportedBy": "root physical-device verification and screenshot inspection"
+    },
+    "reportedBy": "root physical-device verification and screenshot inspection",
+    "evidencePrivacy": "Device screenshots remain outside Git under /private/tmp; repository documentation contains text aggregates and artifact hashes only.",
+    "cleanup": {
+      "wifiRestored": true,
+      "ownFixtureFilesRemoved": 3,
+      "fixtureDirectory": "/sdcard/Pictures/LiViCaptionQA",
+      "testMessagesRetained": true,
+      "reportedBy": "root"
+    },
+    "testedArtifactEvidence": "/private/tmp/livi-photo-send-ready-213/aab-results.json"
+  },
+  "styleRefinement": {
+    "buttonDiameterDp": 48,
+    "previousButtonDiameterDp": 52,
+    "buttonBorderWidthDp": 1.5,
+    "buttonBorderColorUnchanged": true,
+    "readyBackground": "rgba(98, 176, 216, 0.22)",
+    "captionMinHeightDp": 40,
+    "previousCaptionMinHeightDp": 46,
+    "captionVerticalPaddingDp": 8,
+    "composeButtonPaddingTopDp": 14,
+    "composeButtonPaddingBottomDp": 6,
+    "buttonRowHeightDp": 68,
+    "buttonsMovedDownDp": 4
+  },
+  "priorArtifactBeforeSpacingRefinement": {
+    "status": "verified_soft_background_48dp_candidate",
+    "package": "com.kolt12max.livi",
+    "versionCode": 213,
+    "versionName": "1.1.22",
+    "debuggable": false,
+    "aabPath": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "exportedAabPath": "/private/tmp/livi-photo-soft-button-213/livi-213-release.aab",
+    "aabSha256": "59e7ed730fa9ce3f16f50fab0ed337446a6907d691404ef739d05d6d713f290e",
+    "aabSizeBytes": 127446828,
+    "qaApkPath": "/private/tmp/livi-photo-soft-button-213/livi-213-qa.apk",
+    "qaApkSha256": "b1117547ee0ec35700225b9a006c8467405e8c24f25fabbeee5aadf7ad2e44d6",
+    "qaApkSizeBytes": 87700552,
+    "embeddedHermesSha256": "30d46a58c029fdd38e3284481e4e6ca7ee8f8237bcaf04ddc70f6aeeb953d7a1",
+    "sameJavaScriptAsQaApk": true,
+    "jarSignatureVerified": true,
+    "bundletoolValidationPassed": true,
+    "bundletoolVersion": "1.17.2",
+    "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+    "productionSignerMatchesPrevious": true,
+    "productionSignerDiffersFromQaDebugSigner": true,
+    "nativeAbis": [
+      "arm64-v8a",
+      "armeabi-v7a",
+      "x86",
+      "x86_64"
+    ],
+    "hashesAndSizesIndependentlyRechecked": true,
+    "evidence": "/private/tmp/livi-photo-soft-button-213/aab-results.json",
+    "buildEvidenceRoot": "/private/tmp/livi-photo-soft-button-213",
+    "note": "Latest style revision: original border, send background alpha 0.22, action buttons 48dp, caption minimum height 40dp."
+  },
+  "priorStyleDeviceAcceptance": {
+    "status": "style_refinement_verified_on_s25",
+    "qaApkSha256": "b1117547ee0ec35700225b9a006c8467405e8c24f25fabbeee5aadf7ad2e44d6",
+    "s25": {
+      "finalQaInstalled": true,
+      "passed": [
+        "original 1.5dp blue border retained, ready fill is translucent",
+        "all three action buttons 48dp",
+        "caption minimum height 40dp",
+        "all controls remain above the full keyboard"
+      ],
+      "evidence": [
+        "/private/tmp/livi-photo-soft-button-213/compose-48.png",
+        "/private/tmp/livi-photo-soft-button-213/compose-keyboard-48.png"
+      ]
+    },
+    "a35": {
+      "finalQaInstalled": true,
+      "visualRerun": false
+    },
+    "testMessagesSentThisRefinement": 0,
+    "priorFunctionalAcceptance": "previousFunctionalDeviceAcceptance; delivery/VPN/history scenarios were performed before this style-only refinement"
+  },
+  "finalServerReadOnlyCheck": {
+    "checkedAt": "2026-11-18T15:16:14.578706+00:00",
+    "release": "fe5f82cca-photo-caption-213-b86540cbcf55",
+    "productionFilesCompared": 214,
+    "candidateParity": true,
+    "changedFiles": [],
+    "activity": {
+      "rooms": 0,
+      "participants": 0,
+      "queue": 0,
+      "paired": 0,
+      "recentUnfinishedCalls": 0
+    },
+    "environmentMatchesPreDeploy": true,
+    "service": {
+      "MainPID": "111528",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    }
+  }
+}

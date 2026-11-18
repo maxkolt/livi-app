@@ -6,6 +6,7 @@ import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import OfflineMessage from '../models/OfflineMessage';
 import { checkMessageSendRateLimit, isMessageTextTooLong, truncateReplyQuote } from '../utils/messageLimits';
 import { resolveIncomingEnvelope } from '../utils/e2eEnvelope';
+import { normalizeMessageImageMetadata } from '../utils/messageImageMetadata';
 import { loadE2ePublicKeys } from '../sockets/e2eKeys';
 import { deliverLiveMessage } from '../sockets/liveMessageDelivery';
 import { areFriendsCached, getOrCreateFriendship, invalidateFriendshipCache } from '../utils/friendshipUtils';
@@ -34,7 +35,7 @@ import { markAllReadFrom, removeUnreadOne } from '../utils/unreadStore';
 import { emitToUser } from '../utils/emitToUser';
 
 type MessageRequestBody = Partial<Record<
-  'to' | 'from' | 'type' | 'text' | 'uri' | 'uris' | 'thumbUri' | 'name' | 'size' | 'duration' |
+  'to' | 'from' | 'type' | 'text' | 'uri' | 'uris' | 'imageWidth' | 'imageHeight' | 'imageSizes' | 'thumbUri' | 'name' | 'size' | 'duration' |
   'stickerId' | 'stickerPackId' | 'stickerEmoji' | 'stickerLabel' | 'clientMessageId' | 'clientId' |
   'enc' | 'messageId' | 'messageIds' | 'with' | 'forAll' | 'emoji' | 'on',
   unknown
@@ -75,6 +76,7 @@ function toFriendshipMessageSnapshot(message: Omit<IMessageItem, 'timestamp'> & 
     type: message.type,
     text: message.text,
     uri: message.uri,
+    ...normalizeMessageImageMetadata(message.type, message, normalizeIncomingImageUris(message)),
     name: message.name,
     size: message.size,
     duration: message.duration,
@@ -263,6 +265,7 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
       return res.status(400).json({ ok: false, error: 'invalid_uri' });
     }
     const primaryUri = type === 'image' ? imageUris[0] : uri;
+    const imageMetadata = normalizeMessageImageMetadata(type, req.body, imageUris);
 
     const messageItem: IMessageItem = {
       id: messageId,
@@ -271,6 +274,7 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
       type,
       text,
       uri: primaryUri,
+      ...imageMetadata,
       name,
       size,
       duration,
@@ -294,6 +298,7 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
       type,
       text,
       uri: primaryUri,
+      ...imageMetadata,
       name,
       size,
       duration,
@@ -343,6 +348,7 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
         type,
         text,
         uri: primaryUri,
+        ...imageMetadata,
         name,
         size,
         duration,
@@ -380,6 +386,7 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
         type,
         text,
         uri: primaryUri,
+        ...imageMetadata,
         name,
         size,
         duration,

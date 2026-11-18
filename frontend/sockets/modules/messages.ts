@@ -1,3 +1,5 @@
+import type { ChatImageMetadata } from '../../screens/chat/chatMessageTypes';
+import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
 import type { E2eEnvelope } from './e2eCrypto';
 import type { MessageMutationResponse, MessageOutboxItem } from './outboxTypes';
 import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
@@ -90,7 +92,7 @@ export type SendMessageResult = {
   error?: string;
 };
 
-export function sendMessage(payload: {
+export function sendMessage(payload: ChatImageMetadata & {
   to: string;
   text?: string;
   type: "text" | "image" | "audio" | "video" | "document" | "sticker" | "video_note";
@@ -132,6 +134,7 @@ export function sendMessage(payload: {
     text: payload.text,
     type: messageType,
     uri: primaryUri,
+    ...normalizeChatImageMetadata(messageType, payload, albumUris.length ? albumUris : primaryUri ? [primaryUri] : payload.localUri ? [payload.localUri] : []),
     name: payload.name,
     size: payload.size,
     duration: payload.duration,
@@ -406,7 +409,7 @@ export function fetchChatPreviews(withIds: string[]) {
       .filter(Boolean),
   )].slice(0, 100);
 
-  type PreviewMsg = {
+  type PreviewMsg = ChatImageMetadata & {
     id: string;
     from: string;
     to: string;
@@ -492,7 +495,7 @@ export function fetchChatPreviews(withIds: string[]) {
   })();
 }
 
-export type IncomingMessage = {
+export type IncomingMessage = ChatImageMetadata & {
   id: string;
   /** Exact per-peer snapshot, never the global notification total. */
   unreadCount?: number;
@@ -1179,7 +1182,7 @@ export function onMessageEdited(
 }
 
 /** Update album URIs (remove one photo). Empty uris deletes the whole message on server. */
-export type UpdateMessageUrisResult = {
+export type UpdateMessageUrisResult = ChatImageMetadata & {
   ok: boolean;
   deleted?: boolean;
   uri?: string;
@@ -1203,7 +1206,7 @@ export async function updateMessageUris(messageId: string, uris: string[]): Prom
 }
 
 export function onMessageUrisUpdated(
-  cb: (data: { messageId: string; uri?: string; uris?: string[]; deleted?: boolean }) => void,
+  cb: (data: ChatImageMetadata & { messageId: string; uri?: string; uris?: string[]; deleted?: boolean }) => void,
 ): () => void {
   const h = (data: Parameters<typeof cb>[0]) => cb(data);
   socket.on("message:uris_updated", h);

@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
+import type { MessageImageMetadata } from '../utils/messageImageMetadata';
 
 interface IReaction {
   emoji: string;
@@ -13,7 +14,7 @@ export interface IReplyTo {
   from: string;
 }
 
-export interface IFriendshipMessageItem extends Document {
+export interface IFriendshipMessageItem extends Document, MessageImageMetadata {
   _id: mongoose.Types.ObjectId;
   friendshipId: mongoose.Types.ObjectId;
   id: string; // messageId (msg_...)
@@ -57,6 +58,9 @@ const FriendshipMessageItemSchema = new Schema<IFriendshipMessageItem>(
     enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: String,
     uris: { type: [String], default: undefined },
+    imageWidth: { type: Number, min: 1, max: 32768 },
+    imageHeight: { type: Number, min: 1, max: 32768 },
+    imageSizes: { type: [new Schema({ width: Number, height: Number }, { _id: false })], default: undefined },
     name: String,
     size: Number,
     duration: Number,

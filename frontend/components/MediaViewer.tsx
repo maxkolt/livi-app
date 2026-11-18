@@ -9,9 +9,12 @@ import {
   Animated,
   Platform,
   Image,
+  Keyboard,
+  TextInput,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { SystemBars } from 'react-native-edge-to-edge';
-import { SafeAreaView, useSafeAreaFrame } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { GestureHandlerRootView, PinchGestureHandler, PanGestureHandler, TapGestureHandler, State, FlatList } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -28,6 +31,9 @@ import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { prefetchImages } from '../utils/imageOptimization';
 import { WELCOME_NAV_ACTIVE_ICON } from '../screens/home/constants';
+import type { PickedChatImage } from '../screens/chat/chatMessageTypes';
+import { preparePhotoComposeSelection, type PhotoComposeSelection } from '../utils/photoCompose';
+import { MAX_MESSAGE_TEXT_LENGTH } from '../sockets/modules/constants';
 
 /** Серые иконки, рамка как у активных иконок навбара, непрозрачный тёмный фон. */
 const MEDIA_VIEWER_ICON = LIVI.titan;
@@ -174,7 +180,9 @@ interface MediaViewerProps {
   mediaType: 'image';
   uri: string;
   name?: string | null;
-  onSend?: (finalUri: string) => void;
+  onSend?: (selection: PhotoComposeSelection) => void;
+  /** Original picker metadata, in the same order as uris, for compose mode. */
+  assets?: PickedChatImage[];
   /** All photos in the same chat message. Swipe between them when length > 1. */
   uris?: string[];
   initialIndex?: number;
@@ -188,12 +196,26 @@ export default function MediaViewer({
   uri, 
   name,
   onSend,
+  assets,
   uris,
   initialIndex = 0,
 }: MediaViewerProps) {
   const { width: screenWidth, height: screenHeight } = useSafeAreaFrame();
+  const safeInsets = useSafeAreaInsets();
   const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
+  const [caption, setCaption] = React.useState('');
+  const sendInFlightRef = React.useRef(false);
+  const visibleRef = React.useRef(visible);
+  visibleRef.current = visible;
+  const composeGenerationRef = React.useRef(0);
+  const requestClose = React.useCallback(() => {
+    // Invalidate before the parent visibility update or any pending dimension read.
+    visibleRef.current = false;
+    composeGenerationRef.current++;
+    if (onSend) Keyboard.dismiss();
+    onClose();
+  }, [onClose, onSend]);
   const pagerRef = React.useRef<FlatList<string>>(null);
   const [activeIndex, setActiveIndex] = React.useState(0);
   const [editsByIndex, setEditsByIndex] = React.useState<Record<number, string>>({});
@@ -206,6 +228,8 @@ export default function MediaViewer({
   const [chromeVisible, setChromeVisible] = React.useState(true);
   const chromeOpacity = React.useRef(new Animated.Value(1)).current;
   const toggleChrome = React.useCallback(() => {
+    // Compose controls stay available while typing or inspecting a selected photo.
+    if (onSend) return;
     setChromeVisible((prev) => {
       const next = !prev;
       Animated.timing(chromeOpacity, {
@@ -215,7 +239,7 @@ export default function MediaViewer({
       }).start();
       return next;
     });
-  }, [chromeOpacity]);
+  }, [chromeOpacity, onSend]);
   const onMediaTapStateChange = React.useCallback((e: TapGestureHandlerStateChangeEvent) => {
     if (e?.nativeEvent?.state === State.ACTIVE) {
       toggleChrome();
@@ -240,6 +264,7 @@ export default function MediaViewer({
     const fallback = resolveViewerUri(uri);
     return fallback ? [fallback] : [];
   }, [uris, uri]);
+  const sourceIdentity = sourceUris.join('\u0000');
 
   const isAlbum = sourceUris.length > 1;
   const currentUri = editsByIndex[activeIndex] || sourceUris[activeIndex] || '';
@@ -480,7 +505,7 @@ export default function MediaViewer({
     activeIndexRef.current = activeIndex;
   }, [activeIndex]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!visible) {
       albumLayoutSyncedRef.current = false;
       return;
@@ -490,11 +515,15 @@ export default function MediaViewer({
     albumOpenIndexRef.current = idx;
     setActiveIndex(idx);
     setEditsByIndex({});
+    setCaption('');
+    sendInFlightRef.current = false;
+    composeGenerationRef.current++;
+    setBusy(false);
     setCropMode(false);
     resetZoomPan();
     setChromeVisible(true);
     chromeOpacity.setValue(1);
-  }, [visible, initialIndex, sourceUris.length, resetZoomPan, chromeOpacity]);
+  }, [visible, initialIndex, sourceUris.length, sourceIdentity, resetZoomPan, chromeOpacity]);
 
   // Пока открыт кроп — footer (Готово/Отмена) всегда должен быть виден.
   React.useEffect(() => {
@@ -868,11 +897,36 @@ export default function MediaViewer({
           displayUris.length,
         );
 
+  const sendSelection = async () => {
+    if (!onSend || busy || sendInFlightRef.current || !displayUris.length) return;
+    sendInFlightRef.current = true;
+    const generation = composeGenerationRef.current;
+    setBusy(true);
+    let handedOff = false;
+    try {
+      const selection = await preparePhotoComposeSelection(displayUris, assets || [], caption, (imageUri) =>
+        new Promise((resolve, reject) => Image.getSize(imageUri, (width, height) => resolve({ width, height }), reject)),
+      );
+      if (!visibleRef.current || generation !== composeGenerationRef.current) return;
+      Keyboard.dismiss();
+      onSend(selection);
+      handedOff = true;
+    } finally {
+      if (generation === composeGenerationRef.current) {
+        if (!handedOff) sendInFlightRef.current = false;
+        setBusy(false);
+      }
+    }
+  };
+
   return (
     <Modal
       isVisible={visible}
-      onBackdropPress={onClose}
-      onBackButtonPress={onClose}
+      onBackdropPress={requestClose}
+      onBackButtonPress={() => {
+        if (onSend && Keyboard.isVisible()) Keyboard.dismiss();
+        else requestClose();
+      }}
       onModalHide={() => {
         try {
           onClosed?.();
@@ -896,12 +950,19 @@ export default function MediaViewer({
       */}
       <SystemBars style="light" />
       {/* Important: GestureHandlerRootView is needed for pinch in Android modals */}
+      <KeyboardAvoidingView
+        enabled={!!onSend}
+        behavior="padding"
+        // The Android modal begins below the status bar; keyboard coordinates use the screen.
+        keyboardVerticalOffset={Platform.OS === 'android' ? safeInsets.top : 0}
+        style={styles.root}
+      >
       <GestureHandlerRootView style={styles.root}>
         <View style={styles.container}>
           {/* Media fills the screen; header/footer overlay so photos keep phone aspect. */}
           <TapGestureHandler
             numberOfTaps={1}
-            enabled={!cropMode && !busy}
+            enabled={!onSend && !cropMode && !busy}
             onHandlerStateChange={onMediaTapStateChange}
           >
           <View
@@ -1023,7 +1084,7 @@ export default function MediaViewer({
               pointerEvents={chromeVisible ? 'box-none' : 'none'}
               style={[styles.header, { opacity: chromeOpacity }]}
             >
-              <TouchableOpacity onPress={onClose} style={styles.closeButton}>
+              <TouchableOpacity onPress={requestClose} style={styles.closeButton}>
                 <Ionicons name="close" size={26} color={LIVI.white} />
               </TouchableOpacity>
               {isAlbum ? (
@@ -1072,7 +1133,7 @@ export default function MediaViewer({
                 ))}
               </View>
             ) : null}
-            <View style={styles.footer}>
+            <View style={[styles.footer, onSend && styles.composeFooter]}>
             <TouchableOpacity
               style={[styles.actionButton, busy && { opacity: 0.7 }]}
               onPress={handleEdit}
@@ -1113,17 +1174,18 @@ export default function MediaViewer({
 
             {onSend ? (
               <TouchableOpacity
-                style={[styles.actionButton, busy && { opacity: 0.7 }]}
-                onPress={() => {
-                  try {
-                    const finalUri = currentUri;
-                    if (finalUri) onSend(finalUri);
-                  } catch {}
-                }}
-                disabled={busy}
+                style={[
+                  styles.actionButton,
+                  displayUris.length > 0 && !busy && styles.sendButtonReady,
+                  busy && { opacity: 0.55 },
+                ]}
+                testID="photo-compose-send"
+                onPress={() => void sendSelection()}
+                disabled={busy || displayUris.length === 0}
+                accessibilityState={{ disabled: busy || displayUris.length === 0, busy }}
                 accessibilityLabel={t('send', lang)}
               >
-                <Ionicons name="send-outline" size={24} color={MEDIA_VIEWER_ICON} />
+                <Ionicons name="send" size={24} color={displayUris.length > 0 && !busy ? '#FFFFFF' : MEDIA_VIEWER_ICON} />
               </TouchableOpacity>
             ) : (
               <>
@@ -1146,10 +1208,28 @@ export default function MediaViewer({
               </>
             )}
             </View>
+            {onSend && !cropMode ? (
+              <View style={styles.captionWrap}>
+                <TextInput
+                  testID="photo-compose-caption"
+                  accessibilityLabel={t('addPhotoCaption', lang)}
+                  placeholder={t('addPhotoCaption', lang)}
+                  placeholderTextColor="rgba(255,255,255,0.55)"
+                  value={caption}
+                  onChangeText={setCaption}
+                  multiline
+                  maxLength={MAX_MESSAGE_TEXT_LENGTH}
+                  editable={!busy}
+                  textAlignVertical="top"
+                  style={styles.captionInput}
+                />
+              </View>
+            ) : null}
             </Animated.View>
           </SafeAreaView>
         </View>
       </GestureHandlerRootView>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -1162,7 +1242,7 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     width: '100%',
-    height: '100%',
+    minHeight: 0,
   },
   container: {
     flex: 1,
@@ -1218,6 +1298,23 @@ const styles = StyleSheet.create({
     right: 0,
     zIndex: 10,
   },
+  captionWrap: {
+    marginHorizontal: 16,
+    marginBottom: 8,
+    borderRadius: 18,
+    backgroundColor: 'rgba(25,28,34,0.96)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.16)',
+  },
+  captionInput: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    lineHeight: 22,
+    minHeight: 40,
+    maxHeight: 132,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+  },
   pageDotsWrap: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -1272,17 +1369,24 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
   },
+  composeFooter: {
+    paddingTop: 14,
+    paddingBottom: 6,
+  },
   actionButton: {
     alignItems: 'center',
     justifyContent: 'center',
-    // Без padding — иначе Ionicons визуально съезжают с центра в круге 52×52.
+    // Без padding — иначе Ionicons визуально съезжают с центра в круге 48×48.
     padding: 0,
     backgroundColor: MEDIA_VIEWER_BUTTON_BG,
     borderWidth: 1.5,
     borderColor: MEDIA_VIEWER_BORDER,
-    borderRadius: 26,
-    width: 52,
-    height: 52,
+    borderRadius: 24,
+    width: 48,
+    height: 48,
+  },
+  sendButtonReady: {
+    backgroundColor: 'rgba(98, 176, 216, 0.22)',
   },
   saveToastWrap: {
     position: 'absolute',

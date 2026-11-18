@@ -1,4 +1,5 @@
 // frontend/sockets/modules/outboxTypes.ts
+import type { ChatImageMetadata } from '../../screens/chat/chatMessageTypes';
 /** Acknowledgement shared by socket and HTTP message mutations. */
 export type MessageMutationResponse = {
   ok: boolean;
@@ -16,7 +17,7 @@ export type MessageOutboxItem = {
   createdAt: number;
   /** Сколько раз сервер отказал временной ошибкой — после лимита сообщение «не отправлено». */
   attempts?: number;
-  payload: {
+  payload: ChatImageMetadata & {
     to: string;
     text?: string;
     type: "text" | "image" | "audio" | "sticker" | "video_note";

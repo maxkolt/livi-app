@@ -78,6 +78,15 @@ beforeEach(() => {
 });
 
 describe('globalMessageStorage.saveMessage', () => {
+  it('keeps decrypted photo captions and sparse album dimensions in durable incoming history', async () => {
+    const image = { ...incoming('caption-album'), type: 'image', text: 'received caption',
+      uri: 'https://x/a', uris: ['https://x/a', 'https://x/b'], imageWidth: 900, imageHeight: 1600,
+      imageSizes: [{ width: 900, height: 1600 }, null] };
+    await expect(globalMessageStorage.saveMessage(image, 'me')).resolves.toBe(true);
+    expect(JSON.parse(store.get(globalMessageStorage.getChatKey('me', 'peer'))!)).toMatchObject([
+      { text: image.text, imageWidth: 900, imageHeight: 1600, imageSizes: image.imageSizes, uris: image.uris },
+    ]);
+  });
   it('keeps every message of a concurrent burst into one chat', async () => {
     const results = await Promise.all(
       ['m1', 'm2', 'm3', 'm4', 'm5'].map((id) => globalMessageStorage.saveMessage(incoming(id), 'me')),

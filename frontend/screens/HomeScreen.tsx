@@ -38,7 +38,7 @@ import * as Clipboard from 'expo-clipboard';
 import { PinchGestureHandler, State, type PinchGestureHandlerStateChangeEvent } from 'react-native-gesture-handler';
 import { Ionicons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
-import { getAvatarImageProps } from '../utils/imageOptimization';
+import { getAvatarImageProps, prefetchImages, selectFriendAvatarWarmSources } from '../utils/imageOptimization';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { useOrientationLayoutGuard } from '../hooks/useOrientationLayoutGuard';
 import SplashLoader from '../components/SplashLoader';
@@ -880,8 +880,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   }, [resolvedUserId]);
 
   /**
-   * URI центра Поиска (file: на Android). Splash не отпускаем, пока ExpoImage.prefetch
-   * не прогреет кадр — иначе после fade на радаре серый круг.
+   * URI центра Поиска (file: на Android). Splash ждёт декодирование локального
+   * фото и onLoad смонтированного аватара — иначе после fade виден серый круг.
    */
   const searchAvatarDisplayUri = React.useMemo(() => {
     return getSearchAvatarDisplayUri({
@@ -924,7 +924,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
     (async () => {
       const tPrefetch0 = Date.now();
       try {
-        await ExpoImage.prefetch(uri);
+        await prefetchImages([uri]);
       } catch {
         // Prefetch fail: hard-stop splash всё ещё отпустит экран.
       }
@@ -3418,7 +3418,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       if (cachedAvatar || draftAvatar) {
         const headerPreview = cachedAvatar || draftAvatar;
         const thumb = toAvatarThumb(headerPreview, 240, 240);
-        if (thumb) try { (ExpoImage).prefetch?.(thumb); } catch {}
+        if (thumb) void prefetchImages([thumb]);
       }
     })();
     
@@ -4742,7 +4742,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
 
       // Префетч для быстрого отображения
       if (finalAvatarUrl) {
-        try { (ExpoImage).prefetch?.(toAvatarThumb(finalAvatarUrl, 240, 240)); } catch {}
+        void prefetchImages([toAvatarThumb(finalAvatarUrl, 240, 240)]);
       }
 
       shouldToast = true;
@@ -4906,11 +4906,8 @@ const handleClearNick = useCallback(async () => {
         try {
           // Предзагружаем с теми же параметрами, что и для отображения
           const thumbUrl = toAvatarThumb(localUri, 240, 240);
-          if (thumbUrl) {
-            await ExpoImage.prefetch(thumbUrl);
-          }
-          // Также предзагружаем оригинал
-          await ExpoImage.prefetch(localUri);
+          // Local thumb and original may be the same file; decode it only once.
+          await prefetchImages(thumbUrl ? [thumbUrl, localUri] : [localUri]);
           
           // Небольшая задержка после предзагрузки для стабильности
           await new Promise(resolve => setTimeout(resolve, 50));
@@ -4966,8 +4963,8 @@ const handleClearNick = useCallback(async () => {
     const urls: string[] = [];
     const me = toAvatarThumb(savedAvatarUrl || avatarUri, 240, 240);
     if (me) urls.push(me);
-    for (const f of friends) if (f.avatar) urls.push(toAvatarThumb(f.avatar, 96, 96));
-    urls.forEach((u) => (ExpoImage).prefetch?.(u));
+    urls.push(...selectFriendAvatarWarmSources(friends));
+    void prefetchImages(urls);
   }, [savedAvatarUrl, avatarUri, friends, avatarRefreshKey]);
 
   /* wipe account */
@@ -6054,7 +6051,7 @@ const handleClearNick = useCallback(async () => {
                 {modalAvatarUri ? (
                   modalAvatarDisplayUri ? (
                     <ExpoImage
-                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`)}
+                      {...getAvatarImageProps(modalAvatarDisplayUri, `avatar_modal_${resolvedUserId}_${myAvatarVer}`, { useDecodedSource: false })}
                       style={{ width: avatarModalSize, height: avatarModalSize }}
                     />
                   ) : (

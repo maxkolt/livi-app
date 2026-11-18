@@ -649,7 +649,8 @@ type OutgoingTextPayload = {
 export async function toWireMessagePayload<T extends OutgoingTextPayload>(
   payload: T,
 ): Promise<Omit<T, "text"> & { text?: string; enc?: E2eEnvelope }> {
-  if (payload.type !== "text" || typeof payload.text !== "string" || !payload.clientMessageId) return payload;
+  const hasProtectedText = payload.type === "text" || (payload.type === "image" && !!payload.text);
+  if (!hasProtectedText || typeof payload.text !== "string" || !payload.clientMessageId) return payload;
   const enc = await sealOutgoingText({
     id: payload.clientMessageId,
     to: payload.to,

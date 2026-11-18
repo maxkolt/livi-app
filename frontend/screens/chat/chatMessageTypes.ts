@@ -2,6 +2,13 @@ import type { MessageReaction } from '../../sockets/modules/reactionOutbox';
 import type { ImagePickerAsset } from 'expo-image-picker';
 
 export type ChatTimestamp = Date | string | number;
+export type ChatImageSize = { width: number; height: number };
+export type ChatImageMetadata = {
+  imageWidth?: number;
+  imageHeight?: number;
+  /** Album dimensions are positional; null means that photo's dimensions are unknown. */
+  imageSizes?: Array<ChatImageSize | null>;
+};
 
 /** Camera, gallery and shared images provide different subsets of picker metadata. */
 export type PickedChatImage = Pick<ImagePickerAsset, 'uri'> &
@@ -12,7 +19,7 @@ export type PickedChatImage = Pick<ImagePickerAsset, 'uri'> &
  * Older cache entries can omit metadata; helpers keep their existing fallbacks.
  * The cache also contains locally generated call rows, not only server messages.
  */
-export type ChatMessage = {
+export type ChatMessage = ChatImageMetadata & {
   id?: string;
   type?: string;
   text?: string;

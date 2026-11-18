@@ -1089,7 +1089,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     composeViewerVisible,
     setComposeViewerVisible,
     composeAsset,
-    setComposeAsset,
+    composeAssets,
+    setComposeAssets,
   } = useChatMediaViewers();
   const attachSheetRef = useRef<ChatAttachSheetHandle>(null);
   const {
@@ -2520,8 +2521,8 @@ export default function ChatScreen({ route, navigation }: Props) {
     scrollToBottom,
   });
 
-  const openComposeViewer = React.useCallback((asset: PickedChatImage) => {
-    setComposeAsset(asset);
+  const openComposeViewer = React.useCallback((asset: PickedChatImage | PickedChatImage[]) => {
+    setComposeAssets(Array.isArray(asset) ? asset : [asset]);
     setComposeViewerVisible(true);
   }, []);
 
@@ -2563,11 +2564,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
       if (!result.canceled && result.assets?.length) {
         const assets = result.assets.slice(0, CHAT_ALBUM_MAX);
-        if (assets.length === 1) {
-          openComposeViewer(assets[0]);
-        } else {
-          void sendPickedAlbum(assets);
-        }
+        openComposeViewer(assets);
       }
     } catch (error) {
       console.error('Image picker error:', error);
@@ -3669,7 +3666,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 {modalAvatarUri ? (
                   modalAvatarInstantUri ? (
                     <ExpoImage
-                      {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                      {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`, { useDecodedSource: false })}
                       style={{ width: avatarModalSize, height: avatarModalSize }}
                     />
                   ) : (
@@ -3682,7 +3679,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                     <View style={{ width: avatarModalSize, height: avatarModalSize, borderRadius: avatarModalSize / 2, backgroundColor: 'rgba(255,255,255,0.06)', alignItems: 'center', justifyContent: 'center' }}>
                       {modalAvatarInstantUri ? (
                         <ExpoImage
-                          {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`)}
+                          {...getAvatarImageProps(modalAvatarInstantUri, `avatar_modal_peer_${peerId}_${peerAvatarVerState}`, { useDecodedSource: false })}
                           style={{ width: avatarModalSize, height: avatarModalSize }}
                         />
                       ) : (
@@ -3722,19 +3719,18 @@ export default function ChatScreen({ route, navigation }: Props) {
         visible={composeViewerVisible}
         onClose={() => {
           setComposeViewerVisible(false);
-          setComposeAsset(null);
         }}
+        onClosed={() => setComposeAssets([])}
         mediaType="image"
         uri={composeAsset?.uri || ''}
+        uris={composeAssets.map((asset) => asset.uri)}
+        assets={composeAssets}
         name={composeAsset?.fileName}
-        onSend={(finalUri) => {
-          try {
-            if (!composeAsset) return;
-            void sendPickedImage({ ...composeAsset, uri: finalUri });
-          } finally {
-            setComposeViewerVisible(false);
-            setComposeAsset(null);
-          }
+        onSend={({ assets, caption }) => {
+          if (!assets.length) return;
+          if (assets.length === 1) void sendPickedImage(assets[0], caption);
+          else void sendPickedAlbum(assets, caption);
+          setComposeViewerVisible(false);
         }}
       />
 

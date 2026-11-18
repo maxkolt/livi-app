@@ -10,12 +10,13 @@ import {
   Pressable,
   Animated,
   StyleSheet,
-  Linking,
   Dimensions,
   type ViewStyle,
 } from "react-native";
 import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
-import { Image as ExpoImage, type ImageErrorEventData } from "expo-image";
+import type { ImageErrorEventData } from "expo-image";
+import { ChatPhotoPreviewImage, useChatPhotoPreviewLayout, chatPhotoBubbleWidth } from "./ChatPhotoPreviewImage";
+import { ChatMessageText } from "./ChatMessageText";
 import * as FileSystem from "expo-file-system";
 import Svg, { Circle as SvgCircle, Defs, LinearGradient, Stop, G, Path } from "react-native-svg";
 import { useResolvedImageUri } from "../../hooks/useResolvedImageUri";
@@ -44,6 +45,8 @@ import { CHAT_VIDEO_NOTE_SIZE, ChatVideoNote } from "./ChatVideoNote";
 
 /** Зазор над/под облаком на границе серии (последнее облако ленты — всегда так). */
 export const CHAT_ROW_SERIES_GAP = 4;
+/** Same radius as album tiles; outer photo corners add the existing four-dp inset. */
+const CHAT_IMAGE_CORNER_RADIUS = 8;
 /** Текст в облаке (тёмная тема) — как надпись «Исходящий звонок» в облаке звонка. */
 const CHAT_BUBBLE_TEXT_DARK = 'rgba(244,245,247,0.92)';
 
@@ -181,23 +184,6 @@ function ChatBubbleBackground({
       />
     </>
   );
-}
-
-/** Разбивает текст на сегменты «текст» и «ссылка» для отображения кликабельных URL в сообщениях. */
-function parseTextWithUrls(text: string): { type: "text" | "url"; value: string }[] {
-  if (!text || typeof text !== "string") return [{ type: "text", value: "" }];
-  const regex = /(https?:\/\/[^\s<>"\]]+|www\.[^\s<>"\]]+)/gi;
-  const parts = text.split(regex).filter(Boolean);
-  return parts.map((part) => ({
-    type: /^(https?:\/\/|www\.)/i.test(part) ? "url" : "text",
-    value: part,
-  }));
-}
-
-/** Нормализует URL для открытия (добавляет https:// для www.). */
-function openMessageUrl(raw: string): void {
-  const url = raw.startsWith("http://") || raw.startsWith("https://") ? raw : `https://${raw}`;
-  Linking.openURL(url).catch(() => {});
 }
 
 type ChatMessageItemLivi = {
@@ -509,10 +495,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           logger.warn('[ChatScreen] MessageItem: image URI is empty', { messageId: item.id, originalUri: item.uri });
           return (
             <View style={{
-              width: '100%',
-              aspectRatio: 4 / 3,
+              width: singlePhotoLayout.width,
+              height: singlePhotoLayout.height,
+              alignSelf: 'center',
               backgroundColor: 'rgba(255,255,255,0.1)',
-              borderRadius: 8,
+              borderRadius: CHAT_IMAGE_CORNER_RADIUS,
               alignItems: 'center',
               justifyContent: 'center',
             }}>
@@ -533,10 +520,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               style={{ 
                 position: 'relative',
                 backgroundColor: 'rgba(255,255,255,0.1)',
-                borderRadius: 8,
+                borderRadius: CHAT_IMAGE_CORNER_RADIUS,
                 overflow: 'hidden',
-                width: '100%',
-                aspectRatio: 4 / 3,
+                width: singlePhotoLayout.width,
+                height: singlePhotoLayout.height,
+                alignSelf: 'center',
                 alignItems: 'center',
                 justifyContent: 'center',
               }}
@@ -564,10 +552,11 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
             style={{ 
               position: 'relative',
               backgroundColor: 'rgba(255,255,255,0.1)',
-              borderRadius: 8,
+              borderRadius: CHAT_IMAGE_CORNER_RADIUS,
               overflow: 'hidden',
-              width: '100%',
-              aspectRatio: 4 / 3,
+              width: singlePhotoLayout.width,
+              height: singlePhotoLayout.height,
+              alignSelf: 'center',
             }}
             onPress={() => {
               animateMessagePress(item.id, () => {
@@ -594,16 +583,14 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
                 <ActivityIndicator size="small" color="#fff" />
               </View>
             )}
-            <ExpoImage
+            <ChatPhotoPreviewImage
               source={{ uri: localImageUri || displayImageUri }}
               style={{
                 width: '100%',
                 height: '100%',
                 backgroundColor: 'rgba(255,255,255,0.1)',
               }}
-              contentFit="cover"
               cachePolicy="memory-disk"
-              transition={0}
               priority="high"
               recyclingKey={`message_image_${item.id}`}
               allowDownscaling={false}
@@ -974,6 +961,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const albumUrisForLayout = item?.type === 'image' ? getMessageImageUris(item) : [];
   const isAlbumImageMsg = albumUrisForLayout.length > 1;
   const chatLayoutWidth = layoutWidth && layoutWidth > 0 ? layoutWidth : Dimensions.get('window').width;
+  const singlePhotoLayout = useChatPhotoPreviewLayout(
+    isAlbumImageMsg ? '' : imageUriForItem, item.imageWidth, item.imageHeight,
+    chatLayoutWidth, Dimensions.get('window').height,
+  );
   const albumLayout = isAlbumImageMsg
     ? albumGridLayout(chatLayoutWidth, albumUrisForLayout.length)
     : null;
@@ -1006,6 +997,10 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   /** Android: borderWidth+radius даёт тонкие углы — делаем ровное «кольцо» через padding */
   const androidHighlightRing = isQuotedTargetHighlighted && Platform.OS === 'android';
   const ANDROID_RING_PX = 1;
+  const imageBubbleW = chatPhotoBubbleWidth(
+    albumLayout?.gridW ?? singlePhotoLayout.width,
+    androidHighlightRing ? ANDROID_RING_PX : 0,
+  );
   /**
    * Углы как в Telegram: скругление 17, со стороны отправителя внутри серии — 6,
    * у последнего в серии внизу — более острый угол с вытянутым хвостиком.
@@ -1019,17 +1014,21 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
   const joinedBelow = !centered && !!item.groupedWithNext;
   const bubbleCorners = (extra = 0) => {
     const big = BUBBLE_RADIUS + extra;
-    const senderTop = (joinedAbove ? BUBBLE_RADIUS_GROUPED : BUBBLE_RADIUS) + extra;
+    // Concentric photo/outer corners keep the four-dp band uniform. Grouping
+    // must not tighten either photo top corner or clip more of the image.
+    const photoTop = CHAT_IMAGE_CORNER_RADIUS + CHAT_ALBUM_INSET;
+    const oppositeTop = (item.type === 'image' ? photoTop : BUBBLE_RADIUS) + extra;
+    const senderTop = (item.type === 'image' ? photoTop : joinedAbove ? BUBBLE_RADIUS_GROUPED : BUBBLE_RADIUS) + extra;
     const senderBottom = (joinedBelow ? BUBBLE_RADIUS_GROUPED : BUBBLE_RADIUS_TAIL) + extra;
     return isMyMessage
       ? {
-          borderTopLeftRadius: big,
+          borderTopLeftRadius: oppositeTop,
           borderBottomLeftRadius: big,
           borderTopRightRadius: senderTop,
           borderBottomRightRadius: senderBottom,
         }
       : {
-          borderTopRightRadius: big,
+          borderTopRightRadius: oppositeTop,
           borderBottomRightRadius: big,
           borderTopLeftRadius: senderTop,
           borderBottomLeftRadius: senderBottom,
@@ -1444,8 +1443,8 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
       <View
         style={{
           alignSelf: isMyMessage ? 'flex-end' : 'flex-start',
-          ...(albumLayout
-            ? { width: albumLayout.bubbleW, maxWidth: albumLayout.bubbleW }
+          ...(item.type === 'image'
+            ? { width: imageBubbleW, maxWidth: imageBubbleW }
             : { maxWidth: '80%' }),
           ...(item.replyTo ? { minWidth: replyBubbleMinWidth } : null),
         }}
@@ -1476,20 +1475,15 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           {renderContent()}
           
           {/* Текст сообщения (если есть), ссылки кликабельны */}
-          {item.type === 'text' && (() => {
+          {(item.type === 'text' || (item.type === 'image' && !!String(item.text || '').trim())) && (() => {
           const baseStyle = {
             color: isDark ? CHAT_BUBBLE_TEXT_DARK : LIVI.white,
             fontSize: 15,
             marginBottom: 3,
             lineHeight: 21,
             fontWeight: '400' as const,
+            ...(item.type === 'image' ? { marginTop: 8, paddingHorizontal: 4 } : {}),
           };
-          const linkStyle = {
-            ...baseStyle,
-            color: UI_ACCENT_PRESSED,
-            textDecorationLine: 'underline' as const,
-          };
-          const segments = parseTextWithUrls(String(item.text ?? ''));
           const card = fliqLink ? (
             <FliqLinkCard link={fliqLink} onLongPress={openMessageActionsFromBubble} />
           ) : null;
@@ -1498,22 +1492,13 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
           return (
             <>
             {card}
-            <Text style={baseStyle}>
-              {segments.map((seg, idx) =>
-                seg.type === 'url' ? (
-                  <Text
-                    key={idx}
-                    onPress={() => openMessageUrl(seg.value)}
-                    onLongPress={openMessageActionsFromBubble}
-                    style={linkStyle}
-                  >
-                    {seg.value}
-                  </Text>
-                ) : (
-                  <Text key={idx}>{seg.value}</Text>
-                )
-              )}
-            </Text>
+            <ChatMessageText
+              text={String(item.text ?? '')}
+              style={baseStyle}
+              linkColor={UI_ACCENT_PRESSED}
+              onLongPressLink={openMessageActionsFromBubble}
+              linksDisabled={selectionMode}
+            />
             </>
           );
         })()}

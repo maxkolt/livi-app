@@ -63,8 +63,12 @@ describe('resolveIncomingEnvelope', () => {
     });
   });
 
-  it('only encrypts text messages', async () => {
-    await expect(resolveIncomingEnvelope({ ...base, type: 'image', rawEnc: envelope() })).resolves.toEqual({
+  it('accepts image-caption envelopes with the same published-key checks', async () => {
+    await expect(resolveIncomingEnvelope({ ...base, type: 'image', rawEnc: envelope() })).resolves.toEqual({ ok: true, enc: envelope() });
+  });
+
+  it('rejects unsupported encrypted message types', async () => {
+    await expect(resolveIncomingEnvelope({ ...base, type: 'audio', rawEnc: envelope() })).resolves.toEqual({
       ok: false,
       error: 'invalid_enc',
     });

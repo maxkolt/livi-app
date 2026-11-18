@@ -11,6 +11,8 @@ import { keepVoiceRecording } from "./chatVoiceRecord";
 import { keepVideoNoteRecording, makeVideoNoteThumb } from "./videoNoteFiles";
 import { getChatMessagesKey } from "./chatStorageKeys";
 import { patchStoredChatMessage } from "./chatMessageStorageWrite";
+import { photoComposeMessageFields } from '../../utils/photoCompose';
+import { trackChatMediaSend } from './chatMediaSendJobs';
 
 type Options = {
   session: ChatSessionState;
@@ -55,7 +57,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
   );
 
   const commitMediaPatch = React.useCallback(
-    (messageId: string, patch: Partial<ChatMessage>, reason: string) => {
+    async (messageId: string, patch: Partial<ChatMessage>, reason: string) => {
       if (mountedRef.current) {
         commitMessages(
           (prev) => prev.map((m) => String(m?.id) === messageId ? { ...m, ...patch } : m),
@@ -66,7 +68,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
       const uid = String(currentUserId || "").trim();
       const pid = String(peerId || "").trim();
       if (!uid || !pid) return;
-      void patchStoredChatMessage(getChatMessagesKey(uid, pid), messageId, patch);
+      await patchStoredChatMessage(getChatMessagesKey(uid, pid), messageId, patch);
     },
     [commitMessages, currentUserId, peerId],
   );
@@ -107,7 +109,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
     // Кэш система может почистить раньше, чем вернётся сеть, — переносим запись к себе.
     const fileUri = await keepVoiceRecording(localUri, messageId);
     if (fileUri !== localUri) {
-      commitMediaPatch(messageId, { uri: fileUri }, 'voice_kept_file');
+      await commitMediaPatch(messageId, { uri: fileUri }, 'voice_kept_file');
     }
 
     const clearUploadStatus = () =>
@@ -179,13 +181,13 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
 
     const fileUri = await keepVideoNoteRecording(localUri, messageId);
     if (fileUri !== localUri) {
-      commitMediaPatch(messageId, { uri: fileUri }, 'video_note_kept_file');
+      await commitMediaPatch(messageId, { uri: fileUri }, 'video_note_kept_file');
     }
 
     // Кадр-превью — уже после пузыря: кружок в ленте появляется без задержки.
     const thumbUri = await makeVideoNoteThumb(fileUri, messageId, durationMs / 1000);
     if (thumbUri) {
-      commitMediaPatch(messageId, { thumbUri }, 'video_note_thumbnail');
+      await commitMediaPatch(messageId, { thumbUri }, 'video_note_thumbnail');
     }
 
     try {
@@ -212,7 +214,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
     } catch {}
   }, [currentUserId, peerId, commitMessages, commitMediaPatch, updateReadStatuses, setVoiceRecordMs]);
 
-  const sendPickedImage = React.useCallback(async (asset: PickedChatImage): Promise<boolean> => {
+  const sendPickedImage = React.useCallback(async (asset: PickedChatImage, caption = ''): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
 
     const messageId = createOptimisticChatMessageId();
@@ -221,6 +223,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
     const localUri = asset?.uri;
     const fileName = asset?.fileName || `file_${Date.now()}`;
     const fileSize = asset?.fileSize || 0;
+    const imageFields = photoComposeMessageFields([asset], caption);
 
     const newMessage = {
       id: messageId,
@@ -228,6 +231,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
       uri: localUri,
       name: fileName,
       size: fileSize,
+      ...imageFields,
       sender: 'me',
       from: currentUserId,
       to: peerId,
@@ -242,6 +246,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
 
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
 
+    return trackChatMediaSend(currentUserId, peerId, messageId, (async () => {
     try {
       setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
 
@@ -254,12 +259,15 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
         return false;
       }
 
+      await commitMediaPatch(messageId, { uri: resolveMediaUri(uploadResult.url), ...imageFields }, 'image_uploaded');
+
       const socketResult = await sendSocketMessage({
         to: peerId,
         type: messageType,
         uri: uploadResult.url,
         name: fileName || undefined,
         size: fileSize || undefined,
+        ...imageFields,
         clientUiMessageId: messageId,
       });
 
@@ -278,26 +286,28 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
         return false;
       }
 
-      if (socketResult.ok && socketResult.messageId) {
-        commitMessages((prev) => {
-          const updated = prev.map((msg) =>
-            msg.id === messageId ? { ...msg, id: socketResult.messageId!, uri: resolveMediaUri(uploadResult.url), from: currentUserId, to: peerId } : msg
-          );
-          return updated;
+      if (socketResult.ok) {
+        const deliveredId = socketResult.messageId || messageId;
+        await commitMediaPatch(messageId, {
+          id: deliveredId,
+          uri: resolveMediaUri(uploadResult.url),
+          ...imageFields,
+          from: currentUserId,
+          to: peerId,
         }, 'image_delivered');
 
         setUploadStatus((prev) => {
           const newStatus = { ...prev };
-          newStatus[socketResult.messageId!] = 'sent';
           delete newStatus[messageId];
+          newStatus[deliveredId] = 'sent';
           return newStatus;
         });
 
         updateReadStatuses((prev) => {
           const newStatuses = { ...prev };
           const delivery = outgoingStatusFromSendResult(socketResult);
-          newStatuses[socketResult.messageId!] = delivery;
           delete newStatuses[messageId];
+          newStatuses[deliveredId] = delivery;
           return newStatuses;
         });
         return true;
@@ -315,26 +325,29 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
       void enqueueMediaOutboxId(messageId);
       return false;
     }
-  }, [currentUserId, peerId, commitMessages, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
+    })());
+  }, [currentUserId, peerId, commitMessages, commitMediaPatch, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
   /** Send 2…10 photos as one album message. */
-  const sendPickedAlbum = React.useCallback(async (assets: PickedChatImage[]): Promise<boolean> => {
+  const sendPickedAlbum = React.useCallback(async (assets: PickedChatImage[], caption = ''): Promise<boolean> => {
     if (!currentUserId || !peerId) return false;
-    const list = (Array.isArray(assets) ? assets : []).slice(0, CHAT_ALBUM_MAX);
+    const list = (Array.isArray(assets) ? assets : []).filter(asset => String(asset?.uri || '').trim()).slice(0, CHAT_ALBUM_MAX);
     if (list.length < 2) {
-      if (list[0]) return sendPickedImage(list[0]);
+      if (list[0]) return sendPickedImage(list[0], caption);
       return false;
     }
 
     const messageId = createOptimisticChatMessageId();
     const localUris = list.map((a) => String(a?.uri || '').trim()).filter(Boolean);
     if (localUris.length < 2) return false;
+    const imageFields = photoComposeMessageFields(list, caption);
 
     const newMessage = {
       id: messageId,
       type: 'image' as const,
       uri: localUris[0],
       uris: localUris,
+      ...imageFields,
       name: list[0]?.fileName || `album_${Date.now()}`,
       size: list.reduce((s, a) => s + (Number(a?.fileSize) || 0), 0),
       sender: 'me',
@@ -350,6 +363,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
     updateReadStatuses((prev) => ({ ...prev, [messageId]: 'sending' }));
     setUploadStatus((prev) => ({ ...prev, [messageId]: 'sending' }));
 
+    return trackChatMediaSend(currentUserId, peerId, messageId, (async () => {
     try {
       const remoteUris: string[] = [];
       for (let i = 0; i < list.length; i++) {
@@ -363,6 +377,11 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
           return false;
         }
         remoteUris.push(uploadResult.url);
+        const partialUris = localUris.map((uri, index) => index < remoteUris.length
+          ? resolveMediaUri(remoteUris[index]) || remoteUris[index] : uri);
+        await commitMediaPatch(messageId, {
+          uri: partialUris[0], uris: partialUris, ...imageFields,
+        }, 'album_uploaded_part');
       }
       if (remoteUris.length < 2) {
         updateReadStatuses((prev) => ({ ...prev, [messageId]: 'failed' }));
@@ -376,6 +395,7 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
         type: 'image',
         uri: remoteUris[0],
         uris: remoteUris,
+        ...imageFields,
         name: list[0]?.fileName || undefined,
         size: list.reduce((s, a) => s + (Number(a?.fileSize) || 0), 0) || undefined,
         clientUiMessageId: messageId,
@@ -396,32 +416,26 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
         return false;
       }
 
-      if (socketResult.ok && socketResult.messageId) {
-        commitMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === messageId
-              ? {
-                  ...msg,
-                  id: socketResult.messageId!,
-                  uri: resolvedUris[0],
-                  uris: resolvedUris,
-                  from: currentUserId,
-                  to: peerId,
-                }
-              : msg,
-          ),
-          'album_delivered',
-        );
+      if (socketResult.ok) {
+        const deliveredId = socketResult.messageId || messageId;
+        await commitMediaPatch(messageId, {
+          id: deliveredId,
+          uri: resolvedUris[0],
+          uris: resolvedUris,
+          ...imageFields,
+          from: currentUserId,
+          to: peerId,
+        }, 'album_delivered');
         setUploadStatus((prev) => {
           const newStatus = { ...prev };
-          newStatus[socketResult.messageId!] = 'sent';
           delete newStatus[messageId];
+          newStatus[deliveredId] = 'sent';
           return newStatus;
         });
         updateReadStatuses((prev) => {
           const newStatuses = { ...prev };
-          newStatuses[socketResult.messageId!] = outgoingStatusFromSendResult(socketResult);
           delete newStatuses[messageId];
+          newStatuses[deliveredId] = outgoingStatusFromSendResult(socketResult);
           return newStatuses;
         });
         return true;
@@ -438,7 +452,8 @@ export function useChatSendMedia({ session, enqueueMessagesPersist, resolveMedia
       void enqueueMediaOutboxId(messageId);
       return false;
     }
-  }, [currentUserId, peerId, sendPickedImage, commitMessages, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
+    })());
+  }, [currentUserId, peerId, sendPickedImage, commitMessages, commitMediaPatch, updateReadStatuses, resolveMediaUri, enqueueMediaOutboxId, dequeueMediaOutboxId]);
 
   return {
     sendVoiceMessageFromLocal,

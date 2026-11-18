@@ -370,7 +370,6 @@ function FriendsListCoreInner(props: FriendsListCoreProps) {
         nestedScrollEnabled
         showsVerticalScrollIndicator={false}
         overScrollMode="never"
-        removeClippedSubviews={false}
         {...paneList.windowProps}
         updateCellsBatchingPeriod={50}
         getItemLayout={(_, index) => ({

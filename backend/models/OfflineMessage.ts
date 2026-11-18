@@ -1,6 +1,7 @@
 import mongoose, { Schema, Document } from 'mongoose';
 import { E2eEnvelopeSchema } from './e2eEnvelopeSchema';
 import type { E2eEnvelope } from '../utils/e2eEnvelope';
+import type { MessageImageMetadata } from '../utils/messageImageMetadata';
 
 // Интерфейс для офлайн сообщения
 interface IOfflineMessage extends Document {
@@ -8,7 +9,7 @@ interface IOfflineMessage extends Document {
   recipientId: mongoose.Types.ObjectId; // ID получателя
   senderId: mongoose.Types.ObjectId; // ID отправителя
   messageId: string; // ID сообщения
-  messageData: {
+  messageData: MessageImageMetadata & {
     id: string;
     unreadCount?: number;
     unreadUpdatedAt?: number;
@@ -67,6 +68,9 @@ const OfflineMessageSchema = new Schema<IOfflineMessage>({
     enc: { type: E2eEnvelopeSchema, default: undefined },
     uri: { type: String },
     uris: { type: [String], default: undefined },
+    imageWidth: { type: Number, min: 1, max: 32768 },
+    imageHeight: { type: Number, min: 1, max: 32768 },
+    imageSizes: { type: [new Schema({ width: Number, height: Number }, { _id: false })], default: undefined },
     name: { type: String },
     size: { type: Number },
     duration: { type: Number },

@@ -1,5 +1,7 @@
 import type { ChatMessage } from './chatMessageTypes';
 import type { IncomingMessage, MessagePage } from '../../sockets/modules/messages';
+import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
+import { getMessageImageUris } from './chatAlbum';
 /** Pure history / quiet-sync helpers for chat message lists. */
 
 import {
@@ -26,6 +28,7 @@ export function formatServerChatMessage(
     text: msg.text,
     type: msg.type,
     uri: msg.uri,
+    ...normalizeChatImageMetadata(msg.type, msg, getMessageImageUris(msg)),
     ...albumUrisFieldFromMessage(msg),
     name: (msg).name,
     size: (msg).size,
