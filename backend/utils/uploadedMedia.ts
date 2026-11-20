@@ -20,11 +20,11 @@ export function uploadedMediaFileName(uri: unknown): string | null {
   return match ? match[1] : null;
 }
 
-/** Имена файлов из сообщений с медиа (uri + альбомы uris). */
-export function collectUploadedMediaNames(items: Array<{ uri?: unknown; uris?: unknown }>): string[] {
+/** Имена файлов из сообщений с медиа, альбомов и превью видеокружков. */
+export function collectUploadedMediaNames(items: Array<{ uri?: unknown; uris?: unknown; thumbUri?: unknown }>): string[] {
   const names = new Set<string>();
   for (const item of items) {
-    const all = [item?.uri, ...(Array.isArray(item?.uris) ? item.uris : [])];
+    const all = [item?.uri, item?.thumbUri, ...(Array.isArray(item?.uris) ? item.uris : [])];
     for (const uri of all) {
       const name = uploadedMediaFileName(uri);
       if (name) names.add(name);
@@ -45,14 +45,14 @@ export async function deleteUnreferencedUploadedMedia(names: string[], dir: stri
   if (!names.length) return 0;
   const patterns = names.map((name) => new RegExp(`/uploads/media/${escapeRegex(name)}$`));
   const [friendItems, messages, offline] = await Promise.all([
-    FriendshipMessageItem.find({ $or: [{ uri: { $in: patterns } }, { uris: { $in: patterns } }] })
-      .select('uri uris')
+    FriendshipMessageItem.find({ $or: [{ uri: { $in: patterns } }, { uris: { $in: patterns } }, { thumbUri: { $in: patterns } }] })
+      .select('uri uris thumbUri')
       .lean(),
     Message.find({ uri: { $in: patterns } }).select('uri').lean(),
     OfflineMessage.find({
-      $or: [{ 'messageData.uri': { $in: patterns } }, { 'messageData.uris': { $in: patterns } }],
+      $or: [{ 'messageData.uri': { $in: patterns } }, { 'messageData.uris': { $in: patterns } }, { 'messageData.thumbUri': { $in: patterns } }],
     })
-      .select('messageData.uri messageData.uris')
+      .select('messageData.uri messageData.uris messageData.thumbUri')
       .lean(),
   ]);
   const stillUsed = new Set(

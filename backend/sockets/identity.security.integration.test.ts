@@ -1,9 +1,14 @@
 import mongoose from 'mongoose';
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 import type { Server } from 'socket.io';
 import type { AuthedSocket } from './types';
 import User from '../models/User';
 import Install from '../models/Install';
+import FriendshipMessages from '../models/FriendshipMessages';
+import FriendshipMessageItem from '../models/FriendshipMessageItem';
+import { UPLOADS_MEDIA_DIR } from '../routes/upload';
 import registerIdentitySockets from './identity';
 import { hashInstallSecret, verifyInstallSecret } from '../utils/installSecret';
 jest.mock('./messagesReliable',()=>({mongoOfflineQueue:new Map(),getAndClearOfflineChatClearedQueue:()=>[]}));
@@ -21,7 +26,7 @@ suite('installation ownership security with isolated real MongoDB',()=>{
   const handlers=new Map<string,Function>();let onConnect!: (sock:AuthedSocket)=>void;
   const io={on:(_name:string,fn:typeof onConnect)=>{onConnect=fn},sockets:{sockets:new Map()},to:()=>({emit:jest.fn()})} as unknown as Server;
   registerIdentitySockets(io);
-  const sock={id:crypto.randomUUID(),data:{},handshake:{auth:{},query:{}},on:(name:string,fn:Function)=>{handlers.set(name,fn)},join:jest.fn(),emit:jest.fn()} as unknown as AuthedSocket;
+  const sock={id:crypto.randomUUID(),data:{},handshake:{auth:{},query:{}},on:(name:string,fn:Function)=>{handlers.set(name,fn)},join:jest.fn(),leave:jest.fn(),emit:jest.fn()} as unknown as AuthedSocket;
   onConnect(sock);return {sock,invoke:async(name:string,payload:object)=>{let reply:unknown;await handlers.get(name)!(payload,(v:unknown)=>{reply=v});return reply;}};
  }
  it('cannot replace a device-bound installation secret by knowing its identifier',async()=>{
@@ -59,6 +64,38 @@ suite('installation ownership security with isolated real MongoDB',()=>{
    expect(await invoke('identity:wipeMe',{installId:'inst_android_legacy1234'})).toMatchObject({ok:false,error:'unauthorized'});
    expect(await User.countDocuments()).toBe(1);
   } finally { delete process.env.INSTALL_AUTH_MODE; }
+ });
+
+ it('removes video notes and thumbnails on account deletion while preserving forwarded media in other chats', async () => {
+  const peers = await User.create([{ nick: 'peer' }, { nick: 'forwarder' }, { nick: 'recipient' }]);
+  const ownedChat = await FriendshipMessages.create({ user1: userId, user2: peers[0]._id });
+  const forwardedChat = await FriendshipMessages.create({ user1: peers[1]._id, user2: peers[2]._id });
+  const prefix = `wipe-security-${crypto.randomBytes(16).toString('hex')}`;
+  const names = [`${prefix}.mp4`, `${prefix}.jpg`, `${prefix}-shared.mp4`, `${prefix}-shared.jpg`];
+  const uri = (name: string) => `/uploads/media/${name}`;
+  try {
+   await Promise.all(names.map(name => fs.promises.writeFile(path.join(UPLOADS_MEDIA_DIR, name), 'isolated-security-fixture')));
+   await FriendshipMessageItem.create([
+    { friendshipId: ownedChat._id, id: `${prefix}-own`, from: userId, to: peers[0]._id, type: 'video_note', uri: uri(names[0]), thumbUri: uri(names[1]) },
+    { friendshipId: ownedChat._id, id: `${prefix}-shared-original`, from: userId, to: peers[0]._id, type: 'video_note', uri: uri(names[2]), thumbUri: uri(names[3]) },
+    { friendshipId: forwardedChat._id, id: `${prefix}-forwarded`, from: peers[1]._id, to: peers[2]._id, type: 'video_note', uri: uri(names[2]), thumbUri: uri(names[3]) },
+   ]);
+   await Install.create({ installId: prefix, user: userId, installSecretHash: hashInstallSecret(secret) });
+   const { invoke, sock } = fixture();
+   sock.data.userId = userId;
+   sock.handshake.auth = { installId: prefix, installSecret: secret };
+   expect(await invoke('identity:wipeMe', { installId: prefix })).toEqual({ ok: true });
+   const deadline = Date.now() + 3000;
+   while (names.slice(0, 2).some(name => fs.existsSync(path.join(UPLOADS_MEDIA_DIR, name))) && Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 20));
+   }
+   expect(await User.exists({ _id: userId })).toBeNull();
+   expect(await FriendshipMessageItem.countDocuments({ friendshipId: ownedChat._id })).toBe(0);
+   expect(names.map(name => fs.existsSync(path.join(UPLOADS_MEDIA_DIR, name)))).toEqual([false, false, true, true]);
+   expect(await FriendshipMessageItem.exists({ friendshipId: forwardedChat._id })).not.toBeNull();
+  } finally {
+   await Promise.all(names.map(name => fs.promises.rm(path.join(UPLOADS_MEDIA_DIR, name), { force: true })));
+  }
  });
 
 });

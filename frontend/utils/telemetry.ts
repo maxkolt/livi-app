@@ -1,6 +1,7 @@
 import { NativeModules } from 'react-native';
 import { logger } from './logger';
 import { recordReleaseDiagnostic } from './releaseDiagnosticBridge';
+import { redactLogValue } from './redactLog';
 
 type Correlation = {
   callId?: string | null;
@@ -11,6 +12,11 @@ type Correlation = {
 type TelemetryPayload = Record<string, unknown> & Correlation;
 
 const LOG_PREFIX = '[LIVI][REL]';
+const ERROR_CATEGORIES = new Set([
+  'Error', 'TypeError', 'RangeError', 'ReferenceError', 'SyntaxError', 'URIError', 'EvalError',
+  'AggregateError', 'AbortError', 'NetworkError', 'TimeoutError', 'SecurityError', 'NotAllowedError',
+  'NotFoundError', 'InvalidStateError', 'OperationError', 'NotSupportedError', 'QuotaExceededError',
+]);
 
 function normalizeCorrelation(payload: TelemetryPayload): TelemetryPayload {
   const normalized: TelemetryPayload = { ...payload };
@@ -28,6 +34,19 @@ function toJsonSafe(payload: Record<string, unknown>): string {
   }
 }
 
+function sanitizeTelemetryPayload(payload: TelemetryPayload): TelemetryPayload {
+  const redacted = redactLogValue(normalizeCorrelation(payload));
+  return redacted && typeof redacted === 'object' && !Array.isArray(redacted)
+    ? redacted as TelemetryPayload
+    : {};
+}
+
+function errorCategory(error: unknown): string {
+  // An error message can contain arbitrary user content; pattern matching cannot make it safe.
+  // Only known categories cross the native bridge, including for caller-defined Error names.
+  return error instanceof Error && ERROR_CATEGORIES.has(error.name) ? error.name : 'Error';
+}
+
 function logRelease(tag: string, message: string, payload: TelemetryPayload = {}): void {
   const normalized = normalizeCorrelation(payload);
   logger.info(`${LOG_PREFIX}[${tag}] ${message}`, normalized);
@@ -35,7 +54,7 @@ function logRelease(tag: string, message: string, payload: TelemetryPayload = {}
 
 export function trackReleaseEvent(event: string, payload: TelemetryPayload = {}): void {
   recordReleaseDiagnostic(event, 'info', payload);
-  const normalized = normalizeCorrelation(payload);
+  const normalized = sanitizeTelemetryPayload(payload);
   logRelease('event', event, normalized);
   try {
     NativeModules.LiviAppModule?.trackAppEvent?.(String(event), toJsonSafe(normalized));
@@ -43,20 +62,15 @@ export function trackReleaseEvent(event: string, payload: TelemetryPayload = {})
 }
 
 export function trackReleaseError(event: string, error: unknown, payload: TelemetryPayload = {}): void {
-  recordReleaseDiagnostic(event, 'error', { ...payload, errorName: error instanceof Error ? error.name : 'Error' });
-  const normalized = normalizeCorrelation(payload);
-  const errorMessage =
-    typeof error === 'string'
-      ? error
-      : error instanceof Error
-        ? error.message
-        : String(error || 'unknown_error');
+  const errorName = errorCategory(error);
+  recordReleaseDiagnostic(event, 'error', { ...payload, errorName });
+  const normalized = sanitizeTelemetryPayload({ ...payload, errorName });
 
-  logger.warn(`${LOG_PREFIX}[error] ${event}`, { ...normalized, errorMessage });
+  logger.warn(`${LOG_PREFIX}[error] ${event}`, normalized);
   try {
     NativeModules.LiviAppModule?.trackAppError?.(
       String(event),
-      String(errorMessage).slice(0, 500),
+      errorName,
       toJsonSafe(normalized)
     );
   } catch {}

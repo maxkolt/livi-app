@@ -1,0 +1,497 @@
+{
+  "dateMoscow": "2026-11-20",
+  "initialCommit": "d90b26768",
+  "reviewedVersionCode": 213,
+  "userReportedReviewHistory": {
+    "211": "no remarks",
+    "212": "about one day in review, replaced by 213",
+    "213": "currently in review"
+  },
+  "productionMutations": false,
+  "aabRebuiltOrUploaded": false,
+  "commitPush": false,
+  "localFixes": [
+    "LiveKit random-room participant validation and unknown-room denial",
+    "Account deletion collects video notes and thumbnails while preserving remaining references",
+    "Firebase telemetry payload redaction and category-only errors",
+    "Backend/frontend camelCase and plural media URI redaction",
+    "Corrected local Data safety/privacy/child-safety documentation",
+    "Removed embedded API key identifier from diagnostic script"
+  ],
+  "frontend": {
+    "suitesPassed": 165,
+    "testsPassed": 1564,
+    "exitCode": 0,
+    "log": "/private/tmp/livi-security-review-frontend-tests-final.log"
+  },
+  "backend": {
+    "date": "2026-11-20",
+    "node": "22.16.0",
+    "fullSuiteBeforeRedactorFollowup": {
+      "command": "NODE_ENV=test LIVI_REWARDS_TEST_MONGO_URI=mongodb://127.0.0.1:27039/?replicaSet=liviSecurityReaudit LIVI_RESET_TEST_MONGO_URI=mongodb://127.0.0.1:27039/?replicaSet=liviSecurityReaudit node node_modules/jest/bin/jest.js --ci --runInBand --silent",
+      "exitCode": 0,
+      "suitesPassed": 44,
+      "suitesTotal": 44,
+      "testsPassed": 346,
+      "testsTotal": 346,
+      "skipped": 0,
+      "seconds": 21.661,
+      "capture": "Observed directly in tool process session 88841; full raw stdout was not redirected to a file.",
+      "included": [
+        "livekit third-party random-room token denial",
+        "friend/random participant token refresh",
+        "real MongoDB account wipe with actual video/thumbnail files and forwarded-reference preservation",
+        "all existing MongoDB integration suites"
+      ]
+    },
+    "redactorFollowup": {
+      "changes": "Backend redactor now removes camelCase mediaUri/thumbUri and plural URI/URL fields; retained ordinary status/count metadata.",
+      "targetedTestExitCode": 0,
+      "suitesPassed": 1,
+      "testsPassed": 3,
+      "testLog": "redact-log-tests.log",
+      "fullSuiteRepeatedAfterRedactor": false
+    },
+    "finalTypecheck": {
+      "exitCode": 0,
+      "log": "backend-typecheck.log"
+    },
+    "finalBuild": {
+      "exitCode": 0,
+      "log": "backend-build.log"
+    },
+    "finalLint": {
+      "exitCode": 0,
+      "log": "backend-lint.log",
+      "filesChecked": 8
+    },
+    "testDatabaseCleanup": {
+      "isolatedEndpoint": "127.0.0.1:27039",
+      "nonSystemDatabasesRemainingBeforeShutdown": [],
+      "shutdownCompleted": true,
+      "shutdownExitCode": 0,
+      "shutdownLog": "mongod.log",
+      "listenerAbsentAfterShutdown": true,
+      "wipeSecurityFixtureFilesRemaining": false
+    },
+    "productionMutations": false,
+    "commitOrPush": false
+  },
+  "finalLint": {
+    "exitCode": 0,
+    "log": "/private/tmp/livi-security-review-lint-final.log"
+  },
+  "finalTypechecks": {
+    "frontend": 0,
+    "backend": 0,
+    "log": "/private/tmp/livi-security-review-typecheck-final.log"
+  },
+  "publicHttps": [
+    {
+      "url": "https://api.liviapp.com/health",
+      "status": 200,
+      "cacheControl": null,
+      "contentType": "application/json; charset=utf-8",
+      "summary": {
+        "ok": true,
+        "mongo": 1,
+        "socketIoRedisAdapter": true
+      },
+      "rateLimitRedisStatus": "ready"
+    },
+    {
+      "url": "https://api.liviapp.com/.env",
+      "status": 404,
+      "cacheControl": null,
+      "contentType": "application/json; charset=utf-8"
+    },
+    {
+      "url": "https://api.liviapp.com/backend/.env",
+      "status": 404,
+      "cacheControl": null,
+      "contentType": "application/json; charset=utf-8"
+    },
+    {
+      "url": "https://api.liviapp.com/api/cosmetics/me",
+      "status": 401,
+      "cacheControl": null,
+      "contentType": "application/json; charset=utf-8"
+    },
+    {
+      "url": "https://api.liviapp.com/api/debug/push-log",
+      "status": 404,
+      "cacheControl": null,
+      "contentType": "application/json; charset=utf-8"
+    },
+    {
+      "url": "https://api.liviapp.com/api/app-settings",
+      "status": 200,
+      "cacheControl": "no-store",
+      "contentType": "application/json; charset=utf-8",
+      "latestAppVersion": "211",
+      "resetMarkerPresent": false
+    },
+    {
+      "url": "https://maxkolt.github.io/livi-app/",
+      "status": 200,
+      "cacheControl": "max-age=600",
+      "contentType": "text/html; charset=utf-8",
+      "savedTo": "/private/tmp/livi-security-review-privacy.html"
+    },
+    {
+      "url": "https://maxkolt.github.io/livi-app/delete-account.html",
+      "status": 200,
+      "cacheControl": "max-age=600",
+      "contentType": "text/html; charset=utf-8",
+      "savedTo": "/private/tmp/livi-security-review-delete-account.html"
+    },
+    {
+      "url": "https://maxkolt.github.io/livi-app/child-safety.html",
+      "status": 200,
+      "cacheControl": "max-age=600",
+      "contentType": "text/html; charset=utf-8",
+      "savedTo": "/private/tmp/livi-security-review-child-safety.html"
+    }
+  ],
+  "productionSsh": {
+    "connected": false,
+    "reason": "SSH connection timeout",
+    "currentPrivateAuthFlagsVerified": false
+  },
+  "localConfiguredValueScan": {
+    "trackedFilesScanned": 1324,
+    "configuredLocalValuesChecked": 11,
+    "trackedMatches": [
+      {
+        "path": "docs/RUN_WITHOUT_DOCKER.md",
+        "sourceKey": "backend/.env:REDIS_URL",
+        "classification": "local URL without credentials"
+      },
+      {
+        "path": "ops/alertmanager/alertmanager.yml.example",
+        "sourceKey": "ops/.env:SMTP_AUTH_PASSWORD",
+        "classification": "example placeholder"
+      },
+      {
+        "path": "ops/scripts/init.sh",
+        "sourceKey": "ops/.env:SMTP_AUTH_PASSWORD",
+        "classification": "example placeholder"
+      }
+    ],
+    "aabEntriesScanned": 2321,
+    "aabMatches": [],
+    "aabSha256": "13869eb1271c13f0757c81e1a991f56d776c164d87d17b18911f117ff6024f1b",
+    "scope": "Current configured local values and current tree/AAB; excludes Git history and production-only values. No secret values printed.",
+    "removedEmbeddedLivekitKeyIdentifierFromDiagnosticScript": true
+  },
+  "android": {
+    "reviewDateMoscow": "2026-11-20",
+    "artifacts": [
+      {
+        "path": "/private/tmp/livi-photo-button-spacing-213/livi-213-release.aab",
+        "sizeBytes": 127446517,
+        "sha256": "ff8b5ec1acc674737a51ad7db4d49f47faa65e5e1d8109347c88097c0b3eb1d7",
+        "modifiedAtMoscow": "2026-11-18T18:11:13.951598+03:00",
+        "package": "com.kolt12max.livi",
+        "versionCode": 213,
+        "versionName": "1.1.22",
+        "minSdk": 24,
+        "targetSdk": 36,
+        "debuggable": false,
+        "cleartextExplicitlyEnabled": false,
+        "bundletoolVersion": "1.17.2",
+        "bundletoolValidationPassed": true,
+        "jarSignatureVerified": true,
+        "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+        "permissions": [
+          "android.permission.ACCESS_ADSERVICES_AD_ID",
+          "android.permission.ACCESS_ADSERVICES_ATTRIBUTION",
+          "android.permission.ACCESS_NETWORK_STATE",
+          "android.permission.ACCESS_WIFI_STATE",
+          "android.permission.BLUETOOTH",
+          "android.permission.BLUETOOTH_ADMIN",
+          "android.permission.BLUETOOTH_CONNECT",
+          "android.permission.CAMERA",
+          "android.permission.FOREGROUND_SERVICE",
+          "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+          "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+          "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+          "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+          "android.permission.INTERNET",
+          "android.permission.MANAGE_OWN_CALLS",
+          "android.permission.MODIFY_AUDIO_SETTINGS",
+          "android.permission.POST_NOTIFICATIONS",
+          "android.permission.READ_APP_BADGE",
+          "android.permission.RECEIVE_BOOT_COMPLETED",
+          "android.permission.RECORD_AUDIO",
+          "android.permission.SYSTEM_ALERT_WINDOW",
+          "android.permission.USE_BIOMETRIC",
+          "android.permission.USE_FINGERPRINT",
+          "android.permission.USE_FULL_SCREEN_INTENT",
+          "android.permission.VIBRATE",
+          "android.permission.WAKE_LOCK",
+          "com.anddoes.launcher.permission.UPDATE_COUNT",
+          "com.google.android.c2dm.permission.RECEIVE",
+          "com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE",
+          "com.google.android.gms.permission.AD_ID",
+          "com.htc.launcher.permission.READ_SETTINGS",
+          "com.htc.launcher.permission.UPDATE_SHORTCUT",
+          "com.huawei.android.launcher.permission.CHANGE_BADGE",
+          "com.huawei.android.launcher.permission.READ_SETTINGS",
+          "com.huawei.android.launcher.permission.WRITE_SETTINGS",
+          "com.kolt12max.livi.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+          "com.majeur.launcher.permission.UPDATE_BADGE",
+          "com.oppo.launcher.permission.READ_SETTINGS",
+          "com.oppo.launcher.permission.WRITE_SETTINGS",
+          "com.sec.android.provider.badge.permission.READ",
+          "com.sec.android.provider.badge.permission.WRITE",
+          "com.sonyericsson.home.permission.BROADCAST_BADGE",
+          "com.sonymobile.home.permission.PROVIDER_INSERT_BADGE",
+          "me.everything.badger.permission.BADGE_COUNT_READ",
+          "me.everything.badger.permission.BADGE_COUNT_WRITE"
+        ],
+        "embeddedHermesSha256": "e4e41b592c7b8c1ddd44539281435e2b00197c343367772cb76130e2a46141c9",
+        "nativeLibraryCount": 96,
+        "elf64LibraryCount": 48,
+        "elf64PageAlignmentFailures": [],
+        "abi": [
+          "arm64-v8a",
+          "armeabi-v7a",
+          "x86",
+          "x86_64"
+        ],
+        "sensitiveFileNames": []
+      },
+      {
+        "path": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+        "sizeBytes": 127446518,
+        "sha256": "13869eb1271c13f0757c81e1a991f56d776c164d87d17b18911f117ff6024f1b",
+        "modifiedAtMoscow": "2026-11-18T18:37:19.604645+03:00",
+        "package": "com.kolt12max.livi",
+        "versionCode": 213,
+        "versionName": "1.1.22",
+        "minSdk": 24,
+        "targetSdk": 36,
+        "debuggable": false,
+        "cleartextExplicitlyEnabled": false,
+        "bundletoolVersion": "1.17.2",
+        "bundletoolValidationPassed": true,
+        "jarSignatureVerified": true,
+        "productionSignerSha256": "c03b0d25a955909daeb47f8d94ce85a74629af14d51d4dd8b3532ef5c88a2d6d",
+        "permissions": [
+          "android.permission.ACCESS_ADSERVICES_AD_ID",
+          "android.permission.ACCESS_ADSERVICES_ATTRIBUTION",
+          "android.permission.ACCESS_NETWORK_STATE",
+          "android.permission.ACCESS_WIFI_STATE",
+          "android.permission.BLUETOOTH",
+          "android.permission.BLUETOOTH_ADMIN",
+          "android.permission.BLUETOOTH_CONNECT",
+          "android.permission.CAMERA",
+          "android.permission.FOREGROUND_SERVICE",
+          "android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK",
+          "android.permission.FOREGROUND_SERVICE_MICROPHONE",
+          "android.permission.FOREGROUND_SERVICE_PHONE_CALL",
+          "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+          "android.permission.INTERNET",
+          "android.permission.MANAGE_OWN_CALLS",
+          "android.permission.MODIFY_AUDIO_SETTINGS",
+          "android.permission.POST_NOTIFICATIONS",
+          "android.permission.READ_APP_BADGE",
+          "android.permission.RECEIVE_BOOT_COMPLETED",
+          "android.permission.RECORD_AUDIO",
+          "android.permission.SYSTEM_ALERT_WINDOW",
+          "android.permission.USE_BIOMETRIC",
+          "android.permission.USE_FINGERPRINT",
+          "android.permission.USE_FULL_SCREEN_INTENT",
+          "android.permission.VIBRATE",
+          "android.permission.WAKE_LOCK",
+          "com.anddoes.launcher.permission.UPDATE_COUNT",
+          "com.google.android.c2dm.permission.RECEIVE",
+          "com.google.android.finsky.permission.BIND_GET_INSTALL_REFERRER_SERVICE",
+          "com.google.android.gms.permission.AD_ID",
+          "com.htc.launcher.permission.READ_SETTINGS",
+          "com.htc.launcher.permission.UPDATE_SHORTCUT",
+          "com.huawei.android.launcher.permission.CHANGE_BADGE",
+          "com.huawei.android.launcher.permission.READ_SETTINGS",
+          "com.huawei.android.launcher.permission.WRITE_SETTINGS",
+          "com.kolt12max.livi.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+          "com.majeur.launcher.permission.UPDATE_BADGE",
+          "com.oppo.launcher.permission.READ_SETTINGS",
+          "com.oppo.launcher.permission.WRITE_SETTINGS",
+          "com.sec.android.provider.badge.permission.READ",
+          "com.sec.android.provider.badge.permission.WRITE",
+          "com.sonyericsson.home.permission.BROADCAST_BADGE",
+          "com.sonymobile.home.permission.PROVIDER_INSERT_BADGE",
+          "me.everything.badger.permission.BADGE_COUNT_READ",
+          "me.everything.badger.permission.BADGE_COUNT_WRITE"
+        ],
+        "embeddedHermesSha256": "e4e41b592c7b8c1ddd44539281435e2b00197c343367772cb76130e2a46141c9",
+        "nativeLibraryCount": 96,
+        "elf64LibraryCount": 48,
+        "elf64PageAlignmentFailures": [],
+        "abi": [
+          "arm64-v8a",
+          "armeabi-v7a",
+          "x86",
+          "x86_64"
+        ],
+        "sensitiveFileNames": []
+      }
+    ],
+    "artifactsChangedEntries": [
+      "BUNDLE-METADATA/com.android.tools/r8.json",
+      "META-INF/FE2BFACE.RSA",
+      "META-INF/FE2BFACE.SF",
+      "META-INF/MANIFEST.MF",
+      "base/resources.pb"
+    ],
+    "artifactsCodeEquivalence": "Final documented AAB and current rebuilt AAB have identical Hermes, DEX, libraries, manifest and assets. Differences: R8 buildTimeNs, one resource build UUID, JAR signatures.",
+    "moderation": {
+      "confirmedEnabledInFinalAab": true,
+      "embeddedEnvironmentValue": "1",
+      "proof": "Hermes disassembly String(\"1\") then StrictEq with \"1\", passed as useModeration.enabled.",
+      "bytecodeEvidenceFile": "/private/tmp/livi-security-review-android/final213-bytecode.txt",
+      "bytecodeEvidenceLines": [
+        1499757,
+        1499758,
+        1499759,
+        1500193,
+        1500194,
+        1500195
+      ],
+      "sourceReference": "frontend/components/VideoChat/RandomChat.tsx:242,1482"
+    },
+    "telemetry": {
+      "confirmedUnfilteredThirdPartyTelemetryPath": true,
+      "references": [
+        "frontend/utils/telemetry.ts:36-61",
+        "frontend/android/app/src/main/java/com/kolt12max/livi/LiviAppModule.kt:5914-5953"
+      ],
+      "confirmedCallSiteData": [
+        "callId",
+        "roomId",
+        "userId",
+        "partnerUserId",
+        "raw error.message up to 500 chars",
+        "componentStack up to 400 chars"
+      ],
+      "callSiteReferences": [
+        "frontend/utils/pushNotifications.ts:1541-1547,1679-1684",
+        "frontend/src/webrtc/sessions/VideoCallSession.ts:3485-3492,8191-8198",
+        "frontend/components/AppErrorBoundary.tsx:28-31",
+        "frontend/index.tsx:147-150",
+        "frontend/utils/callLifecycleTelemetry.ts:53-63,101-112"
+      ],
+      "thirdParties": [
+        "Firebase Analytics",
+        "Firebase Crashlytics"
+      ],
+      "compiledPathConfirmed": true,
+      "privateMessageOrCredentialLeakObserved": false,
+      "risk": "Raw errors and future payloads bypass redaction when crossing native bridge. Current reviewed explicit payloads are identifiers and metrics, not message bodies or secrets. Need bridge sanitization for defense; actual personal-message/secret exfiltration is not established.",
+      "separateReleaseDiagnostics": "safeDiagnosticData allowlist and hashed operation IDs apply to backend diagnostics only. They do not sanitize trackAppEvent/trackAppError."
+    },
+    "consoleLimitations": [
+      "Exact uploaded file SHA not known",
+      "Data safety and Advertising ID declarations not accessible",
+      "FGS specialUse and full-screen intent declarations not accessible",
+      "No claim about Google acceptance or reason for review duration"
+    ],
+    "sourceAndroidManifestChangedSince211": false,
+    "gitWorktreeChanged": true,
+    "initialAuditReadOnly": true,
+    "localFix": {
+      "files": [
+        "frontend/utils/telemetry.ts",
+        "frontend/utils/telemetry.test.ts",
+        "frontend/utils/redactLog.ts",
+        "frontend/utils/redactLog.test.ts"
+      ],
+      "behavior": "Native telemetry metadata passes redactLogValue. Native errors receive known category only; raw error text is not passed. CamelCase and plural URI/URL fields are redacted.",
+      "tests": {
+        "command": "npm run test:ci -- --runTestsByPath utils/telemetry.test.ts utils/redactLog.test.ts utils/callLifecycleTelemetry.test.ts",
+        "suitesPassed": 3,
+        "testsPassed": 17
+      },
+      "nativeModified": false,
+      "aabRebuilt": false,
+      "deployed": false,
+      "limits": "Existing AAB 213 retains prior telemetry behavior. Client-side regex metadata redaction is not a universal classifier of arbitrary user content placed in unexpected fields. Reviewed explicit call sites contain identifiers and metrics, not private message bodies."
+    },
+    "readOnly": false,
+    "productionMutations": false,
+    "note": "Artifact inspection was read-only; subsequent client safeguards are local and absent from these existing AABs."
+  },
+  "dependencyAudits": {
+    "root": {
+      "command": "npm audit --package-lock-only --omit=dev --json",
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 3,
+        "critical": 0,
+        "total": 3
+      },
+      "packages": [
+        "apn",
+        "jsonwebtoken",
+        "node-forge"
+      ]
+    },
+    "backend": {
+      "command": "npm audit --package-lock-only --omit=dev --json",
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 0,
+        "high": 0,
+        "critical": 0,
+        "total": 0
+      },
+      "packages": []
+    },
+    "frontend": {
+      "command": "npm audit --package-lock-only --omit=dev --json",
+      "counts": {
+        "info": 0,
+        "low": 0,
+        "moderate": 20,
+        "high": 0,
+        "critical": 0,
+        "total": 20
+      },
+      "packages": [
+        "@expo/cli",
+        "@expo/config",
+        "@expo/config-plugins",
+        "@expo/fingerprint",
+        "@expo/metro-config",
+        "@expo/prebuild-config",
+        "ajv",
+        "expo",
+        "expo-asset",
+        "expo-constants",
+        "expo-dev-client",
+        "expo-dev-launcher",
+        "expo-manifests",
+        "expo-modules-autolinking",
+        "expo-notifications",
+        "glob",
+        "minimatch",
+        "sucrase",
+        "uuid",
+        "xcode"
+      ]
+    }
+  },
+  "limitations": [
+    "Exact uploaded AAB hash and Play Console declarations unavailable",
+    "No current physical device or Play generated APK acceptance run",
+    "No evidence of actual exploitation or observed private message/password exfiltration; absence of incidents not certified",
+    "Server fixes not deployed; telemetry fix requires future AAB",
+    "UGC rules acceptance and independent friend-chat block remain unresolved",
+    "Media URL access and legacy migration boundaries remain",
+    "No automatic account reset or strict-auth cutover"
+  ]
+}

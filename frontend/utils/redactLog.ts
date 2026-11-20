@@ -1,4 +1,4 @@
-const PRIVATE_FIELD = /authorization|cookie|password|passwd|secret|private.?key|access.?token|refresh.?token|api.?key|credential|proof$|ciphertext$|install.?id|token$|session.?id|(?:^|_)text$|(?:^|_)uri$|url$|push.?token|feedback.?text|avatar(?:b64|thumbb64)?$|(?:^|_)body$/i;
+const PRIVATE_FIELD = /authorization|cookie|password|passwd|secret|private.?key|access.?token|refresh.?token|api.?key|credential|proof$|ciphertext$|install.?id|token$|session.?id|(?:^|_)text$|uris?$|urls?$|push.?token|feedback.?text|avatar(?:b64|thumbb64)?$|(?:^|_)body$/i;
 function cleanString(value: string): string {
   return value
     .replace(/-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----/g, '[REDACTED_PRIVATE_KEY]')

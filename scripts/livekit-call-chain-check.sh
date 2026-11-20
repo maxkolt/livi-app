@@ -158,7 +158,7 @@ run_local() {
   echo "  (401 unauthorized без заголовков приложения — ожидаемо; с приложения должны быть TURN urls)"
 
   section "5. Что было в логах телефонов"
-  echo "  invalid API key: lk_969512bce6a80fb0 + 401 на wss://${LIVEKIT_HOST}"
+  echo "  invalid API key + 401 на wss://${LIVEKIT_HOST}"
   echo "  → LIVEKIT_API_KEY на backend ДОЛЖЕН быть ключом из livekit.yaml на ${LIVEKIT_HOST}"
   echo "  → LIVEKIT_URL в backend .env должен быть: ${LIVEKIT_WSS}"
 

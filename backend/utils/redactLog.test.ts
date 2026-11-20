@@ -12,3 +12,17 @@ it('bounds recursive or cyclic metadata and preserves useful error codes', () =>
   const item: { code: string; self?: unknown } = { code: 'network_unavailable' };item.self=item;
   expect(redactLogValue(item)).toEqual({ code: 'network_unavailable', self: '[Circular]' });
 });
+
+it('removes camel-case media links and plural URI/URL arrays while retaining status metadata', () => {
+  const result = redactLogValue({
+    count: 2,
+    nested: { mediaUri: 'content://private/video', thumbUri: '/uploads/media/private-preview.jpg',
+      uris: ['/uploads/media/private.jpg'], mediaUris: ['file:///private/video.mp4'],
+      imageUrls: ['https://media.example/private-image'], urls: ['https://media.example/private-video'],
+      status: 'uploaded' },
+  });
+  expect(result).toEqual({ count: 2, nested: {
+    mediaUri: '[REDACTED]', thumbUri: '[REDACTED]', uris: '[REDACTED]',
+    mediaUris: '[REDACTED]', imageUrls: '[REDACTED]', urls: '[REDACTED]', status: 'uploaded',
+  } });
+});

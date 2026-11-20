@@ -46,17 +46,18 @@ if (!LIVEKIT_API_KEY || !LIVEKIT_API_SECRET) {
 
 export const getLiveKitUrl = () => LIVEKIT_URL;
 
-/** Комнаты вида room_<uid1>_<uid2> (24 hex) — только эти два участника могут получить токен. */
-const ROOM_PARTICIPANTS_REGEX = /^room_([a-f\d]{24})_([a-f\d]{24})$/i;
+/** Friend and random calls use separate namespaces, with the same two user IDs. */
+const ROOM_PARTICIPANTS_REGEX = /^(?:rand_)?room_([a-f\d]{24})_([a-f\d]{24})$/i;
 
 /**
  * Проверяет, что userId — разрешённый участник комнаты.
- * Для room_<id1>_<id2> только id1 и id2 могут получить токен (защита от присоединения третьего).
- * Для остальных форматов имён — разрешаем (обратная совместимость).
+ * Only the two named users may request a token, including on reconnect.
+ * Unknown names cannot prove membership and must fail closed.
  */
 export function isAllowedParticipant(roomName: string, userId: string): boolean {
+  if (typeof roomName !== 'string' || typeof userId !== 'string') return false;
   const match = roomName.match(ROOM_PARTICIPANTS_REGEX);
-  if (!match) return true;
+  if (!match) return false;
   const [, id1, id2] = match;
   return userId === id1 || userId === id2;
 }

@@ -1,0 +1,265 @@
+{
+  "dateMoscow": "2026-11-20",
+  "deployment": {
+    "deployed": true,
+    "releaseId": "d90b26768-security-fixes-ce0fa030a5af",
+    "backup": "/opt/backend/backup-security-fixes-20261120T090620Z",
+    "artifactDigest": "ce0fa030a5af1105461cc03d1cfba61f3fe7d4d654cdb8ce2cd1bcd81e5dbb32",
+    "changedFiles": [
+      "dist/routes/livekit.js",
+      "dist/sockets/identity.js",
+      "dist/utils/redactLog.js",
+      "dist/utils/uploadedMedia.js",
+      "routes/livekit.ts",
+      "sockets/identity.ts",
+      "utils/redactLog.ts",
+      "utils/uploadedMedia.ts"
+    ],
+    "filesVerified": 214,
+    "environmentUnchanged": true,
+    "dependenciesUnchanged": true,
+    "productionDataReset": false,
+    "preDeployActivity": {
+      "rooms": 0,
+      "participants": 0,
+      "queue": 0,
+      "paired": 0,
+      "recentUnfinishedCalls": 0
+    },
+    "health": {
+      "ok": true,
+      "mongo": 1,
+      "socketIoRedisAdapter": true,
+      "rateLimit": {
+        "redisConfigured": true,
+        "redisStatus": "ready",
+        "sensitiveFallbackMode": "bounded_memory",
+        "memoryKeys": 0,
+        "memoryMaxKeys": 20000,
+        "redisFallbackCount": 0,
+        "failClosedCount": 0,
+        "lastRedisFallbackAt": 0,
+        "lastRedisFallbackReason": ""
+      },
+      "callKeepAlive": {
+        "users": 0,
+        "sockets": 0
+      }
+    },
+    "service": {
+      "MainPID": "125226",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    }
+  },
+  "postflight": {
+    "checkedAtUtc": "2026-11-20T09:07:37.101715+00:00",
+    "releaseId": "d90b26768-security-fixes-ce0fa030a5af",
+    "artifactDigest": "ce0fa030a5af1105461cc03d1cfba61f3fe7d4d654cdb8ce2cd1bcd81e5dbb32",
+    "productionFilesCompared": 214,
+    "hashMismatches": [],
+    "environmentUnchanged": true,
+    "dependenciesUnchanged": true,
+    "environmentMode": "0o600",
+    "backupMode": "0o700",
+    "backupEnvironmentMode": "0o600",
+    "backupEnvironmentMatchesOriginal": true,
+    "service": {
+      "MainPID": "125226",
+      "NRestarts": "0",
+      "ActiveState": "active"
+    },
+    "health": {
+      "ok": true,
+      "mongo": 1,
+      "socketIoRedisAdapter": true,
+      "rateLimit": {
+        "redisConfigured": true,
+        "redisStatus": "ready",
+        "sensitiveFallbackMode": "bounded_memory",
+        "memoryKeys": 0,
+        "memoryMaxKeys": 20000,
+        "redisFallbackCount": 0,
+        "failClosedCount": 0,
+        "lastRedisFallbackAt": 0,
+        "lastRedisFallbackReason": ""
+      },
+      "callKeepAlive": {
+        "users": 0,
+        "sockets": 0
+      }
+    },
+    "activity": {
+      "rooms": 0,
+      "participants": 0,
+      "queue": 0,
+      "paired": 0,
+      "recentUnfinishedCalls": 0
+    },
+    "authFlags": {
+      "INSTALL_AUTH_MODE": "legacy-migration",
+      "HTTP_INSTALL_SECRET_REQUIRED": "0",
+      "accountDataGenerationSet": false
+    },
+    "compiledSecuritySmoke": {
+      "deployedHandlerCheck": true,
+      "thirdPartyFriendRoomDenied": true,
+      "thirdPartyRandomRoomDenied": true,
+      "unknownRoomDenied": true,
+      "bothParticipantsRefreshWithRealSigning": true,
+      "anonymousHandlerDenied": true,
+      "videoThumbnailCollection": true,
+      "privateMediaLogsRedacted": true,
+      "joinedProductionRooms": false,
+      "productionAccountDataMutations": false,
+      "tokensPrinted": false
+    },
+    "realDeviceCallOrMessageAcceptance": false
+  },
+  "publicHttp": {
+    "checks": [
+      {
+        "method": "GET",
+        "path": "/health",
+        "status": 200,
+        "expected": 200,
+        "passed": true,
+        "ok": true,
+        "mongo": 1,
+        "redisStatus": "ready",
+        "socketIoRedisAdapter": true
+      },
+      {
+        "method": "GET",
+        "path": "/.env",
+        "status": 404,
+        "expected": 404,
+        "passed": true
+      },
+      {
+        "method": "GET",
+        "path": "/backend/.env",
+        "status": 404,
+        "expected": 404,
+        "passed": true
+      },
+      {
+        "method": "GET",
+        "path": "/api/cosmetics/me",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "method": "GET",
+        "path": "/api/debug/push-log",
+        "status": 404,
+        "expected": 404,
+        "passed": true
+      },
+      {
+        "method": "POST",
+        "path": "/api/livekit/token",
+        "status": 401,
+        "expected": 401,
+        "passed": true
+      },
+      {
+        "method": "GET",
+        "path": "/api/app-settings",
+        "status": 200,
+        "expected": 200,
+        "passed": true,
+        "latestAppVersion": "211",
+        "resetMarkerPresent": false,
+        "cacheControl": "no-store"
+      }
+    ],
+    "allPassed": true
+  },
+  "publicSocket": {
+    "connected": true,
+    "guestHasNoUser": true,
+    "protectedFriendsReadDenied": true,
+    "guestTokenDenied": true,
+    "claimedUserReauthDenied": true,
+    "accountAttachSent": false,
+    "productionAccountDataMutations": false
+  },
+  "finalAutomatedChecks": {
+    "dateMoscow": "2026-11-20",
+    "node": "v22.16.0",
+    "productionAccess": false,
+    "sourceModified": false,
+    "localMongoPort": 27039,
+    "testExitCode": 0,
+    "durationSeconds": 27.487,
+    "tests": {
+      "success": true,
+      "suitesTotal": 44,
+      "suitesPassed": 44,
+      "suitesFailed": 0,
+      "testsTotal": 347,
+      "testsPassed": 347,
+      "testsFailed": 0,
+      "testsPending": 0
+    },
+    "nonSystemDatabasesAfterTests": [],
+    "nonSystemDatabasesAfterCleanup": [],
+    "mongoExit": {
+      "code": 0,
+      "signal": null
+    },
+    "mongoListenerAbsent": true,
+    "fixtureMediaFilesRemaining": [],
+    "environmentScope": "Child test environment contains only runtime PATH/TMPDIR/NODE_ENV and the two explicit loopback test Mongo URIs; backend/.env was not loaded.",
+    "fixtureMediaPathsChecked": [
+      "/Users/maximkoltovich/LiVi/livi-app/public",
+      "/Users/maximkoltovich/LiVi/livi-app/backend/public",
+      "/Users/maximkoltovich/LiVi/livi-app/backend/routes/public",
+      "/Users/maximkoltovich/LiVi/public"
+    ]
+  },
+  "packageScan": {
+    "filesScanned": 216,
+    "configuredValuesChecked": 11,
+    "matches": [],
+    "archiveSha256": "5451cdb46af71ac2bef5c88a678fddcebc7f1c8817c028188e57a4b1e3089c5f",
+    "archiveBytes": 560925
+  },
+  "candidate": {
+    "releaseId": "d90b26768-security-fixes-ce0fa030a5af",
+    "sourceCommit": "d90b267688cd7d25cbd7835d21a281821b582f50",
+    "workingTreeChanges": true,
+    "artifactDigest": "ce0fa030a5af1105461cc03d1cfba61f3fe7d4d654cdb8ce2cd1bcd81e5dbb32",
+    "expectedPreviousRelease": "d90b267688cd7d25cbd7835d21a281821b582f50",
+    "expectedChangedFiles": [
+      "dist/routes/livekit.js",
+      "dist/sockets/identity.js",
+      "dist/utils/redactLog.js",
+      "dist/utils/uploadedMedia.js",
+      "routes/livekit.ts",
+      "sockets/identity.ts",
+      "utils/redactLog.ts",
+      "utils/uploadedMedia.ts"
+    ],
+    "preservedExistingBuildArtifacts": [
+      "dist/models/Chat.js",
+      "dist/sockets/messages.js",
+      "dist/sockets/messagesOptimized.js",
+      "dist/sockets/presence.js",
+      "dist/sockets/profile.js",
+      "dist/utils/chatUtils.js",
+      "dist/utils/imageProcessing.js"
+    ],
+    "dependencyMutation": false,
+    "environmentMutation": false,
+    "productionDataMutation": false,
+    "purpose": "Fix random-call token participant validation, account media cleanup and log URI redaction"
+  },
+  "aabRebuiltOrUploaded": false,
+  "productionDataReset": false,
+  "authConfigurationChanged": false,
+  "realDeviceCallOrMessageAcceptance": false,
+  "commitOrPush": false
+}

@@ -27,4 +27,11 @@ describe('uploaded chat media', () => {
       ]).sort(),
     ).toEqual(['a.jpg', 'b.jpg', 'c.m4a']);
   });
+
+  it('collects both the video note and its uploaded thumbnail', () => {
+    expect(collectUploadedMediaNames([
+      { uri: '/uploads/media/note.mp4', thumbUri: '/uploads/media/note-preview.jpg' },
+      { thumbUri: 'https://example.com/foreign-preview.jpg' },
+    ]).sort()).toEqual(['note-preview.jpg', 'note.mp4']);
+  });
 });

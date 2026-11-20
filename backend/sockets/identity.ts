@@ -449,10 +449,10 @@ export default function registerIdentitySockets(io: Server) {
           const chatIds = (await FriendshipMessages.find({ $or: [{ user1: userId }, { user2: userId }] }).select('_id').lean()).map((d) => d._id);
           const [chatItems, directMessages, offlineMessages] = await Promise.all([
             chatIds.length
-              ? FriendshipMessageItem.find({ friendshipId: { $in: chatIds }, type: { $in: ['image', 'audio'] } }).select('uri uris').lean()
+              ? FriendshipMessageItem.find({ friendshipId: { $in: chatIds } }).select('uri uris thumbUri').lean()
               : Promise.resolve([]),
             Message.find({ $or: [{ from: userId }, { to: userId }], uri: { $exists: true, $ne: '' } }).select('uri').lean(),
-            OfflineMessage.find({ $or: [{ senderId: userId }, { recipientId: userId }] }).select('messageData.uri messageData.uris').lean(),
+            OfflineMessage.find({ $or: [{ senderId: userId }, { recipientId: userId }] }).select('messageData.uri messageData.uris messageData.thumbUri').lean(),
           ]);
           mediaNames = collectUploadedMediaNames([
             ...chatItems,
