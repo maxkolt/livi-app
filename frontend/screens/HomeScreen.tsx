@@ -4765,6 +4765,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   /* clear nickname (без прелоадера и без тоста) */
 const handleClearNick = useCallback(async () => {
   try {
+    // Clear the live draft too, so confirming the empty input cannot restore
+    // the nickname captured before the delete action.
+    nickLiveRef.current = '';
+    nickInputDirtyRef.current = true;
     await saveProfileToStorage({ nick: '', avatar: savedAvatarUrl || '' });
     await saveDraftProfile({ nick: '' });
 

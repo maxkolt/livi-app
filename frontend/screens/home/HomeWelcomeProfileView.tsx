@@ -4,10 +4,12 @@ import {
   Keyboard,
   KeyboardAvoidingView,
   Linking,
+  NativeModules,
   Platform,
   Pressable,
   ScrollView,
   StyleSheet,
+  TextInput,
   View,
   BackHandler,
   type LayoutChangeEvent,
@@ -21,10 +23,8 @@ import { FontAwesome, Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import AvatarImage, { activeFrameOutset } from '../../components/AvatarImage';
 import { AvatarGlyph } from '../../components/AvatarGlyph';
-import { TextInput as PaperInput } from 'react-native-paper';
 import { getCurrentUserId } from '../../sockets/socket';
 import { t, languages, type Lang } from '../../utils/i18n';
-import { accountDataReset } from '../../utils/accountDataResetRuntime';
 import { getPrivacyPolicyUrl } from '../../utils/privacyPolicyUrl';
 import {
   getCurrentAppVersion,
@@ -37,20 +37,17 @@ import { PurchasesManagementPanel } from './PurchasesManagementPanel';
 import {
   LIVI,
   isWelcomeTabletLayout,
-  searchPhoneScale,
-  welcomePhoneAvatarMetrics,
   WELCOME_FRIENDS_LIST_INSET,
   WELCOME_GLASS_BORDER,
   WELCOME_HEADER_TITLE,
   WELCOME_MUTED_TEXT,
   UI_ACCENT,
   UI_ACCENT_SOFT,
-  UI_SURFACE,
 } from './constants';
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
-import { displayAvatarLetter, displayName } from './friendHelpers';
+import { displayAvatarLetter } from './friendHelpers';
 import { hasProfilePhoto } from './HomeCenterProfile';
-import { PHONE_AVATAR_REFERENCE_WIDTH, usesLargePhoneAvatar } from './phoneAvatarLayout';
+import { resolvePhoneProfileLayout } from './profileHubLayout';
 import { ProfileAvatar } from './ProfileAvatar';
 import {
   WelcomeProfileRow,
@@ -74,6 +71,7 @@ const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const SUPPORT_TELEGRAM_URL = 'https://t.me/livi_app';
 const CAMERA_BTN_SIZE = 36;
+const PROFILE_AVATAR_SCALE = 0.88;
 /** Красный «удалить» строки «Удалить профиль». */
 const WELCOME_DELETE_ICON = '#A63A48';
 /** Строк в hub-профиле: 4 секции по 2 строки. */
@@ -81,9 +79,8 @@ const PROFILE_HUB_ROW_COUNT = 8;
 
 /**
  * Раскладка hub-профиля считается как распределение высоты панели:
- * отступы вокруг аватара и над таб-баром фиксированы, а «лишнее» забирается
- * у списка — строки и промежутки между секциями ужимаются до своих минимумов.
- * Аватар при этом не трогается: его размер задан классом устройства.
+ * телефон подбирает умеренный диаметр фото, строки и отступы по доступному
+ * месту. На планшетах сохраняется прежняя раскладка.
  */
 type HubMetrics = {
   avatarSize: number;
@@ -107,33 +104,6 @@ type HubMetricsPreset = {
   rowMin: number;
   gapMax: number;
   gapMin: number;
-};
-
-const HUB_PRESET_PHONE: HubMetricsPreset = {
-  avatarSize: 108,
-  cameraBtnSize: CAMERA_BTN_SIZE,
-  gapTop: 24,
-  gapUnderAvatar: 14,
-  rowMax: 48,
-  rowMin: 40,
-  gapMax: 12,
-  gapMin: 6,
-};
-
-const HUB_PRESET_PHONE_LANDSCAPE: HubMetricsPreset = {
-  // Аватар и кнопка камеры — как в вертикали (avatarSize заменяет phoneAvatarSize()).
-  avatarSize: 108,
-  cameraBtnSize: CAMERA_BTN_SIZE,
-  // Не отрицательный: шапки в landscape нет, и аватар уходил под строку состояния.
-  gapTop: 2,
-  // Минимумы ниже, чем в вертикали: аватар тут того же размера, и при строках 30 dp
-  // «Удалить профиль» не влезал на 5–10 dp — список уходил в скролл. Строки ужимаются
-  // ровно настолько, насколько нужно, скролл — только для совсем низких экранов.
-  gapUnderAvatar: 8,
-  rowMax: 42,
-  rowMin: 26,
-  gapMax: 8,
-  gapMin: 4,
 };
 
 const HUB_PRESET_TABLET: HubMetricsPreset = {
@@ -173,53 +143,8 @@ function hubRowsPerColumn(twoColumns: boolean): number {
   return twoColumns ? PROFILE_HUB_ROW_COUNT / 2 : PROFILE_HUB_ROW_COUNT;
 }
 
-function resolveHubPreset(isTablet: boolean, isLandscape: boolean): HubMetricsPreset {
-  if (isTablet) return isLandscape ? HUB_PRESET_TABLET_LANDSCAPE : HUB_PRESET_TABLET;
-  return isLandscape ? HUB_PRESET_PHONE_LANDSCAPE : HUB_PRESET_PHONE;
-}
-
-/**
- * Аватар профиля чуть меньше радара на Поиске — в обеих ориентациях один диаметр
- * фото. Купленная рамка рисуется снаружи и не меняет раскладку экрана.
- * На крупных телефонах фото чуть больше эталона A35, независимо от масштаба интерфейса.
- */
-const PROFILE_AVATAR_SCALE = 0.9696;
-const PROFILE_WIDE_PHONE_AVATAR_SCALE = 0.98;
-/** Прежний эталон слота — от него считаем, сколько px отнять у gapTop / gapUnderAvatar. */
-const PROFILE_AVATAR_SLOT_SCALE = 0.9;
 /** Сдвиг аватара вниз: +gapTop / −gapUnderAvatar — карточки не двигаются. */
 const PROFILE_AVATAR_NUDGE_DOWN = 6;
-const PROFILE_WIDE_PHONE_AVATAR_NUDGE_DOWN = 2;
-
-function phoneAvatarSize(shortSide: number): number {
-  const largePhone = usesLargePhoneAvatar(shortSide);
-  const scale = largePhone ? PROFILE_WIDE_PHONE_AVATAR_SCALE : PROFILE_AVATAR_SCALE;
-  const referenceWidth = largePhone ? PHONE_AVATAR_REFERENCE_WIDTH : shortSide;
-  return Math.round(welcomePhoneAvatarMetrics(referenceWidth).outer * scale);
-}
-
-function phoneAvatarSlotSize(shortSide: number): number {
-  return Math.round(welcomePhoneAvatarMetrics(shortSide).outer * PROFILE_AVATAR_SLOT_SCALE);
-}
-
-/** Предел масштаба строк: дальше экран уже не телефон, а «лопата». */
-const PHONE_HUB_MAX_SCALE = 1.25;
-
-/**
- * На широком телефоне строки и отступы растут вместе с аватаром — как на Поиске.
- * Минимумы не трогаем: они нужны, чтобы на низком экране список ужимался.
- */
-function scaleHubPreset(preset: HubMetricsPreset, k: number): HubMetricsPreset {
-  if (!(k > 1)) return preset;
-  const r = (v: number) => Math.round(v * k);
-  return {
-    ...preset,
-    gapTop: r(preset.gapTop),
-    gapUnderAvatar: r(preset.gapUnderAvatar),
-    rowMax: r(preset.rowMax),
-    gapMax: r(preset.gapMax),
-  };
-}
 
 function resolveHubMetrics(
   paneHeight: number,
@@ -230,32 +155,28 @@ function resolveHubMetrics(
   twoColumns: boolean,
   frameId: string,
 ): HubMetrics {
-  const basePreset = resolveHubPreset(isTablet, isLandscape);
-  const largePhone = !isTablet && usesLargePhoneAvatar(shortSide);
-  const avatarNudgeDown = largePhone
-    ? PROFILE_WIDE_PHONE_AVATAR_NUDGE_DOWN
-    : PROFILE_AVATAR_NUDGE_DOWN;
-  const preset = (() => {
-    const nudgeDown = (p: HubMetricsPreset): HubMetricsPreset => {
-      // Берём только то, что реально есть снизу — иначе сумма отступов вырастет и сдвинет список.
-      const take = Math.min(avatarNudgeDown, Math.max(0, p.gapUnderAvatar - 4));
-      return { ...p, gapTop: p.gapTop + take, gapUnderAvatar: p.gapUnderAvatar - take };
+  if (!isTablet) {
+    return {
+      ...resolvePhoneProfileLayout({
+        paneHeight,
+        shortSide,
+        isLandscape,
+        diagonalInches: NativeModules.LiviAppModule?.screenDiagonalInches,
+        rowCount: hubRowsPerColumn(twoColumns) + 1,
+        gapCount: hubSectionRows(twoColumns) + 1,
+        bottomClearance: GLASS_DOCK_TOP_PAD,
+        frameOutset: (size) => frameId ? activeFrameOutset(size, frameId) : 0,
+      }),
+      cameraBtnSize: CAMERA_BTN_SIZE,
     };
-    if (isTablet) return nudgeDown(basePreset);
-    const visual = phoneAvatarSize(shortSide);
-    const grow = Math.max(0, visual - phoneAvatarSlotSize(shortSide));
-    // Крупнее аватар без сдвига карточек: прирост диаметра уходит в отступы вокруг него.
-    // Пол gapTop — не выше текущего (в landscape он уже 2 < HUB_GAP_TOP_MIN).
-    const gapTopFloor = Math.min(basePreset.gapTop, HUB_GAP_TOP_MIN);
-    const phoneBase: HubMetricsPreset = nudgeDown({
-      ...basePreset,
-      avatarSize: visual,
-      gapTop: Math.max(gapTopFloor, basePreset.gapTop - Math.ceil(grow / 2)),
-      gapUnderAvatar: Math.max(largePhone && !isLandscape ? 14 : 4, basePreset.gapUnderAvatar - Math.floor(grow / 2)),
-    });
-    if (isLandscape) return phoneBase;
-    return scaleHubPreset(phoneBase, Math.min(PHONE_HUB_MAX_SCALE, searchPhoneScale(shortSide)));
-  })();
+  }
+  const basePreset = isLandscape ? HUB_PRESET_TABLET_LANDSCAPE : HUB_PRESET_TABLET;
+  const nudge = Math.min(PROFILE_AVATAR_NUDGE_DOWN, Math.max(0, basePreset.gapUnderAvatar - 4));
+  const preset = {
+    ...basePreset,
+    gapTop: basePreset.gapTop + nudge,
+    gapUnderAvatar: basePreset.gapUnderAvatar - nudge,
+  };
   // Кольцо купленной рамки входит в высоту блока аватара (avatarRing = фото + вынос × 2).
   const frameOutset = frameId ? activeFrameOutset(preset.avatarSize, frameId) : 0;
   const fixedNoTop =
@@ -404,14 +325,14 @@ type HomeWelcomeProfileViewProps = {
   savedNick: string;
   nick: string;
   setNick: (v: string) => void;
-  onClearNick: () => void;
+  onClearNick: () => void | Promise<void>;
   avatarUri: string;
   myFullAvatarUri?: string;
   myAvatarVer?: number;
   openAvatarSheet?: () => void;
   /** Урна на аватаре: спросить и удалить фото. */
   onDeleteAvatar?: () => void;
-  handleSaveProfile: () => void;
+  handleSaveProfile: () => void | Promise<void>;
   saving?: boolean;
   savedToast?: boolean;
   avatarSaveSuccessId?: number;
@@ -471,7 +392,18 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     if (props.openAppUpdatesRequest) setScreen('about');
   }, [props.openAppUpdatesRequest]);
   const callKeepAlive = useCallKeepAliveState(active);
-  const [accountOpen, setAccountOpen] = useState(() => accountDataReset.shouldOpenProfile());
+  const [accountOpen, setAccountOpen] = useState(false);
+  const nicknameInputRef = React.useRef<TextInput>(null);
+  const nicknameActionRef = React.useRef(false);
+  const [nicknameDeleting, setNicknameDeleting] = useState(false);
+  const nicknameWasDeletingRef = React.useRef(false);
+  useEffect(() => {
+    const wasDeleting = nicknameWasDeletingRef.current;
+    nicknameWasDeletingRef.current = nicknameDeleting;
+    if (wasDeleting && !nicknameDeleting && active && screen === 'hub') {
+      nicknameInputRef.current?.focus();
+    }
+  }, [nicknameDeleting, active, screen]);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
   const hubOrientationKey = isLandscape ? 'landscape' : 'portrait';
   // Замер панели — отдельно на портрет/landscape: иначе после поворота ещё
@@ -520,15 +452,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   );
 
   /** Скролл при редактировании ника или когда даже минимальные строки не влезают. */
+  const nicknameActionsVisible = accountOpen || nick !== savedNick || !!savedToast;
   const needsHubScroll = accountOpen || hubMetrics.scroll;
-  /**
-   * В landscape аватар скроллится вместе со списком, но дойдя до верха прилипает
-   * и дальше рисуется поверх карточек — так он виден всегда и не уезжает под
-   * верхний блок. При редактировании ника раскладка другая: панель ввода идёт
-   * следом за аватаром и должна ехать вместе с ним.
-   */
-  const stickyAvatarOnScroll = isLandscape && !accountOpen;
-
   const handleHubPaneLayout = useCallback(
     (event: LayoutChangeEvent) => {
       const nextHeight = event.nativeEvent.layout.height;
@@ -542,9 +467,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     [hubOrientationKey],
   );
 
-  const displayNick = displayName(savedNick || nick);
   const letter = displayAvatarLetter(savedNick || nick);
-  const busy = !!saving || !!wiping;
+  const busy = !!saving || !!wiping || nicknameDeleting;
 
   useEffect(() => {
     if (!savedToast || busy || !setSavedToast) return;
@@ -554,17 +478,34 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
 
   const langLabel = (lang ?? 'ru').toUpperCase();
 
-  const openAccountEdit = useCallback(() => {
-    setAccountOpen((open) => {
-      if (open) Keyboard.dismiss();
-      return !open;
-    });
-  }, []);
-
   const closeAccountEdit = useCallback(() => {
     Keyboard.dismiss();
     setAccountOpen(false);
   }, []);
+
+  const saveNickname = async () => {
+    if (busy || nicknameActionRef.current) return;
+    nicknameActionRef.current = true;
+    closeAccountEdit();
+    try {
+      await handleSaveProfile();
+    } finally {
+      nicknameActionRef.current = false;
+    }
+  };
+
+  const deleteNickname = async () => {
+    if (busy || nicknameActionRef.current || !nick) return;
+    nicknameActionRef.current = true;
+    setNicknameDeleting(true);
+    setSavedToast?.(false);
+    try {
+      await onClearNick();
+    } finally {
+      nicknameActionRef.current = false;
+      setNicknameDeleting(false);
+    }
+  };
 
   const openAbout = useCallback(() => {
     setScreen('about');
@@ -674,7 +615,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     onBackFromHub,
   ]);
 
-  const avatarSize = hubMetrics.avatarSize;
+  const avatarSize = Math.round(hubMetrics.avatarSize * PROFILE_AVATAR_SCALE);
+  const nicknameActionSize = Math.min(32, hubMetrics.rowHeight - 4);
   const avatarFrameOutset = activeFrameId ? activeFrameOutset(avatarSize, activeFrameId) : 0;
   const avatarFrameSize = Math.round(avatarSize) + avatarFrameOutset * 2;
   // Layout всегда равен диаметру фото. Огонь/металл выступают наружу визуально.
@@ -829,20 +771,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  // Липкая шапка не переносит отрицательный верхний отступ: RN складывает из него
-  // немонотонный inputRange (-1, 0, gapTop, gapTop+1) и роняет экран. Поэтому у
-  // sticky-варианта отступ нулевой, а сдвиг переезжает на сам ScrollView.
-  const hubAvatarSectionSticky = hubStage < 1 ? null : (
-    <View
-      style={[
-        styles.avatarBlock,
-        { marginTop: 0, marginBottom: hubMetrics.gapUnderAvatar },
-      ]}
-    >
-      {hubAvatarBody}
-    </View>
-  );
-
   const hubListStack = hubStage < 2 ? null : (
     <View
       style={[
@@ -853,7 +781,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
           ? { rowGap: hubMetrics.listGap }
           : { gap: hubMetrics.listGap },
         { marginBottom: hubMetrics.listGap },
-        accountOpen && styles.hubListStackNickOpen,
       ]}
     >
       <WelcomeProfileSection
@@ -862,20 +789,91 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
         tablet={isTablet}
         twoColumns={twoColumnList}
       >
-        <WelcomeProfileRow
-          dense
-          rowHeight={hubMetrics.rowHeight}
-          compact={compactLandscape}
-          tablet={isTablet}
-          showDivider
-          expandable
-          expanded={accountOpen}
-          icon="person-outline"
-          label={t('nickname', lang)}
-          value={displayNick || t('enter_nick', lang)}
-          largeValue
-          onPress={openAccountEdit}
-        />
+        <View
+          style={[
+            styles.inlineNickRow,
+            isTablet && styles.inlineNickRowTablet,
+            { minHeight: hubMetrics.rowHeight },
+            nicknameActionsVisible && { paddingRight: isTablet ? 36 : 32 },
+          ]}
+        >
+          <Ionicons name="person-outline" size={isTablet ? 24 : compactLandscape ? 20 : 22} color={WELCOME_PROFILE_ROW_ICON} />
+          <TextInput
+            ref={nicknameInputRef}
+            testID="profile-nickname-input"
+            value={nick ?? ''}
+            onChangeText={(value) => {
+              setSavedToast?.(false);
+              setNick(value);
+            }}
+            onFocus={() => setAccountOpen(true)}
+            onBlur={() => setAccountOpen(false)}
+            editable={!busy}
+            style={[
+              styles.inlineNickInput,
+              { height: hubMetrics.rowHeight, fontSize: isTablet ? 15 : compactLandscape ? 13 : 14 },
+            ]}
+            placeholder={t('nickname', lang)}
+            placeholderTextColor={WELCOME_MUTED_TEXT}
+            accessibilityLabel={t('nickname', lang)}
+            maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
+            autoCorrect={false}
+            autoCapitalize="none"
+            disableFullscreenUI
+            returnKeyType="done"
+            blurOnSubmit={false}
+            onSubmitEditing={() => { void saveNickname(); }}
+          />
+          {nicknameActionsVisible ? (
+            <View style={styles.inlineNickActions}>
+              <Pressable
+                testID="profile-nickname-save"
+                accessibilityRole="button"
+                accessibilityLabel={t('save', lang)}
+                accessibilityState={{ disabled: busy, busy: !!saving }}
+                disabled={busy}
+                style={({ pressed }) => [
+                  styles.inlineNickAction,
+                  styles.inlineNickSave,
+                  { width: nicknameActionSize, height: nicknameActionSize, opacity: busy ? 0.4 : pressed ? 0.6 : 1 },
+                ]}
+                onPress={() => { void saveNickname(); }}
+              >
+                <Ionicons name="checkmark" size={Math.min(21, nicknameActionSize - 8)} color={UI_ACCENT} />
+              </Pressable>
+              <Pressable
+                testID="profile-nickname-clear"
+                accessibilityRole="button"
+                accessibilityLabel={t('deleteNick', lang)}
+                accessibilityState={{ disabled: busy || !nick }}
+                disabled={busy || !nick}
+                style={({ pressed }) => [
+                  styles.inlineNickAction,
+                  styles.inlineNickDelete,
+                  { width: nicknameActionSize, height: nicknameActionSize, opacity: busy || !nick ? 0.4 : pressed ? 0.6 : 1 },
+                ]}
+                onPress={() => { void deleteNickname(); }}
+              >
+                <Ionicons name="trash-outline" size={Math.min(18, nicknameActionSize - 8)} color={WELCOME_PROFILE_ROW_ICON} />
+              </Pressable>
+            </View>
+          ) : (
+            <Pressable
+              style={[styles.inlineNickAction, { height: hubMetrics.rowHeight }]}
+              accessibilityRole="button"
+              accessibilityLabel={t('nickname', lang)}
+              onPress={() => nicknameInputRef.current?.focus()}
+              disabled={busy}
+            >
+              <Ionicons name="pencil-outline" size={18} color={WELCOME_PROFILE_ROW_ICON} />
+            </Pressable>
+          )}
+        </View>
+        <View style={[
+          styles.inlineNickDivider,
+          { marginLeft: isTablet ? 52 : compactLandscape ? 44 : 46, marginRight: isTablet ? 36 : 32 },
+          accountOpen && { backgroundColor: UI_ACCENT },
+        ]} />
         <WelcomeProfileRow
           dense
           rowHeight={hubMetrics.rowHeight}
@@ -978,63 +976,13 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     </View>
   );
 
-  /** Панель ввода ника — отдельно, чтобы в landscape скроллить её без аватара. */
-  const hubAccountPanel = (
-      <View
-        style={[
-          styles.accountPanel,
-          isTablet && styles.accountPanelTablet,
-          compactLandscape && styles.accountPanelLandscape,
-        ]}
-      >
-        <PaperInput
-          value={nick ?? ''}
-          disableFullscreenUI
-          onChangeText={setNick}
-          mode="outlined"
-          dense
-          theme={{ roundness: 12 }}
-          outlineStyle={{ borderWidth: 0, borderRadius: 12 }}
-          style={styles.nickInput}
-          contentStyle={styles.nickInputContent}
-          textColor={LIVI.white}
-          placeholder={t('nickname', lang)}
-          placeholderTextColor={WELCOME_MUTED_TEXT}
-          maxFontSizeMultiplier={APP_INPUT_MAX_FONT_SIZE_MULTIPLIER}
-          autoCorrect={false}
-          autoCapitalize="none"
-          editable={!busy}
-        />
-        <View style={styles.accountActions}>
-          <Pressable onPress={onClearNick} disabled={busy || !displayNick} style={styles.accountSecondary}>
-            <AdaptiveText style={styles.accountSecondaryText} numberOfLines={1}>
-              {t('deleteNick', lang)}
-            </AdaptiveText>
-          </Pressable>
-          <Pressable
-            onPress={() => {
-              handleSaveProfile();
-              closeAccountEdit();
-            }}
-            disabled={busy}
-            style={[styles.accountSave, savedToast && styles.accountSaveDone]}
-          >
-            <AdaptiveText style={styles.accountSaveText} numberOfLines={1}>
-              {savedToast ? t('saved', lang) : t('save', lang)}
-            </AdaptiveText>
-          </Pressable>
-        </View>
-      </View>
-  );
-
   // Одна структура при любом состоянии: открытие ника меняло обёртки (View → ScrollView),
   // аватар монтировался заново и мигал, пока картинка не загрузится снова.
   const hubBalanced = !needsHubScroll;
   const hubScrollBody = (
-    <View style={hubBalanced ? styles.hubMainBalance : null}>
+    <View style={hubBalanced ? [styles.hubMainBalance, !isTablet && styles.hubMainBalancePhone] : null}>
       <View style={hubBalanced ? styles.hubMainTop : null}>{hubAvatarSection}</View>
-      {hubBalanced ? <View style={styles.hubMainSpacer} /> : null}
-      {accountOpen ? hubAccountPanel : null}
+      {hubBalanced && isTablet ? <View style={styles.hubMainSpacer} /> : null}
       {hubListStack}
       {hubLogoutButton}
     </View>
@@ -1270,61 +1218,18 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             ]}
             onLayout={handleHubPaneLayout}
           >
-            {accountOpen && isLandscape ? (
-              /* Ввод ника: аватар остаётся на своём месте, прокручивается только
-                 панель со списком — иначе открытие поля сдвигало аватар. */
-              <View style={styles.hubMainDock}>
-                {hubAvatarSection}
-                <ScrollView
-                  style={styles.hubScrollBelowAvatar}
-                  contentContainerStyle={styles.hubMainDockScroll}
-                  scrollEnabled
-                  nestedScrollEnabled
-                  keyboardShouldPersistTaps="handled"
-                  showsVerticalScrollIndicator={false}
-                  bounces={false}
-                  overScrollMode="never"
-                >
-                  {hubAccountPanel}
-                  {hubListStack}
-                  {hubLogoutButton}
-                </ScrollView>
-              </View>
-            ) : needsHubScroll && stickyAvatarOnScroll ? (
-              <ScrollView
-                style={[styles.hubMainDock, { marginTop: hubMetrics.gapTop }]}
-                contentContainerStyle={styles.hubMainDockScroll}
-                // Аватар — липкий заголовок: прокручивается, у верха фиксируется
-                // и остаётся поверх карточек, которые уезжают под него.
-                stickyHeaderIndices={[0]}
-                scrollEnabled
-                nestedScrollEnabled
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-                bounces={false}
-                overScrollMode="never"
-              >
-                {hubAvatarSectionSticky}
-                {hubListStack}
-                {hubLogoutButton}
-              </ScrollView>
-            ) : !isLandscape ? (
-              // Без скролла flexGrow контейнера растягивает hubMainBalance на всю высоту.
-              <ScrollView
-                style={styles.hubMainDock}
-                contentContainerStyle={styles.hubMainDockScroll}
-                scrollEnabled={needsHubScroll}
-                nestedScrollEnabled
-                keyboardShouldPersistTaps="handled"
-                showsVerticalScrollIndicator={false}
-                bounces={false}
-                overScrollMode="never"
-              >
-                {hubScrollBody}
-              </ScrollView>
-            ) : (
-              <View style={styles.hubMainDock}>{hubScrollBody}</View>
-            )}
+            <ScrollView
+              style={styles.hubMainDock}
+              contentContainerStyle={styles.hubMainDockScroll}
+              scrollEnabled={needsHubScroll}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="always"
+              showsVerticalScrollIndicator={false}
+              bounces={false}
+              overScrollMode="never"
+            >
+              {hubScrollBody}
+            </ScrollView>
           </View>
         ) : (
           <View style={styles.subScreenPane}>
@@ -1458,6 +1363,11 @@ const styles = StyleSheet.create({
     // излишек высоты уходит в hubMainSpacer под аватаром.
     justifyContent: 'flex-end',
   },
+  hubMainBalancePhone: {
+    // Центрируем профиль целиком: свободное место больше не превращается
+    // в один большой зазор между фото и первой карточкой.
+    justifyContent: 'center',
+  },
   hubMainTop: {
     flexShrink: 0,
     width: '100%',
@@ -1494,63 +1404,48 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     paddingHorizontal: WELCOME_FRIENDS_LIST_INSET,
   },
-  hubListStackNickOpen: { marginTop: 8 },
-  accountPanel: {
-    marginHorizontal: WELCOME_FRIENDS_LIST_INSET,
-    marginTop: 10,
-    marginBottom: 4,
-    paddingHorizontal: 0,
-    paddingVertical: 4,
+  inlineNickRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 12,
   },
-  accountPanelLandscape: {
-    marginTop: 4,
-    marginBottom: 2,
-    paddingVertical: 2,
+  inlineNickRowTablet: { paddingHorizontal: 16 },
+  inlineNickInput: {
+    flex: 1,
+    minWidth: 0,
+    padding: 0,
+    margin: 0,
+    color: WELCOME_HEADER_TITLE,
+    textAlignVertical: 'center',
+    includeFontPadding: false,
   },
-  accountPanelTablet: {
-    width: '92%',
-    maxWidth: 900,
-    alignSelf: 'center',
-    marginHorizontal: 0,
-    marginTop: 14,
-    marginBottom: 8,
+  inlineNickActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
   },
-  nickInput: {
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    marginBottom: 8,
-    borderRadius: 12,
-    overflow: 'hidden',
-    height: 40,
+  inlineNickAction: {
+    width: 30,
+    alignItems: 'center',
     justifyContent: 'center',
   },
-  nickInputContent: {
-    paddingVertical: 0,
-    marginVertical: 0,
-    fontSize: 14,
-    lineHeight: 18,
-  },
-  accountActions: { flexDirection: 'row', gap: 8 },
-  // Панель ника лежит прямо на сцене: без сплошной подложки кнопки терялись на картинке.
-  accountSecondary: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
+  inlineNickSave: {
     borderRadius: 999,
-    backgroundColor: UI_SURFACE,
     borderWidth: StyleSheet.hairlineWidth,
-    borderColor: 'rgba(255,255,255,0.1)',
+    borderColor: 'rgba(98, 176, 216, 0.5)',
+    backgroundColor: UI_ACCENT_SOFT,
   },
-  accountSecondaryText: { color: WELCOME_MUTED_TEXT, fontSize: 13 },
-  accountSave: {
-    flex: 1,
-    paddingVertical: 7,
-    alignItems: 'center',
+  inlineNickDelete: {
     borderRadius: 999,
-    // Приглушённый тон акцента на слейте — чуть темнее прежних 24% акцента поверх сцены.
-    backgroundColor: '#344A5A',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(248, 113, 113, 0.5)',
+    backgroundColor: 'rgba(248, 113, 113, 0.14)',
   },
-  accountSaveDone: { backgroundColor: 'rgba(51, 139, 73, 0.25)' },
-  accountSaveText: { color: LIVI.white, fontSize: 13, fontWeight: '600' },
+  inlineNickDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: WELCOME_GLASS_BORDER,
+  },
   helpCardInner: {
     paddingVertical: 16,
     paddingHorizontal: 14,

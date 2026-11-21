@@ -330,7 +330,7 @@ function HomeWelcomeViewInner({
    */
   const nickFont = useNickDigitalFont();
   const nickText = String(centerProfile.savedNick || '').trim();
-  const nickFontSize = isTabletLayout ? 42 : compactLayout || shortPhone ? 28 : 32;
+  const nickFontSize = isTabletLayout ? 40 : compactLayout || shortPhone ? 26 : 30;
   const nickLineH = Math.round(nickFontSize * 1.25);
   const nickGap = isTabletLayout ? 16 : 10;
   const showNick = !!nickText && !splitStage && !tightStage;
@@ -533,7 +533,7 @@ function HomeWelcomeViewInner({
           <View>
             <GestureDetector gesture={radarGesture}>
             {/* collapsable: иначе Android выкидывает «пустой» view и жесту не к чему крепиться. */}
-            <View collapsable={false}>
+            <View collapsable={false} style={welcomeStyles.radarVisual}>
             <WelcomeRadar
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
@@ -672,6 +672,9 @@ const welcomeStyles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  radarVisual: {
+    transform: [{ translateY: -32 }],
+  },
   /** Короткая landscape: радар слева, текст и CTA справа — без скролла. */
   stageRow: {
     flex: 1,
@@ -715,6 +718,7 @@ const welcomeStyles = StyleSheet.create({
     left: 0,
     right: 0,
     alignItems: 'center',
+    transform: [{ translateY: -24 }],
   },
   nick: {
     color: WELCOME_HEADER_TITLE,
