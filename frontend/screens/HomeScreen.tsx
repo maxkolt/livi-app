@@ -63,7 +63,6 @@ import type { Lang } from '../utils/i18n';
 import { useLang } from '../store/lang';
 
 import { getInstallAuthHeaders, getInstallId, getInstallSecret, resetInstallId } from '../utils/installId';
-import { accountDataReset } from '../utils/accountDataResetRuntime';
 import { logger } from '../utils/logger';
 import { markCallPerf, callPerfSpan } from '../utils/callPerfTrace';
 import { trimNick } from '../utils/userDisplayName';
@@ -787,11 +786,6 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // снова уходил raw data: → AvatarImage резолвил второй раз → кадр с #2A2C31.
   const [myFullAvatarResolvedUri, myFullAvatarResolvedReady] = useResolvedImageUri(myFullAvatarUri || '');
   const [savedNick, setSavedNick] = useState<string>('');      // сохранённый ник
-  useEffect(() => {
-    if (savedNick.trim() && accountDataReset.shouldOpenProfile()) {
-      void accountDataReset.completeProfile().catch(() => {});
-    }
-  }, [savedNick]);
   
   // Отладочная версия setSavedNick с логированием
   const setSavedNickDebug = useCallback((value: string) => {

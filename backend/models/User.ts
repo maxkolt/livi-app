@@ -30,6 +30,7 @@ interface IUser {
   feedbackText?: string;
   /** Публичный X25519-ключ сквозного шифрования чата (base64, 32 байта). Пусто — шифрование не включено. */
   e2ePublicKey?: string;
+  mediaEncryptionVersion?: number;
   e2eKeyUpdatedAt?: Date;
   /** Резервная копия приватного ключа под паролем пользователя. Никогда не отдаётся без authKey. */
   e2eBackup?: IE2eKeyBackup;
@@ -139,6 +140,7 @@ const UserSchema = new Schema<IUser>(
       type: String,
       default: '',
     },
+    mediaEncryptionVersion: { type: Number, enum: [1], default: undefined },
 
     e2eKeyUpdatedAt: {
       type: Date,

@@ -3,13 +3,12 @@ import { logger } from "../../utils/logger";
 import { shared } from "./shared";
 import { socket } from "./socketCore";
 import { SOCKET_CONNECT_WAIT_MS } from "./constants";
-import { accountDataReset } from '../../utils/accountDataResetRuntime';
 
 type AnyObj = Record<string, unknown>;
 
 /** @internal used by emitAck / messages; not part of public socket.ts facade */
 export async function waitForConnect(ms = 8000): Promise<void> {
-  await accountDataReset.ensureReady();
+
   if (socket.connected) return;
   // Первое подключение (VPN / медленный DNS): не обрываем раньше, чем engine.io handshake.
   const effectiveMs = !shared.hasConnectedEver ? Math.max(ms, SOCKET_CONNECT_WAIT_MS) : ms;
@@ -68,7 +67,7 @@ export function warmCallSignaling(): void {
   // пока manager реально не reconnect'ится. Раньше мы выходили тут и early call:accept ждал зря.
   // Если сокет уже disconnected — всегда мягко подталкиваем connect().
   void (async () => {
-    await accountDataReset.ensureReady();
+
     try {
       const [installId, installSecret] = await Promise.all([getInstallId(), getInstallSecret()]);
 
@@ -94,7 +93,7 @@ export async function emitAck<T = unknown>(
   timeoutMs = 12000,
   retries = 2,
 ): Promise<T> {
-  await accountDataReset.ensureReady();
+
   // 1) если оффлайн/реконнект — сначала дождаться коннекта
   if (!socket.connected || shared.reconnecting) {
     try {

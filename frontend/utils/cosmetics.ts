@@ -211,24 +211,6 @@ void hydrateCosmetics();
 
 /** Startup reset: disk removal alone must not restore a previous wallet/frame
  * from this module's already hydrated memory or a scheduled persistence timer. */
-export async function clearCosmeticsForAccountReset(): Promise<void> {
-  await hydratePromise;
-  if (persistTimer) clearTimeout(persistTimer);
-  persistTimer = null;
-  entitlementRevision++;
-  loadSequence++;
-  loadPromise = null;
-  cached = EMPTY;
-  persistedOwnId = '';
-  userFrameRefreshers.forEach(refresh => refresh.stop());
-  userFrameRefreshers.clear();
-  stopFrameNetworkWatch?.();
-  userFrameCache.clear();
-  listeners.forEach(listener => listener(cached));
-  userFrameListeners.forEach(subs => subs.forEach(listener => listener('')));
-  await setChatWallpaperId('dark', DEFAULT_DARK_WALLPAPER_ID);
-}
-
 /** true, когда рамки с прошлого запуска уже подняты с диска (или их нет). */
 export function useCosmeticsHydrated(): boolean {
   const [value, setValue] = useState(hydrated);

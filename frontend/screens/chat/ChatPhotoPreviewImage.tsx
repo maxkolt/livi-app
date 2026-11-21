@@ -1,4 +1,5 @@
 import React from 'react';
+import { useProtectedMediaUri } from '../../hooks/useProtectedMediaUri';
 import { Image as ExpoImage, type ImageProps } from 'expo-image';
 import {
   chatPhotoPreviewLayout, validChatPhotoDimensions, peekChatPhotoDimensions,
@@ -30,5 +31,11 @@ type Props = Omit<ImageProps, 'contentFit' | 'placeholderContentFit' | 'transiti
 
 /** Complete photo content remains visible while dimensions are discovered or a legacy message loads. */
 export function ChatPhotoPreviewImage(props: Props) {
-  return <ExpoImage {...props} contentFit="contain" placeholderContentFit="contain" transition={0} />;
+  const source = props.source;
+  const rawUri = source && typeof source === 'object' && !Array.isArray(source) && 'uri' in source ? String(source.uri || '') : '';
+  return rawUri.includes('/uploads/media/') ? <ProtectedPhotoImage {...props} rawUri={rawUri} /> : <ExpoImage {...props} contentFit="contain" placeholderContentFit="contain" transition={0} />;
+}
+function ProtectedPhotoImage({ rawUri, ...props }: Props & { rawUri: string }) {
+  const uri = useProtectedMediaUri(rawUri);
+  return <ExpoImage {...props} source={uri ? { uri } : undefined} contentFit="contain" placeholderContentFit="contain" transition={0} />;
 }

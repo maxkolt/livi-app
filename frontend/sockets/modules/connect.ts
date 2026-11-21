@@ -31,7 +31,6 @@ import { socket } from "./socketCore";
 import { __notifyCurrentUserId } from "./authState";
 import { nextSocketTransportOrder } from "./socketTransportPreference";
 import { closeSocketTransportForRecovery } from './socketRecovery';
-import { accountDataReset } from '../../utils/accountDataResetRuntime';
 
 type ConnectionGlobals = typeof global & {
   __incomingCallScreenVisibleRef?: { current: boolean };
@@ -254,7 +253,7 @@ function isExpectedSocketConnectError(error: unknown): boolean {
 let connectAttemptStartedAt = 0;
 
 export async function applyAuthAndConnect() {
-  await accountDataReset.ensureReady();
+
   if (shared.connectAttemptPromise) return shared.connectAttemptPromise;
 
   shared.connectAttemptPromise = (async () => {
@@ -372,7 +371,7 @@ export async function applyAuthAndConnect() {
 }
 
 export async function boot() {
-  await accountDataReset.ensureReady();
+
   // Защита от повторного вызова
   if (shared.bootInProgress) {
     return;

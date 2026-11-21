@@ -1,3 +1,4 @@
+import type { MediaContent } from './mediaEnvelope';
 import type { ChatImageMetadata } from '../../screens/chat/chatMessageTypes';
 import { normalizeChatImageMetadata } from '../../utils/chatImageMetadata';
 import type { E2eEnvelope } from './e2eCrypto';
@@ -1057,6 +1058,7 @@ export async function editMessage(
   text: string,
   /** Собеседник: без него правку нельзя зашифровать. */
   peerId?: string,
+  media?: MediaContent,
 ): Promise<{ ok: boolean; queued?: boolean; error?: string }> {
   const trimmedMid = String(messageId || "").trim();
   const trimmedText = String(text ?? "");
@@ -1074,6 +1076,7 @@ export async function editMessage(
       id: `edit_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
       messageId: trimmedMid,
       text: trimmedText,
+      ...(media ? { media } : {}),
       ...(peerId ? { to: peerId } : {}),
       createdAt: Date.now(),
     });
@@ -1082,7 +1085,7 @@ export async function editMessage(
 
   let wire: Awaited<ReturnType<typeof toWireEditPayload>>;
   try {
-    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId);
+    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId, media);
   } catch (e) {
     if (!(e instanceof E2eUnavailableError)) throw e;
     if (e.reason === "locked") return { ok: false, error: "e2e_locked" };
@@ -1097,7 +1100,7 @@ export async function editMessage(
     if (r?.error !== "e2e_key_mismatch" || !peerId) return r;
     // Ключ сменился — перечитываем и шифруем правку заново, один раз.
     await invalidateKeysAfterMismatch(peerId);
-    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId);
+    wire = await toWireEditPayload(trimmedMid, trimmedText, peerId, media);
     return emitAck<{ ok: boolean; error?: string }>("message:edit", wire);
   };
 
@@ -1194,7 +1197,7 @@ export async function updateMessageUris(messageId: string, uris: string[]): Prom
   const mid = String(messageId || "").trim();
   if (!mid) return { ok: false, error: "bad_request" };
   const normalized = (Array.isArray(uris) ? uris : [])
-    .map((u) => String(u || "").trim())
+    .map((u) => String(u || "").trim().split('#')[0])
     .filter(Boolean)
     .slice(0, 10);
   try {

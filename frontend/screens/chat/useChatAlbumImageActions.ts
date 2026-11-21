@@ -52,6 +52,7 @@ export function useChatAlbumImageActions({
   const downloadUriToCache = React.useCallback(async (uri: string): Promise<string> => {
     const resolved = resolveMediaUri(uri) || uri;
     if (!resolved) return '';
+    if (isPrivateMedia(resolved)) return resolveProtectedMedia(resolved);
     if (/^file:\/\//i.test(resolved) || /^content:\/\//i.test(resolved)) return resolved;
     try {
       const ext = resolved.toLowerCase().includes('.png') ? 'png' : 'jpg';
@@ -227,3 +228,4 @@ export function useChatAlbumImageActions({
     applyAlbumPick,
   };
 }
+import { isPrivateMedia, resolveProtectedMedia } from '../../utils/protectedMedia';

@@ -68,7 +68,7 @@ describe('resolveIncomingEnvelope', () => {
   });
 
   it('rejects unsupported encrypted message types', async () => {
-    await expect(resolveIncomingEnvelope({ ...base, type: 'audio', rawEnc: envelope() })).resolves.toEqual({
+    await expect(resolveIncomingEnvelope({ ...base, type: 'sticker', rawEnc: envelope() })).resolves.toEqual({
       ok: false,
       error: 'invalid_enc',
     });

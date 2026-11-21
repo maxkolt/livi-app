@@ -5,7 +5,7 @@ import { fetchWithTimeout } from './fetchWithTimeout';
 import type { InstallMigrationChallenge } from './installMigrationProof';
 let inFlight: { userId: string; promise: Promise<boolean> } | null = null;
 /** Best-effort staged enrollment. Never reset identity, generate a chat key, or block startup. */
-export function migrateLegacyInstall(userId: string): Promise<boolean> {
+export function migrateLegacyInstall(userId: string, options?: { enrollOnly?: boolean }): Promise<boolean> {
   if (inFlight?.userId === userId) return inFlight.promise;
   const promise = (async () => {
     try {
@@ -26,6 +26,7 @@ export function migrateLegacyInstall(userId: string): Promise<boolean> {
         const completion = await post('complete', { id: challenge.id, proof });
         if (!completion.ok || !(await completion.json()).ok || getCurrentUserId() !== userId) return false;
       }
+      if (options?.enrollOnly) return true;
       const { emitAck } = await import('../sockets/modules/emit');
       const result = await emitAck<{ ok: boolean; userId?: string }>('reauth', { userId, installSecret }, 6000, 0);
       return result?.ok === true && result.userId === userId && getCurrentUserId() === userId;

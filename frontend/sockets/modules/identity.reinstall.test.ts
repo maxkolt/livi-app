@@ -19,9 +19,6 @@ const emitAckMock = jest.fn((event: string, _payload?: unknown) => {
 const regenerateRandomInstallIdMock = jest.fn(async () => 'inst_fresh_random');
 const getInstallIdMock = jest.fn(async () => 'inst_android_STABLE');
 const getInstallSecretMock = jest.fn(async () => 'a'.repeat(64));
-jest.mock('../../utils/accountDataResetRuntime', () => ({ accountDataReset: {
-  ensureReady: async () => {}, getGeneration: () => '', refresh: async () => {},
-} }));
 
 jest.mock('@react-native-async-storage/async-storage', () => ({
   getItem: jest.fn(async () => null),

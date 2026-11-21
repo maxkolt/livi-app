@@ -66,7 +66,7 @@ export async function resolveIncomingEnvelope(args: {
   if (args.rawEnc == null) return { ok: true, enc: null };
   const enc = parseE2eEnvelope(args.rawEnc);
   // id сообщения зашит в шифротекст — сервер не должен подставлять свой.
-  if (!enc || !['text', 'image'].includes(args.type) || !args.clientMessageId) return { ok: false, error: 'invalid_enc' };
+  if (!enc || !['text', 'image', 'audio', 'video_note'].includes(args.type) || !args.clientMessageId) return { ok: false, error: 'invalid_enc' };
   const keys = await args.loadPublicKeys([args.from, args.to]);
   if (keys[args.from] !== enc.spk || keys[args.to] !== enc.rpk) return { ok: false, error: 'e2e_key_mismatch' };
   return { ok: true, enc };

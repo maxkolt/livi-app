@@ -7,6 +7,7 @@ import mongoose from 'mongoose';
 import multer from 'multer';
 import crypto from 'crypto';
 import { checkRateLimit } from '../utils/rateLimit';
+import MediaUpload from '../models/MediaUpload';
 
 const router = Router();
 const MAX_MULTIPART_BYTES = 100 * 1024 * 1024;
@@ -29,6 +30,7 @@ const ALLOWED_MEDIA_MIME_TYPES = new Set([
   'audio/webm',
   'audio/wav',
   'audio/x-wav',
+  'application/vnd.livi.encrypted',
 ]);
 
 // IMPORTANT: save uploads into the same PUBLIC_DIR that the server serves from.
@@ -71,6 +73,7 @@ if (!fs.existsSync(uploadsDir)) {
 }
 
 function extensionForMimeType(mimeType: string): string {
+  if (mimeType === 'application/vnd.livi.encrypted') return 'livi';
   if (mimeType.startsWith('image/')) {
     const ext = mimeType.split('/')[1];
     return ext === 'jpeg' ? 'jpg' : ext;
@@ -181,6 +184,7 @@ router.post('/upload/media', requireUploadAuth('upload_media', 25), express.json
       return res.status(413).json({ ok: false, error: 'file_too_large' });
     }
     await fs.promises.writeFile(filePath, buffer);
+    await MediaUpload.create({ filename: fileName, owner: authedUserId });
 
     const url = `/uploads/media/${fileName}`;
 
@@ -201,7 +205,7 @@ const multipartStorage = multer.diskStorage({
 });
 const upload = multer({
   storage: multipartStorage,
-  limits: { fileSize: MAX_MULTIPART_BYTES, files: 1 },
+  limits: { fileSize: MAX_MULTIPART_BYTES + 32, files: 1 },
   fileFilter: (_req, file, cb) => {
     const mimeType = String(file.mimetype || '');
     if (!ALLOWED_MEDIA_MIME_TYPES.has(mimeType)) {
@@ -231,8 +235,17 @@ router.post('/upload/media/multipart', async (req, res) => {
       if (!file?.path || !file?.filename || !file.size) {
         return res.status(400).json({ ok: false, error: 'missing_file' });
       }
+      if (file.size > MAX_MULTIPART_BYTES && file.mimetype !== 'application/vnd.livi.encrypted') {
+        await fs.promises.unlink(file.path).catch(() => {});
+        return res.status(413).json({ ok: false, error: 'file_too_large' });
+      }
 
       const url = `/uploads/media/${file.filename}`;
+      try { await MediaUpload.create({ filename: file.filename, owner: authedUserId }); }
+      catch {
+        await fs.promises.unlink(file.path).catch(() => {});
+        res.status(503).json({ ok: false, error: 'upload_ownership_unavailable' }); return;
+      }
       return res.json({ ok: true, url });
     });
   } catch (error: unknown) {

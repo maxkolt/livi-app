@@ -29,6 +29,8 @@ import { useLang } from '../store/lang';
 import { t } from '../utils/i18n';
 import PhotoEditor from '@baronha/react-native-photo-editor';
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
+import { useProtectedMediaUri } from '../hooks/useProtectedMediaUri';
+import { isPrivateMedia, resolveProtectedMedia } from '../utils/protectedMedia';
 import { prefetchImages } from '../utils/imageOptimization';
 import { WELCOME_NAV_ACTIVE_ICON } from '../screens/home/constants';
 import type { PickedChatImage } from '../screens/chat/chatMessageTypes';
@@ -60,6 +62,7 @@ function loopedAlbumIndex(realIndex: number, count: number): number {
 }
 
 function ViewerImage({ uri, cacheKey }: { uri: string; cacheKey?: string }) {
+  uri = useProtectedMediaUri(uri);
   const isAndroidData = Platform.OS === 'android' && !!uri && /^data:/i.test(uri);
   const [androidFileUri, dataReady] = useResolvedImageUri(isAndroidData ? uri : '');
   const imageSourceUri = isAndroidData ? androidFileUri : uri;
@@ -475,7 +478,7 @@ export default function MediaViewer({
     const fileName = hasExt ? baseName : `${baseName}.jpg`;
     const target = FileSystem.cacheDirectory + fileName;
     try {
-      const { uri: localUri } = await FileSystem.downloadAsync(currentUri, target);
+      const localUri = isPrivateMedia(currentUri) ? await resolveProtectedMedia(currentUri) : (await FileSystem.downloadAsync(currentUri, target)).uri;
       return localUri;
     } catch (e) {
       throw e;

@@ -1,3 +1,4 @@
+import { getMessageImageUris } from './chatAlbum';
 import type { ChatMessage } from './chatMessageTypes';
 /** Text/sticker composer send + emoji panel helpers. */
 
@@ -120,7 +121,9 @@ export function useChatComposer({
       messageTextRef.current = '';
       setMessageText('');
       setEditingMessageId(null);
-      const result = await editMessage(editingMessageId, newText, peerId);
+      const original = latestMessagesForPersistRef.current.find(m => m.id === editingMessageId);
+      const media = original?.type === 'image' ? { type: 'image', text: newText, uri: original.uri, uris: getMessageImageUris(original), thumbUri: original.thumbUri } : undefined;
+      const result = await editMessage(editingMessageId, newText, peerId, media);
       if (result.ok || result.queued) {
         setMessages((prev) => {
           const updated = prev.map((m) =>

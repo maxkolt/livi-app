@@ -4,192 +4,22 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { logger } from './logger';
 import { getInstallAuthHeaders } from './installId';
 import { API_BASE } from '../sockets/socket';
+import { encryptMediaForUpload, attachMediaKey } from './protectedMedia';
 
-const API_BASE_URL = API_BASE;
-const LEGACY_BASE64_MAX_MB = 10;
-
-// Some production deployments may not have multipart endpoint enabled yet.
-// Cache support after the first request to avoid spamming logs and wasting time on repeated 404s.
-let multipartSupported: boolean | null = null;
-
-/**
- * Почему загрузка не удалась: network — нет связи или таймаут (повторить, когда сеть
- * вернётся), server — сервер отказал, file — файла нет или он слишком большой
- * (повтор не поможет).
- */
-type MediaUploadErrorKind = 'network' | 'server' | 'file';
-
-type MediaUploadResult = {
-  success: boolean;
-  url?: string;
-  error?: string;
-  kind?: MediaUploadErrorKind;
-  abortController?: AbortController;
-};
-
-/** Multipart без ответа дольше этого — считаем, что сети нет. */
 const MULTIPART_TIMEOUT_MS = { audio: 45_000, image: 180_000, video: 300_000 } as const;
+type MediaUploadOptions = { registerCancel?: (cancel: () => void) => void };
+type MediaUploadResult = { success: boolean; url?: string; error?: string; kind?: 'network' | 'server' | 'file' };
 
-type MediaUploadOptions = {
-  /** Отдаёт функцию отмены загрузки: очередь обрывает её, когда сеть сменилась. */
-  registerCancel?: (cancel: () => void) => void;
-};
-
-/**
- * Конвертирует локальный файл в dataUri
- */
-const fileToDataUri = async (uri: string): Promise<string | null> => {
+/** Files leave the device only after encryption; keys stay in the chat envelope. */
+export async function uploadMediaToServer(
+  localUri: string, type: 'image' | 'audio' | 'video', onProgress?: (progress: number) => void,
+  from?: string, to?: string, options?: MediaUploadOptions,
+): Promise<MediaUploadResult> {
+  if (!from || !to) return { success: false, kind: 'server', error: 'unauthorized' };
   try {
-    // Нормализуем URI для разных платформ
-    const normalizedUri = uri.startsWith('file://') ? uri : `file://${uri}`;
-    
-    // Читаем файл как base64
-    const base64 = await FileSystem.readAsStringAsync(normalizedUri, {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    
-    // Определяем MIME тип по расширению файла
-    const extension = uri.split('.').pop()?.toLowerCase();
-    let mimeType = 'application/octet-stream';
-    
-    if (extension) {
-      switch (extension) {
-        case 'jpg':
-        case 'jpeg':
-          mimeType = 'image/jpeg';
-          break;
-        case 'png':
-          mimeType = 'image/png';
-          break;
-        case 'gif':
-          mimeType = 'image/gif';
-          break;
-        case 'webp':
-          mimeType = 'image/webp';
-          break;
-        case 'mp4':
-          mimeType = 'video/mp4';
-          break;
-        case 'mov':
-          mimeType = 'video/quicktime';
-          break;
-        case 'webm':
-          mimeType = 'video/webm';
-          break;
-        // audio (voice messages)
-        case 'm4a':
-          mimeType = 'audio/mp4';
-          break;
-        case 'aac':
-          mimeType = 'audio/aac';
-          break;
-        case 'mp3':
-          mimeType = 'audio/mpeg';
-          break;
-        case 'ogg':
-          mimeType = 'audio/ogg';
-          break;
-        case 'wav':
-          mimeType = 'audio/wav';
-          break;
-      }
-    }
-    
-    return `data:${mimeType};base64,${base64}`;
-  } catch (error) {
-    logger.error('Error converting file to dataUri:', error);
-    return null;
-  }
-};
-
-/** Ошибки старого соединения из пула после смены сети: повтор сразу берёт новое. */
-const STALE_CONNECTION_RE = /connection closed|stream was reset|connection abort|unexpected end of stream|broken pipe|connection reset/i;
-
-type MultipartAttempt =
-  | { kind: 'ok'; url: string }
-  | { kind: 'network'; error: string; stale: boolean }
-  | { kind: 'server' | 'file'; error: string }
-  | { kind: 'notFound' };
-
-async function uploadMultipartOnce(
-  fileUri: string,
-  type: 'image' | 'audio' | 'video',
-  authHeaders: Record<string, string>,
-  options: MediaUploadOptions | undefined,
-  onCancelledByCaller: () => void,
-): Promise<MultipartAttempt> {
-  const task = FileSystem.createUploadTask(`${API_BASE_URL}/api/upload/media/multipart`, fileUri, {
-    httpMethod: 'POST',
-    uploadType: FileSystem.FileSystemUploadType.MULTIPART,
-    fieldName: 'file',
-    headers: {
-      ...authHeaders,
-    },
-  });
-  let timedOut = false;
-  const timer = setTimeout(() => {
-    timedOut = true;
-    void task.cancelAsync().catch(() => {});
-  }, MULTIPART_TIMEOUT_MS[type]);
-  options?.registerCancel?.(() => {
-    onCancelledByCaller();
-    void task.cancelAsync().catch(() => {});
-  });
-  let res: Awaited<ReturnType<typeof task.uploadAsync>>;
-  try {
-    res = await task.uploadAsync();
-  } catch (e) {
-    const error = String((e as Error)?.message ?? e);
-    logger.warn('Multipart upload network error', { error, timedOut });
-    return { kind: 'network', error: timedOut ? 'Upload timeout' : error, stale: !timedOut && STALE_CONNECTION_RE.test(error) };
-  } finally {
-    clearTimeout(timer);
-  }
-  // null — загрузку отменили (таймаут или очередь: сеть сменилась).
-  if (!res || timedOut) return { kind: 'network', error: timedOut ? 'Upload timeout' : 'Upload cancelled', stale: false };
-
-  if (res.status === 404) {
-    // Endpoint not available on this server — disable multipart for the session.
-    multipartSupported = false;
-    return { kind: 'notFound' };
-  }
-  multipartSupported = true;
-  if (res.status >= 200 && res.status < 300) {
-    let json: { ok?: boolean; url?: string; secure_url?: string } | null = null;
-    try { json = JSON.parse(res.body || '{}'); } catch {}
-    if (json?.ok && (json.url || json.secure_url)) return { kind: 'ok', url: (json.url || json.secure_url)! };
-  }
-  logger.warn('Multipart upload rejected', { status: res.status });
-  return { kind: res.status === 413 ? 'file' : 'server', error: `Server error ${res.status}` };
-}
-
-/**
- * Загружает медиа файл на сервер и возвращает публичный URL
- */
-export const uploadMediaToServer = async (
-  localUri: string, 
-  type: 'image' | 'audio' | 'video',
-  onProgress?: (progress: number) => void,
-  from?: string,
-  to?: string,
-  options?: MediaUploadOptions,
-): Promise<MediaUploadResult> => {
-  try {
-
-    try {
-      const src = localUri.startsWith('file://') ? localUri : `file://${localUri}`;
-      const info = await FileSystem.getInfoAsync(src);
-      if (!info.exists) return { success: false, kind: 'file', error: 'File not found' };
-    } catch {
-      // Проверить не удалось — пусть решит сама загрузка.
-    }
-
     const authHeaders = await getInstallAuthHeaders();
-    
-    // IMPORTANT:
-    // Uploading raw images as base64-in-JSON is very heavy (size +33%),
-    // and becomes extremely slow on VPN / high-latency networks.
-    // We proactively resize+compress ONLY for photos to keep UX acceptable.
+    const info = await FileSystem.getInfoAsync(localUri);
+    if (!info.exists) return { success: false, kind: 'file', error: 'file_missing' };
     let workingUri = localUri;
     try {
       const ext = (localUri.split('?')[0]?.split('#')[0]?.split('.').pop() || '').toLowerCase();
@@ -213,157 +43,37 @@ export const uploadMediaToServer = async (
       // Non-fatal: fallback to original file.
     }
 
-    // Prefer multipart upload (faster & more stable on bad networks / VPN).
-    // Keep legacy base64 JSON upload as fallback for release-safety.
-    const normalizedUri = workingUri.startsWith('file://') ? workingUri : `file://${workingUri}`;
-    let cancelledByCaller = false;
-    if (multipartSupported !== false) {
-      if (onProgress) onProgress(15);
-      let mp = await uploadMultipartOnce(normalizedUri, type, authHeaders, options, () => {
-        cancelledByCaller = true;
-      });
-      // После смены сети первая попытка падает на старом соединении из пула —
-      // вторая сразу берёт новое.
-      if (mp.kind === 'network' && mp.stale && !cancelledByCaller) {
-        mp = await uploadMultipartOnce(normalizedUri, type, authHeaders, options, () => {
-          cancelledByCaller = true;
+    // Every new attachment is encrypted before it leaves the device. No
+    // plaintext retry is allowed when encryption or the peer capability fails.
+    if (from && to) {
+      const { requireMediaEncryptionPeer } = await import('../sockets/modules/e2e');
+      await requireMediaEncryptionPeer(to);
+      const protectedFile = await encryptMediaForUpload(workingUri, type);
+      try {
+        const task = FileSystem.createUploadTask(`${API_BASE}/api/upload/media/multipart`, protectedFile.uri, {
+          httpMethod: 'POST', uploadType: FileSystem.FileSystemUploadType.MULTIPART,
+          fieldName: 'file', mimeType: 'application/vnd.livi.encrypted', headers: authHeaders,
         });
-      }
-      if (mp.kind === 'ok') {
-        if (onProgress) onProgress(100);
-        return { success: true, url: mp.url };
-      }
-      if (mp.kind === 'server' || mp.kind === 'file') {
-        return { success: false, kind: mp.kind, error: mp.error };
-      }
-      if (mp.kind === 'network') {
-        // Отменила очередь (сеть сменилась) или это фото — сразу «нет сети», повторит очередь.
-        // Голосовое маленькое: пробуем ещё обычным запросом — у fetch свой HTTP-клиент,
-        // и под VPN / после смены сети он проходит, когда этот не может.
-        if (cancelledByCaller || type !== 'audio') {
-          return { success: false, kind: 'network', error: mp.error };
-        }
-      }
-    }
-    // Ниже — старая загрузка base64 в JSON: сервер без multipart (404) или голосовое,
-    // которое не прошло через multipart по сети.
-
-    // Legacy base64-in-JSON upload (small-file fallback only).
-    try {
-      const info = await FileSystem.getInfoAsync(normalizedUri);
-      const size = Number((info as { size?: number })?.size || 0);
-      if (size > LEGACY_BASE64_MAX_MB * 1024 * 1024) {
-        return { success: false, kind: 'file', error: `Multipart upload failed and legacy fallback is limited to ${LEGACY_BASE64_MAX_MB}MB` };
-      }
-    } catch {
-      // If size lookup is unavailable, keep existing fallback behavior.
+        let cancelled = false;
+        const timeout = setTimeout(() => { cancelled = true; void task.cancelAsync(); }, MULTIPART_TIMEOUT_MS[type]);
+        options?.registerCancel?.(() => { cancelled = true; void task.cancelAsync(); });
+        try {
+          const result = await task.uploadAsync();
+          if (!result || cancelled) return { success: false, kind: 'network', error: 'upload_cancelled' };
+          if (result.status < 200 || result.status >= 300) return { success: false, kind: 'server', error: 'encrypted_upload_failed' };
+          const body = JSON.parse(result.body) as { ok: boolean; url?: string };
+          if (!body.ok || !body.url) return { success: false, kind: 'server', error: 'encrypted_upload_failed' };
+          onProgress?.(100);
+          return { success: true, url: attachMediaKey(body.url, protectedFile.key) };
+        } finally { clearTimeout(timeout); }
+      } finally { await FileSystem.deleteAsync(protectedFile.uri, { idempotent: true }).catch(() => {}); }
     }
 
-    const dataUri = await fileToDataUri(normalizedUri);
-    if (!dataUri) {
-      logger.error('Failed to convert file to dataUri');
-      return { success: false, kind: 'file', error: 'Failed to convert file to dataUri' };
-    }
-    
-    const fileSizeMB = Math.round(dataUri.length / 1024 / 1024);
-    const maxSizeMB = LEGACY_BASE64_MAX_MB;
-    if (fileSizeMB > maxSizeMB) {
-      logger.error(`File too large: ${fileSizeMB}MB (max: ${maxSizeMB}MB)`);
-      return { success: false, kind: 'file', error: `File too large: ${fileSizeMB}MB (maximum allowed: ${maxSizeMB}MB)` };
-    }
-
-    // Показываем прогресс для всех файлов
-    if (onProgress) {
-      onProgress(10); // 10% - файл конвертирован
-    }
-    
-    // Симулируем прогресс загрузки для всех файлов
-    let progressInterval: NodeJS.Timeout | null = null;
-    if (onProgress) {
-      let currentProgress = 10;
-      progressInterval = setInterval(() => {
-        currentProgress += Math.random() * 3; // Увеличиваем на 0-3% каждые 150мс
-        if (currentProgress > 90) currentProgress = 90; // Не доходим до 100% до завершения
-        onProgress(Math.round(currentProgress));
-      }, 150);
-    }
-    
-    // Загружаем на сервер
-    
-    // Создаем AbortController для таймаута
-    const controller = new AbortController();
-    const timeoutMs = type === 'audio' ? 30000 : 300000; // audio: 30 с, images: 5 мин
-    const timeoutId = setTimeout(() => {
-      controller.abort();
-    }, timeoutMs);
-    options?.registerCancel?.(() => controller.abort());
-    
-    let result;
-    try {
-      
-      const response = await fetch(`${API_BASE_URL}/api/upload/media`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...authHeaders,
-        },
-        body: JSON.stringify({
-          dataUri,
-          type,
-          from,
-          to,
-        }),
-        signal: controller.signal,
-      });
-      
-      clearTimeout(timeoutId);
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
-      
-      if (!response.ok) {
-        const errorText = await response.text();
-        logger.error('Server error response:', errorText);
-        return { success: false, kind: 'server', error: `Server error ${response.status}: ${errorText}` };
-      }
-      
-      result = await response.json();
-    } catch (error) {
-      clearTimeout(timeoutId);
-      if (progressInterval) {
-        clearInterval(progressInterval);
-      }
-      if (error instanceof Error && error.name === 'AbortError') {
-        return { success: false, kind: 'network', error: `Upload timeout after ${timeoutMs/1000} seconds` };
-      }
-      return { success: false, kind: 'network', error: error instanceof Error ? error.message : 'Network error' };
-    }
-    
-    // Показываем прогресс для всех файлов
-    if (onProgress) {
-      onProgress(80); // 80% - ответ получен
-    }
-    
-    if (result.ok && (result.url || result.secure_url)) {
-      const url = result.url || result.secure_url;
-      
-      // Показываем финальный прогресс для всех файлов
-      if (onProgress) {
-        onProgress(100); // 100% - загрузка завершена
-      }
-      
-      return { success: true, url, abortController: controller };
-    } else {
-      console.error('📤 Upload failed:', result.error);
-      return { success: false, kind: 'server', error: result.error || 'Upload failed' };
-    }
-  } catch (error) {
-    console.error('📤 Upload error:', error);
-    return {
-      success: false,
-      kind: 'network',
-      error: error instanceof Error ? error.message : 'Unknown error',
-    };
+    return { success: false, kind: 'server', error: 'encryption_required' };
+  } catch (error: unknown) {
+    const code = error instanceof Error ? error.message : '';
+    const policyError = /recipient_update_required|requires_update|locked/.test(code);
+    logger.warn('Encrypted media upload failed', { reason: policyError ? 'client_update_or_key_required' : 'network_or_upload_error' });
+    return { success: false, kind: policyError ? 'server' : 'network', error: policyError ? code : 'encrypted_upload_failed' };
   }
-};
-
+}

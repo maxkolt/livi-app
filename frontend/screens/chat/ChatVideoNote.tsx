@@ -16,6 +16,7 @@ import { create } from 'zustand';
 import { MESSAGE_LONG_PRESS_MS } from '../../constants/uiTokens';
 import { UI_ACCENT } from '../home/constants';
 import { claimChatPlayback, releaseChatPlayback } from './chatPlaybackCoordinator';
+import { useProtectedMediaUri } from '../../hooks/useProtectedMediaUri';
 
 export const CHAT_VIDEO_NOTE_SIZE = 216;
 const RING_W = 3;
@@ -115,7 +116,7 @@ export const ChatVideoNote = memo(function ChatVideoNote({
       style={[styles.circle, { width: size, height: size, borderRadius: size / 2 }]}
     >
       {thumbUri ? (
-        <ExpoImage source={{ uri: thumbUri }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" />
+        <VideoNoteThumbnail uri={thumbUri} />
       ) : null}
       {active && uri ? (
         <ActiveVideoNote
@@ -160,7 +161,8 @@ function ActiveVideoNote({
   onTogglePause: () => void;
   onLongPress?: () => void;
 }) {
-  const player = useVideoPlayer(uri, (p) => {
+  const localUri = useProtectedMediaUri(uri);
+  const player = useVideoPlayer(localUri || null, (p) => {
     p.loop = false;
     p.muted = false;
     p.timeUpdateEventInterval = 0.1;
@@ -355,3 +357,8 @@ const styles = StyleSheet.create({
   },
   durationText: { color: '#fff', fontSize: 11 },
 });
+
+function VideoNoteThumbnail({ uri }: { uri: string }) {
+  const localUri = useProtectedMediaUri(uri);
+  return localUri ? <ExpoImage source={{ uri: localUri }} style={StyleSheet.absoluteFill} contentFit="cover" cachePolicy="memory-disk" /> : null;
+}

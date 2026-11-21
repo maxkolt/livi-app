@@ -1,3 +1,4 @@
+import { encodeMediaContent, decodeMediaContent } from './mediaEnvelope';
 import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
 // frontend/sockets/modules/outbox.ts
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -430,6 +431,7 @@ async function loadEditOutbox(): Promise<EditOutboxItem[]> {
         id: String(item?.id || ''),
         messageId: String(item?.messageId || '').trim(),
         text: String(item?.text ?? ''),
+        ...(item?.media && typeof item.media === 'object' ? { media: decodeMediaContent(encodeMediaContent(item.media as import('./mediaEnvelope').MediaContent), 'image') || undefined } : {}),
         ...(item?.to ? { to: String(item.to) } : {}),
         createdAt: Number(item?.createdAt || Date.now()),
       }))
@@ -1014,7 +1016,7 @@ export async function drainEditOutbox(): Promise<void> {
       if (isMessagePendingInOutbox(item.messageId)) continue;
       let wire: Record<string, unknown>;
       try {
-        wire = await toWireEditPayload(item.messageId, item.text, item.to);
+        wire = await toWireEditPayload(item.messageId, item.text, item.to, item.media);
       } catch (e) {
         // Правка зашифрованного чата не уходит открытым текстом — ждёт ключей.
         if (e instanceof E2eUnavailableError) break;

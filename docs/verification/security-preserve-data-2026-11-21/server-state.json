@@ -1,0 +1,32 @@
+{
+  "checkedAt": "2026-11-21T20:39:02.830Z",
+  "counts": {
+    "users": 932,
+    "installs": 916,
+    "friendshipmessageitems": 1516,
+    "media_uploads": 0
+  },
+  "mediaFiles": 657,
+  "qaInstallsRemaining": 0,
+  "massResetArtifactsAbsent": true,
+  "health": {
+    "ok": true,
+    "mongo": 1,
+    "socketIoRedisAdapter": true,
+    "rateLimit": {
+      "redisConfigured": true,
+      "redisStatus": "ready",
+      "sensitiveFallbackMode": "bounded_memory",
+      "memoryKeys": 0,
+      "memoryMaxKeys": 20000,
+      "redisFallbackCount": 0,
+      "failClosedCount": 0,
+      "lastRedisFallbackAt": 0,
+      "lastRedisFallbackReason": ""
+    },
+    "callKeepAlive": {
+      "users": 0,
+      "sockets": 0
+    }
+  }
+}

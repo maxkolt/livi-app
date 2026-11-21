@@ -1,3 +1,5 @@
+import { canReadMedia } from '../utils/privateMedia';
+import { uploadedMediaFileName } from '../utils/uploadedMedia';
 import { Router, type Request } from 'express';
 import type { Server } from 'socket.io';
 import mongoose from 'mongoose';
@@ -203,6 +205,10 @@ router.post('/messages/send', async (req: MessageRequest, res) => {
     if (!isOid(to)) return res.status(400).json({ ok: false, error: 'invalid_to' });
     if (!isKnownMessageType(type)) return res.status(400).json({ ok: false, error: 'invalid_type' });
     const thumbUri = videoNoteThumbUri(type, req.body?.thumbUri);
+    for (const value of [uri, thumbUri, ...(rawUris || [])]) {
+      const filename = uploadedMediaFileName(value);
+      if (filename && !await canReadMedia(me, filename)) return res.status(403).json({ ok: false, error: 'media_forbidden' });
+    }
     if (isMessageTextTooLong(text)) return res.status(400).json({ ok: false, error: 'text_too_long' });
 
     const isFriend = await areFriendsCached(me, to);

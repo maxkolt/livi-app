@@ -1,110 +1,44 @@
-/**
- * Загрузка голосового при плохой связи: старое соединение после смены сети не держит
- * отправку, а под VPN, где multipart не проходит, голосовое уходит обычным запросом.
- */
-
-const mockTasks: Array<{ uploadAsync: jest.Mock; cancelAsync: jest.Mock }> = [];
-const mockNextUpload: Array<() => Promise<unknown>> = [];
+const mockUpload = jest.fn();
+const mockCancel = jest.fn(async () => undefined);
+const mockEncrypt = jest.fn(async () => ({ uri: 'file:///encrypted.livi', key: { v: 1, k: 'secret', e: 'm4a' } }));
+const mockRequirePeer = jest.fn(async () => undefined);
 jest.mock('expo-file-system', () => ({
   FileSystemUploadType: { MULTIPART: 1 },
-  EncodingType: { Base64: 'base64' },
-  getInfoAsync: jest.fn(async () => ({ exists: true, size: 2048 })),
-  readAsStringAsync: jest.fn(async () => 'QUJD'),
-  createUploadTask: jest.fn(() => {
-    const run = mockNextUpload.shift() ?? (() => Promise.reject(new Error('no upload scripted')));
-    const task = { uploadAsync: jest.fn(run), cancelAsync: jest.fn(async () => undefined) };
-    mockTasks.push(task);
-    return task;
-  }),
+  getInfoAsync: jest.fn(async () => ({ exists: true })),
+  deleteAsync: jest.fn(async () => undefined),
+  createUploadTask: jest.fn(() => ({ uploadAsync: mockUpload, cancelAsync: mockCancel })),
 }));
 jest.mock('expo-image-manipulator', () => ({ manipulateAsync: jest.fn(), SaveFormat: { PNG: 'png', JPEG: 'jpeg' } }));
-jest.mock('./logger', () => ({ logger: { warn: jest.fn(), error: jest.fn(), debug: jest.fn(), info: jest.fn() } }));
-jest.mock('./installId', () => ({ getInstallAuthHeaders: jest.fn(async () => ({ 'x-install-id': 'inst' })) }));
+jest.mock('./logger', () => ({ logger: { warn: jest.fn() } }));
+jest.mock('./installId', () => ({ getInstallAuthHeaders: async () => ({ 'x-install-id': 'inst', 'x-install-secret': 'proof' }) }));
 jest.mock('../sockets/socket', () => ({ API_BASE: 'https://api.test' }));
-
-const mockFetch = jest.fn();
-(global as any).fetch = (...args: unknown[]) => mockFetch(...args);
-
-type Upload = typeof import('./mediaUpload');
-let upload: Upload['uploadMediaToServer'];
-
-const ok = (url: string) => async () => ({ status: 200, body: JSON.stringify({ ok: true, url }) });
-const fails = (message: string) => async () => {
-  throw new Error(message);
-};
-
-beforeEach(() => {
-  jest.resetModules();
-  mockTasks.length = 0;
-  mockNextUpload.length = 0;
-  mockFetch.mockReset();
-  upload = require('./mediaUpload').uploadMediaToServer;
+jest.mock('../sockets/modules/e2e', () => ({ requireMediaEncryptionPeer: (...args: unknown[]) => mockRequirePeer(...(args as [])) }));
+jest.mock('./protectedMedia', () => ({ encryptMediaForUpload: (...args: unknown[]) => mockEncrypt(...(args as [])), attachMediaKey: (url: string) => url+'#livi-media=encrypted-key' }));
+import * as FileSystem from 'expo-file-system';
+import { uploadMediaToServer } from './mediaUpload';
+beforeEach(() => { jest.clearAllMocks(); mockRequirePeer.mockResolvedValue(undefined); mockEncrypt.mockResolvedValue({ uri: 'file:///encrypted.livi', key: { v: 1, k: 'secret', e: 'm4a' } }); });
+it('uploads only encrypted bytes with install proof and returns a local key descriptor', async () => {
+  mockUpload.mockResolvedValue({ status: 200, body: JSON.stringify({ok:true,url:'/uploads/media/voice.livi'}) });
+  const result = await uploadMediaToServer('file:///voice.m4a','audio',undefined,'owner','peer');
+  expect(result).toMatchObject({success:true,url:'/uploads/media/voice.livi#livi-media=encrypted-key'});
+  expect(FileSystem.createUploadTask).toHaveBeenCalledWith('https://api.test/api/upload/media/multipart','file:///encrypted.livi',expect.objectContaining({mimeType:'application/vnd.livi.encrypted',headers:expect.objectContaining({'x-install-secret':'proof'})}));
+  expect(FileSystem.deleteAsync).toHaveBeenCalledWith('file:///encrypted.livi',{idempotent:true});
 });
-
-describe('uploadMediaToServer on a bad network', () => {
-  it('retries at once on a dead pooled connection right after the network changed', async () => {
-    mockNextUpload.push(fails('connection closed'), ok('/uploads/v.m4a'));
-
-    const res = await upload('file:///v.m4a', 'audio');
-
-    expect(res).toEqual({ success: true, url: '/uploads/v.m4a' });
-    expect(mockTasks).toHaveLength(2);
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it('sends a voice message with a plain request when multipart does not get through (VPN)', async () => {
-    mockNextUpload.push(fails('Software caused connection abort'), fails('Software caused connection abort'));
-    mockFetch.mockResolvedValueOnce({ ok: true, json: async () => ({ ok: true, url: '/uploads/v2.m4a' }) });
-
-    const res = await upload('file:///v.m4a', 'audio');
-
-    expect(res).toEqual(expect.objectContaining({ success: true, url: '/uploads/v2.m4a' }));
-    expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch.mock.calls[0][0]).toBe('https://api.test/api/upload/media');
-  });
-
-  it('reports no network when both ways fail, so the queue retries later', async () => {
-    mockNextUpload.push(fails('Unable to resolve host'));
-    mockFetch.mockRejectedValueOnce(new TypeError('Network request failed'));
-
-    const res = await upload('file:///v.m4a', 'audio');
-
-    expect(res).toEqual(expect.objectContaining({ success: false, kind: 'network' }));
-  });
-
-  it('does not send a photo a second, much heavier way', async () => {
-    mockNextUpload.push(fails('Unable to resolve host'));
-
-    const res = await upload('file:///p.gif', 'image');
-
-    expect(res).toEqual(expect.objectContaining({ success: false, kind: 'network' }));
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it('stops at once when the queue cancels the upload (network changed)', async () => {
-    let cancel: () => void = () => {};
-    mockNextUpload.push(() => new Promise((resolve) => setTimeout(() => resolve(null), 10)));
-    const pending = upload('file:///v.m4a', 'audio', undefined, undefined, undefined, {
-      registerCancel: (c) => {
-        cancel = c;
-      },
-    });
-    await new Promise((r) => setImmediate(r));
-    cancel();
-    const res = await pending;
-
-    expect(res).toEqual(expect.objectContaining({ success: false, kind: 'network' }));
-    expect(mockTasks[0].cancelAsync).toHaveBeenCalled();
-    expect(mockFetch).not.toHaveBeenCalled();
-  });
-
-  it('says the file is gone instead of retrying forever', async () => {
-    const FileSystem = require('expo-file-system');
-    FileSystem.getInfoAsync.mockResolvedValueOnce({ exists: false });
-
-    const res = await upload('file:///gone.m4a', 'audio');
-
-    expect(res).toEqual(expect.objectContaining({ success: false, kind: 'file' }));
-    expect(mockTasks).toHaveLength(0);
-  });
+it('never retries a failed encrypted transfer as plaintext', async () => {
+  mockUpload.mockRejectedValue(new Error('network disconnected'));
+  expect(await uploadMediaToServer('file:///voice.m4a','audio',undefined,'owner','peer')).toMatchObject({success:false,kind:'network'});
+  expect(FileSystem.createUploadTask).toHaveBeenCalledTimes(1);
+  expect(FileSystem.deleteAsync).toHaveBeenCalled();
+});
+it('does not upload to an outdated peer or after encryption fails', async () => {
+  mockRequirePeer.mockRejectedValueOnce(new Error('recipient_update_required'));
+  expect(await uploadMediaToServer('file:///voice.m4a','audio',undefined,'owner','peer')).toMatchObject({success:false,kind:'server'});
+  expect(FileSystem.createUploadTask).not.toHaveBeenCalled();
+  mockEncrypt.mockRejectedValueOnce(new Error('encryption failed'));
+  expect((await uploadMediaToServer('file:///voice.m4a','audio',undefined,'owner','peer')).success).toBe(false);
+  expect(FileSystem.createUploadTask).not.toHaveBeenCalled();
+});
+it('rejects missing identity before encryption or upload', async () => {
+  expect(await uploadMediaToServer('file:///voice.m4a','audio')).toMatchObject({success:false,kind:'server'});
+  expect(mockEncrypt).not.toHaveBeenCalled();
 });

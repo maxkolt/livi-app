@@ -32,16 +32,17 @@ export function resolveChatPhotoDimensions(uri: string, width?: unknown, height?
   if (known || !uri) return Promise.resolve(known);
   const pending = pendingByUri.get(uri);
   if (pending) return pending;
-  const lookup = new Promise<ChatPhotoDimensions | null>(resolve => {
+  const probe = (resolvedUri: string) => new Promise<ChatPhotoDimensions | null>(resolve => {
     try {
-      Image.getSize(uri, (w, h) => {
+      Image.getSize(resolvedUri, (w, h) => {
         // A sender/server metadata update can arrive before an older native lookup finishes.
         resolve(peekChatPhotoDimensions(uri) || rememberChatPhotoDimensions(uri, w, h));
       }, () => resolve(peekChatPhotoDimensions(uri)));
     } catch {
       resolve(peekChatPhotoDimensions(uri));
     }
-  }).finally(() => pendingByUri.delete(uri));
+  });
+  const lookup = (uri.includes('/uploads/media/') ? import('../../utils/protectedMedia').then(({ resolveProtectedMedia }) => resolveProtectedMedia(uri)).then(probe) : probe(uri)).catch(() => null).finally(() => pendingByUri.delete(uri));
   pendingByUri.set(uri, lookup);
   return lookup;
 }

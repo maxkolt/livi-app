@@ -3,7 +3,6 @@ import { matchesSecret } from '../utils/adminAuth';
 import { Router, Request } from 'express';
 import mongoose from 'mongoose';
 import AppConfig from '../models/AppConfig';
-import { getAccountDataGeneration } from '../utils/accountDataGeneration';
 
 const r = Router();
 
@@ -48,7 +47,6 @@ r.get('/app-settings', async (_req, res) => {
   res.json({
     ok: true,
     ...(latestAppVersion ? { latestAppVersion } : {}),
-    ...(getAccountDataGeneration() ? { accountDataGeneration: getAccountDataGeneration() } : {}),
   });
 });
 

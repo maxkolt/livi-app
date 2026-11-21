@@ -85,7 +85,7 @@ export function ProfileAvatar({
         <Pressable
           testID="profile-avatar-delete"
           style={[styles.delete, {
-            right: inset, bottom: inset, width: buttonSize, height: buttonSize,
+            right: inset, bottom: Math.max(0, inset), width: buttonSize, height: buttonSize,
             borderRadius: buttonSize / 2,
           }]}
           onPress={onDelete}

@@ -115,11 +115,12 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
     try {
       const me = authed();
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
-      const u = await User.findById(me).select('e2ePublicKey e2eDisabled +e2eBackup').lean();
+      const u = await User.findById(me).select('e2ePublicKey e2eDisabled mediaEncryptionVersion +e2eBackup').lean();
       const backup = u?.e2eBackup;
       return ack?.({
         ok: true,
         publicKey: u?.e2ePublicKey || '',
+        mediaEncryptionVersion: u?.mediaEncryptionVersion || 0,
         backup: backup ? { kdf: backup.kdf, pk: backup.pk } : null,
         disabled: u?.e2eDisabled === true,
       });
@@ -133,7 +134,7 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
    * Публикация ключа. Копия под паролем необязательна (автоматическое шифрование
    * её не делает); если прислана — должна быть копией именно этого ключа.
    */
-  sock.on('e2e:publish', async (payload: { publicKey?: string; backup?: unknown }, ack?: Function) => {
+  sock.on('e2e:publish', async (payload: { publicKey?: string; backup?: unknown; mediaEncryptionVersion?: number }, ack?: Function) => {
     try {
       const me = authed();
       if (!me) return ack?.({ ok: false, error: 'unauthorized' });
@@ -151,6 +152,7 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
         {
           $set: {
             e2ePublicKey: publicKey,
+            ...(payload.mediaEncryptionVersion === 1 ? { mediaEncryptionVersion: 1 } : {}),
             e2eKeyUpdatedAt: now,
             e2eDisabled: false,
             // Без копии старую не трогаем: она от прежнего ключа, клиент сверяет её pk.
@@ -271,7 +273,10 @@ export function registerE2eKeyHandlers(io: Server, sock: Socket, meId: () => str
       const found = await loadE2ePublicKeys(ids);
       const keys: Record<string, string> = {};
       for (const id of ids) keys[id] = found[id] || '';
-      return ack?.({ ok: true, keys });
+      const mediaEncryption: Record<string, number> = {};
+      const capabilities = await User.find({ _id: { $in: ids } }).select('mediaEncryptionVersion').lean();
+      for (const user of capabilities) mediaEncryption[String(user._id)] = user.mediaEncryptionVersion || 0;
+      return ack?.({ ok: true, keys, mediaEncryption });
     } catch (e) {
       console.error('[e2e:keys] error:', (e as { message?: unknown } | null)?.message || e);
       return ack?.({ ok: false, error: 'server_error' });

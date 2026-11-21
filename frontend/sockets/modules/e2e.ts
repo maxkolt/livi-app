@@ -25,6 +25,7 @@ import { emitAck } from "./emit";
 import { logger } from "../../utils/logger";
 import { ensureReauthBeforePrivilegedSocketOp } from "./reauth";
 import { shared } from "./shared";
+import { encodeMediaContent, decodeMediaContent, type MediaContent } from './mediaEnvelope';
 import { socket } from "./socketCore";
 import {
   createKeyBackup,
@@ -47,11 +48,11 @@ import {
 
 type E2eAck = { ok: boolean; error?: string; retryAfterSec?: number };
 type E2eResponses = {
-  'e2e:state': E2eAck & { publicKey?: string; disabled?: boolean; backup?: Pick<E2eBackup, 'kdf' | 'pk'> | null };
+  'e2e:state': E2eAck & { publicKey?: string; disabled?: boolean; mediaEncryptionVersion?: number; backup?: Pick<E2eBackup, 'kdf' | 'pk'> | null };
   'e2e:publish': E2eAck;
   'e2e:disable': E2eAck;
   'e2e:backup_fetch': E2eAck & { backup?: E2eBackup };
-  'e2e:keys': E2eAck & { keys?: Record<string, string> };
+  'e2e:keys': E2eAck & { keys?: Record<string, string>; mediaEncryption?: Record<string, number> };
 };
 
 /** Only envelope metadata is needed here; message-specific fields stay on the generic input. */
@@ -61,8 +62,12 @@ export type DecryptableMessage = {
   to?: unknown;
   enc?: unknown;
   text?: string;
+  type?: string;
   replyTo?: { id?: unknown; text?: string; from?: string | null } | null;
   e2eUndecryptable?: boolean;
+  uri?: string;
+  uris?: string | string[];
+  thumbUri?: string;
 };
 
 export type E2eStatus = "unknown" | "needs_setup" | "needs_restore" | "ready" | "disabled";
@@ -96,7 +101,7 @@ const state: State = { userId: null, status: "unknown", own: null, serverPublicK
 const peerE2eSubs = new Set<(peerId: string) => void>();
 const statusSubs = new Set<(s: E2eStatus) => void>();
 const keyChangeSubs = new Set<(peerId: string) => void>();
-const peerKeys = new Map<string, { pk: string; at: number }>();
+const peerKeys = new Map<string, { pk: string; at: number; media: number }>();
 let pins: Record<string, string> | null = null;
 let refreshInFlight: Promise<E2eStatus> | null = null;
 /** Сервер не ответил на e2e:state (нет связи или старый бэкенд) — не ждём его на каждом сообщении. */
@@ -257,6 +262,7 @@ export function refreshE2eState(): Promise<E2eStatus> {
     } else if (own && state.serverPublicKey === toBase64(own.publicKey)) {
       setStatus("ready");
       ensureVaultCopy(me, own);
+      if (resp.mediaEncryptionVersion !== 1 && typeof NativeModules.LiviCrypto?.encryptMedia === 'function') await publishDeviceKey(me, own);
     }
     // Ключ включали по паролю (прежняя схема), а здесь его нет: переписку вернёт только пароль.
     else if (state.serverPublicKey && state.backupKdf && state.backupPk === state.serverPublicKey) {
@@ -338,7 +344,7 @@ async function emitAuthed<E extends keyof E2eResponses>(event: E, payload: Recor
 /** Публикация ключа без копии под паролем: переустановку он переживёт через хранилище. */
 async function publishDeviceKey(me: string, pair: E2eKeyPair): Promise<ActionResult> {
   const publicKey = toBase64(pair.publicKey);
-  const resp = await emitAuthed("e2e:publish", { publicKey });
+  const resp = await emitAuthed("e2e:publish", { publicKey, mediaEncryptionVersion: 1 });
   logger.info("[e2e] publish device key", {
     ok: !!resp?.ok,
     error: resp?.error ?? (resp ? null : "no_ack"),
@@ -359,7 +365,7 @@ async function publish(me: string, pair: E2eKeyPair, password: string): Promise<
   const backup = await createKeyBackup(pair, password);
   const kdfMs = Date.now() - kdfStartedAt;
   const publishStartedAt = Date.now();
-  const resp = await emitAuthed("e2e:publish", { publicKey: toBase64(pair.publicKey), backup });
+  const resp = await emitAuthed("e2e:publish", { publicKey: toBase64(pair.publicKey), backup, mediaEncryptionVersion: 1 });
   logger.info("[e2e] publish", {
     ok: !!resp?.ok,
     error: resp?.error ?? (resp ? null : "no_ack"),
@@ -542,7 +548,7 @@ export async function getPeerPublicKey(peerId: string, opts?: { force?: boolean 
   const resp = await emitAuthed("e2e:keys", { userIds: [peerId] });
   if (!resp?.ok) throw new E2eUnavailableError("unavailable");
   const pk = String(resp.keys?.[peerId] || "");
-  peerKeys.set(peerId, { pk, at: Date.now() });
+  peerKeys.set(peerId, { pk, at: Date.now(), media: resp.mediaEncryption?.[peerId] || 0 });
   await notePeerKey(peerId, pk);
   return pk || null;
 }
@@ -637,6 +643,9 @@ type OutgoingTextPayload = {
   to: string;
   type: string;
   text?: string;
+  uri?: string;
+  uris?: string[];
+  thumbUri?: string;
   replyTo?: { id: string; text?: string; from: string };
   clientMessageId?: string;
 };
@@ -649,6 +658,27 @@ type OutgoingTextPayload = {
 export async function toWireMessagePayload<T extends OutgoingTextPayload>(
   payload: T,
 ): Promise<Omit<T, "text"> & { text?: string; enc?: E2eEnvelope }> {
+  if (['image', 'audio', 'video_note'].includes(payload.type)) {
+    if (!payload.clientMessageId) throw new E2eUnavailableError('unavailable');
+    await requireMediaEncryptionPeer(payload.to);
+    const { parseMediaKey, mediaWireUrl, resolveProtectedMedia } = await import('../../utils/protectedMedia');
+    const protect = async (uri: string): Promise<string> => {
+      if (parseMediaKey(uri)) return uri;
+      const local = await resolveProtectedMedia(uri);
+      const { uploadMediaToServer } = await import('../../utils/mediaUpload');
+      const result = await uploadMediaToServer(local, payload.type === 'audio' ? 'audio' : payload.type === 'video_note' ? 'video' : 'image', undefined, syncUser() || undefined, payload.to);
+      if (!result.success || !result.url || !parseMediaKey(result.url)) throw new E2eUnavailableError('unavailable');
+      return result.url;
+    };
+    const uri = payload.uri ? await protect(payload.uri) : undefined;
+    const uris = payload.uris ? await Promise.all(payload.uris.map(protect)) : undefined;
+    const thumbUri = payload.thumbUri ? await protect(payload.thumbUri) : undefined;
+    const text = encodeMediaContent({ type: payload.type, text: payload.text || '', uri, uris, thumbUri });
+    const enc = await sealOutgoingText({ id: payload.clientMessageId, to: payload.to, text, replyText: payload.replyTo?.text });
+    if (!enc) throw new E2eUnavailableError('locked');
+    const { text: _text, replyTo, ...rest } = payload;
+    return { ...rest, ...(uri ? { uri: mediaWireUrl(uri) } : {}), ...(uris ? { uris: uris.map(mediaWireUrl) } : {}), ...(thumbUri ? { thumbUri: mediaWireUrl(thumbUri) } : {}), ...(replyTo ? { replyTo: { id: replyTo.id, from: replyTo.from } } : {}), enc } as unknown as Omit<T, 'text'> & { enc: E2eEnvelope };
+  }
   const hasProtectedText = payload.type === "text" || (payload.type === "image" && !!payload.text);
   if (!hasProtectedText || typeof payload.text !== "string" || !payload.clientMessageId) return payload;
   const enc = await sealOutgoingText({
@@ -683,7 +713,25 @@ export async function decryptIncomingMessage<M extends DecryptableMessage>(
     return { ...rest, text: undecryptableText(), e2eUndecryptable: true } as unknown as M;
   }
   const replyTo = rest.replyTo && rest.replyTo.id ? { ...rest.replyTo, text: r.replyText } : rest.replyTo;
+  const media = decodeMediaContent(r.text, msg.type);
+  if (media) {
+    const candidates = [media.uri, media.thumbUri, ...(media.uris || [])].filter((u): u is string => !!u);
+    const withKey = (url: string) => candidates.find(candidate => candidate.split('#')[0] === url.split('#')[0]) || '';
+    const uris = Array.isArray(msg.uris) ? msg.uris.map(withKey).filter(Boolean) : undefined;
+    const uri = uris?.[0] || (msg.uri ? withKey(msg.uri) : '');
+    const thumbUri = msg.thumbUri ? withKey(msg.thumbUri) : undefined;
+    return { ...rest, text: media.text, uri, ...(uris ? { uris } : {}), ...(thumbUri ? { thumbUri } : {}), ...(replyTo ? { replyTo } : {}), e2e: true } as unknown as M;
+  }
   return { ...rest, text: r.text, ...(replyTo ? { replyTo } : {}), e2e: true } as unknown as M;
+}
+
+export async function requireMediaEncryptionPeer(peerId: string): Promise<void> {
+  if (getE2eStatus() !== 'ready') await refreshE2eState();
+  if (getE2eStatus() !== 'ready') throw new E2eUnavailableError('locked');
+  if (!socket.connected && !peerKeys.has(peerId)) throw new E2eUnavailableError('unavailable');
+  const key = await getPeerPublicKey(peerId);
+  if (!key) throw new E2eUnavailableError('unavailable');
+  if (peerKeys.get(peerId)?.media !== 1) throw new Error('recipient_update_required');
 }
 
 /** Payload правки для сети. Без `to` (старые записи очереди) шифровать не для кого. */
@@ -691,9 +739,10 @@ export async function toWireEditPayload(
   messageId: string,
   text: string,
   to?: string,
+  media?: MediaContent,
 ): Promise<{ messageId: string; text: string } | { messageId: string; enc: E2eEnvelope }> {
   if (!to) return { messageId, text };
-  const enc = await sealOutgoingText({ id: messageId, to, text });
+  const enc = await sealOutgoingText({ id: messageId, to, text: media ? encodeMediaContent({ ...media, text }) : text });
   return enc ? { messageId, enc } : { messageId, text };
 }
 

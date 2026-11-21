@@ -1,3 +1,5 @@
+import { canReadMedia } from '../utils/privateMedia';
+import { uploadedMediaFileName } from '../utils/uploadedMedia';
 // Надежная система сообщений с персистентным хранением офлайн сообщений
 import { Server, Socket } from 'socket.io';
 import mongoose from 'mongoose';
@@ -1227,6 +1229,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
         return ack?.({ ok: false, error: 'invalid_uri' });
       }
       const thumbUri = videoNoteThumbUri(payload.type, payload.thumbUri);
+      for (const uri of [primaryUri, thumbUri, ...imageUris]) {
+        const filename = uploadedMediaFileName(uri);
+        if (filename && !await canReadMedia(me, filename)) return ack?.({ ok: false, error: 'media_forbidden' });
+      }
 
       // Проверяем дружбу
       const isFriend = await areFriendsCached(me, payload.to);
@@ -1778,6 +1784,10 @@ function registerMessageHandlers(io: Server, sock: Socket) {
       if (!messageId) return ack?.({ ok: false, error: 'bad_request' });
 
       const nextUris = normalizeIncomingImageUris({ uris: payload?.uris });
+      for (const uri of nextUris) {
+        const filename = uploadedMediaFileName(uri);
+        if (filename && !await canReadMedia(me, filename)) return ack?.({ ok: false, error: 'media_forbidden' });
+      }
       const meOid = new mongoose.Types.ObjectId(me);
       let doc = await FriendshipMessageItem.findOne({ id: messageId, from: meOid })
         .select('from type friendshipId uri uris imageWidth imageHeight imageSizes')

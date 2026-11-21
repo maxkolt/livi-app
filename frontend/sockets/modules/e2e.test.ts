@@ -102,7 +102,7 @@ const mockEmitAck = jest.fn(async (event: string, payload: any, ..._opts: unknow
     case 'e2e:keys': {
       const keys: Record<string, string> = {};
       for (const id of payload.userIds) keys[id] = server.keys.get(id) ?? '';
-      return { ok: true, keys };
+      return { ok: true, keys, mediaEncryption: Object.fromEntries(payload.userIds.map((id: string) => [id, 1])) };
     }
     default:
       throw new Error(`unexpected ${event}`);
@@ -217,15 +217,20 @@ describe('between two users with encryption on', () => {
     expect(forAlice.text).toBe('секретный текст');
   });
 
-  it('leaves non-text messages alone', async () => {
-    const image = { to: BOB, type: 'image', uri: 'https://x/y.jpg', clientMessageId: 'cm_2' };
-    expect(await toWireMessagePayload(image)).toEqual(image);
+  it('encrypts voice attachment keys and restores them only for the recipient', async () => {
+    const uri = '/uploads/media/voice.livi#livi-media=' + encodeURIComponent(JSON.stringify({v:1,k:Buffer.alloc(32,7).toString('base64'),e:'m4a'}));
+    const payload = {to: BOB, type:'audio',uri,clientMessageId:'voice-encrypted'};
+    const wire = await toWireMessagePayload(payload);
+    expect(wire.uri).toBe('/uploads/media/voice.livi');
+    expect(JSON.stringify(wire)).not.toContain('livi-media=');
+    expect(JSON.stringify(wire)).not.toContain(Buffer.alloc(32,7).toString('base64'));
+    as(BOB); expect(await decryptIncomingMessage(delivered(wire), placeholder)).toMatchObject({uri,e2e:true,text:''});
   });
 
   it('protects photo and album captions with the same keys while retaining media geometry', async () => {
     const image = {
-      to: BOB, type: 'image', text: 'секретная подпись', uri: 'https://x/portrait.jpg',
-      uris: ['https://x/portrait.jpg', 'https://x/landscape.jpg'],
+      to: BOB, type: 'image', text: 'секретная подпись', uri: '/uploads/media/portrait.livi#livi-media=' + encodeURIComponent(JSON.stringify({v:1,k:Buffer.alloc(32,8).toString('base64'),e:'jpg'})),
+      uris: [8,9].map(n => '/uploads/media/'+n+'.livi#livi-media=' + encodeURIComponent(JSON.stringify({v:1,k:Buffer.alloc(32,n).toString('base64'),e:'jpg'}))),
       imageWidth: 900, imageHeight: 1600,
       imageSizes: [{ width: 900, height: 1600 }, { width: 1600, height: 900 }],
       clientMessageId: 'caption-album',
@@ -234,7 +239,8 @@ describe('between two users with encryption on', () => {
     expect(wire.enc).toBeDefined();
     expect(wire.text).toBeUndefined();
     expect(JSON.stringify(wire)).not.toContain(image.text);
-    expect(wire).toMatchObject({ uri: image.uri, uris: image.uris, imageSizes: image.imageSizes });
+    expect(wire).toMatchObject({ uri: image.uri.split('#')[0], uris: image.uris.map(u=>u.split('#')[0]), imageSizes: image.imageSizes });
+    expect(JSON.stringify(wire)).not.toContain('livi-media=');
     as(BOB);
     expect(await decryptIncomingMessage(delivered(wire), placeholder)).toMatchObject({ text: image.text, imageWidth: 900, imageHeight: 1600 });
     as(ALICE);
@@ -245,6 +251,17 @@ describe('between two users with encryption on', () => {
     mockSocket.connected = false;
     await expect(toWireMessagePayload({ to: 'cccccccccccccccccccccccc', type: 'image', text: 'caption', clientMessageId: 'photo-unavailable' }))
       .rejects.toBeInstanceOf(E2eUnavailableError);
+  });
+
+  it('keeps file keys encrypted when editing a caption and does not resurrect removed album photos', async () => {
+    const keyed = (n: number) => '/uploads/media/'+n+'.livi#livi-media=' + encodeURIComponent(JSON.stringify({ v: 1, k: Buffer.alloc(32,n).toString('base64'), e: 'jpg' }));
+    const media = { type: 'image', text: 'old caption', uri: keyed(1), uris: [keyed(1), keyed(2)] };
+    const edit = await toWireEditPayload('caption-edit', 'new caption', BOB, media);
+    expect(JSON.stringify(edit)).not.toContain('livi-media=');
+    expect(JSON.stringify(edit)).not.toContain('new caption');
+    as(BOB);
+    const result = await decryptIncomingMessage({ id: 'caption-edit', from: ALICE, to: BOB, type: 'image', uri: '/uploads/media/2.livi', uris: ['/uploads/media/2.livi'], enc: 'enc' in edit ? edit.enc : undefined }, placeholder);
+    expect(result).toMatchObject({ text: 'new caption', uri: keyed(2), uris: [keyed(2)] });
   });
 
   it('encrypts edits for the chat peer', async () => {

@@ -8,6 +8,7 @@ import OfflineMessage from '../models/OfflineMessage';
 import FriendshipMessages from '../models/FriendshipMessages';
 import FriendshipMessageItem from '../models/FriendshipMessageItem';
 import Install from '../models/Install';
+import MediaUpload from '../models/MediaUpload';
 import MissedCall from '../models/MissedCall';
 import { getPendingMissedCalls, registerMissedCallAck } from './missedCallDelivery';
 import PushToken from '../models/PushToken';
@@ -23,12 +24,10 @@ import { hasVerifiedSocketInstall } from '../utils/socketInstallAuth';
 import { hashInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL, verifyInstallSecret, isPlausibleInstallSecret, needsInstallSecretRehash } from '../utils/installSecret';
 import { collectUploadedMediaNames, deleteUnreferencedUploadedMedia } from '../utils/uploadedMedia';
 import { UPLOADS_MEDIA_DIR } from '../routes/upload';
-import { acceptsAccountDataGeneration } from '../utils/accountDataGeneration';
 
 type AttachPayload = {
   installId?: string | null;
   installSecret?: string | null;
-  accountDataGeneration?: string;
   profile?: { nick?: string; avatar?: string } | null;
 };
 
@@ -199,7 +198,6 @@ export default function registerIdentitySockets(io: Server) {
 
       try {
         if (!installId || installId.length > 200) return ack?.({ ok: false, error: 'no_installId' });
-        if (!acceptsAccountDataGeneration(payload?.accountDataGeneration)) return ack?.({ ok: false, error: 'account_reset_required' });
         if (!isPlausibleInstallSecret(payload?.installSecret) && !allowLegacyInstallAuth()) return ack?.({ ok: false, error: 'install_secret_required' });
 
         // Защита от дублирования запросов
@@ -459,6 +457,8 @@ export default function registerIdentitySockets(io: Server) {
             ...directMessages,
             ...offlineMessages.map((doc) => doc?.messageData || {}),
           ]);
+          const ownedUploads = await MediaUpload.find({ owner: userId }).select('filename').lean();
+          mediaNames = [...new Set([...mediaNames, ...ownedUploads.map(upload => upload.filename)])];
         } catch (e: unknown) {
           console.warn('[identity:wipeMe] failed to collect chat media before wipe', (e as { message?: string } | null)?.message);
         }
@@ -534,6 +534,7 @@ export default function registerIdentitySockets(io: Server) {
             installId: id.length > 80 ? id.slice(0, 80) : id,
           });
           await User.deleteOne({ _id: userId }, opt);
+          await MediaUpload.deleteMany({ owner: userId }, opt);
 
           // 7) Инсталлы: после их удаления следующий identity:attach заведёт новый профиль.
           await Install.deleteMany({ user: userId }, opt);

@@ -1,6 +1,7 @@
 /** Voice message cache / duration helpers (pure + download). */
 
 import * as FileSystem from "expo-file-system";
+import { isPrivateMedia, resolveProtectedMedia } from '../../utils/protectedMedia';
 
 /** Stable cache file name for a remote voice URL. */
 function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
@@ -37,6 +38,7 @@ export async function ensureVoiceCachedToLocalFile(
   maps: CacheMaps,
 ): Promise<string> {
   const u = String(resolvedUri || "").trim();
+  if (isPrivateMedia(u)) return resolveProtectedMedia(u);
   if (!u || !/^https?:\/\//i.test(u)) return u;
   const baseDir = FileSystem.cacheDirectory;
   if (!baseDir) return u;

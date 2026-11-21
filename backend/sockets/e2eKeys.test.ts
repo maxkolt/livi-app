@@ -173,6 +173,7 @@ describe('passwordless key state', () => {
       publicKey: '',
       backup: null,
       disabled: true,
+      mediaEncryptionVersion: 0,
     });
     expect(await call(h['e2e:publish'], { publicKey: PK })).toEqual({ ok: true });
     expect(mockUsers[ME].e2eDisabled).toBe(false);
@@ -200,12 +201,12 @@ describe('e2e:keys', () => {
 
   it('returns keys of friends from the friendship edges, not the legacy User.friends field', async () => {
     const res = await keysHandler()({ userIds: [FRIEND] });
-    expect(res).toEqual({ ok: true, keys: { [FRIEND]: b64(32, 1) } });
+    expect(res).toEqual({ ok: true, keys: { [FRIEND]: b64(32, 1) }, mediaEncryption: { [FRIEND]: 0 } });
     expect(mockFriendIds).toHaveBeenCalledWith(ME);
   });
 
   it('does not reveal keys of non-friends', async () => {
     const res = await keysHandler()({ userIds: [STRANGER] });
-    expect(res).toEqual({ ok: true, keys: {} });
+    expect(res).toEqual({ ok: true, keys: {}, mediaEncryption: {} });
   });
 });

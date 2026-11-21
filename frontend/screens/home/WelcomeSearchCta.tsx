@@ -23,6 +23,7 @@ import {
 } from 'react-native-reanimated';
 import { BlurMask, Canvas, Circle, Group, Path, Skia, type SkPath } from '@shopify/react-native-skia';
 import { useHomeLayout } from './HomeLayoutContext';
+import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import {
   UI_ACCENT,
@@ -182,10 +183,10 @@ export function welcomeSearchCtaWidth(windowWidth: number, tabletLayout: boolean
   return Math.min(Math.max(0, windowWidth - sideInset * 2), maxCtaWidth);
 }
 
-export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean): number {
+export function welcomeSearchCtaHeight(tabletLayout: boolean, compact: boolean, largePhone = false): number {
   if (tabletLayout) return 50;
   if (compact) return Platform.OS === 'ios' ? 43 : 40;
-  return Platform.OS === 'ios' ? 47 : 43;
+  return (Platform.OS === 'ios' ? 47 : 43) - (largePhone ? 4 : 0);
 }
 
 type WelcomeSearchCtaProps = {
@@ -221,7 +222,8 @@ export function WelcomeSearchCta({
     welcomeSearchCtaWidth(windowWidth, tabletLayout, windowHeight),
     maxWidth && maxWidth > 0 ? maxWidth : Number.POSITIVE_INFINITY,
   );
-  const buttonHeight = welcomeSearchCtaHeight(tabletLayout, compact);
+  const largePhone = windowWidth <= windowHeight && usesLargePhoneAvatar(Math.min(windowWidth, windowHeight));
+  const buttonHeight = welcomeSearchCtaHeight(tabletLayout, compact, largePhone);
   const borderRadius = buttonHeight / 2;
   const innerRadius = Math.max(0, borderRadius - BORDER_W);
   const blockedFlash = useRef(new Animated.Value(0)).current;

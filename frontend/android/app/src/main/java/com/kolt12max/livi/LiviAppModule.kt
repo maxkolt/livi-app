@@ -2426,34 +2426,6 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       .apply()
   }
 
-  /** Called only by the startup gate after an explicit fresh-start confirmation.
-   * No live JS call UI is mounted while these old account inboxes are removed. */
-  @ReactMethod
-  fun resetAccountDataForFreshStart(promise: Promise) {
-    try {
-      val ctx = reactApplicationContext
-      CallKeepAliveService.setEnabled(ctx, false)
-      ctx.stopService(Intent(ctx, IncomingCallForegroundService::class.java))
-      ctx.stopService(Intent(ctx, ActiveCallForegroundService::class.java))
-      val accountPrefs = listOf(
-        PREFS_PENDING_DECLINED, PREFS_PENDING_MISSED, PREFS_PENDING_UNREAD,
-        PREFS_PENDING_MISSED_REMOVED, PREFS_INCOMING_CALL_META, PREFS_MISSED_COUNT,
-        PREFS_MISSED_SHOWN_IDS, PREFS_MESSAGE_NOTIFIED_IDS, PREFS_OPEN_TAB
-      )
-      for (name in accountPrefs) {
-        check(ctx.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().commit())
-      }
-      check(ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit()
-        .remove(KEY_INSTALL_ID).remove(KEY_INSTALL_SECRET).remove(KEY_USER_ID_FOR_DECLINE)
-        .remove(KEY_INSTALL_INVITE_CODE).commit())
-      (ctx.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager).cancelAll()
-      clearAllMissedCountsAndSetBadgeZeroStatic(ctx)
-      promise.resolve(null)
-    } catch (e: Exception) {
-      promise.reject("account_reset_failed", e)
-    }
-  }
-
   /** SECURITY: секрет установки (installSecret) — сервер требует его в заголовке
    * x-install-secret для decline/cancel, если для этого installId уже сохранён хэш.
    * Без него простое знание/подбор installId позволяло бы отменять/отклонять чужие звонки. */

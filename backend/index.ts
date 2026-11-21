@@ -4,19 +4,8 @@ import type { AuthenticatedRequest, ErrorDetails } from './utils/runtimeTypes';
 import { callAcceptedE2eeField, decideCallE2ee, parseCallE2eeDeclaration, type CallE2eeDecision } from './utils/callE2ee';
 import dotenv from "dotenv";
 dotenv.config();
-import { assertAccountDataGenerationConfiguration, assertAccountDataGenerationReceipt, getAccountDataGeneration } from './utils/accountDataGeneration';
-assertAccountDataGenerationConfiguration();
-let resolveAccountGenerationStartup: () => void;
-let rejectAccountGenerationStartup: (error: Error) => void;
-const accountGenerationStartup = new Promise<void>((resolve, reject) => {
-  resolveAccountGenerationStartup = resolve;
-  rejectAccountGenerationStartup = reject;
-});
-// The database may reject before the HTTP/Socket.IO startup coroutine awaits it.
-void accountGenerationStartup.catch(() => undefined);
-if (!getAccountDataGeneration()) resolveAccountGenerationStartup!();
-
 import express from 'express';
+import { privateMediaAccess } from './utils/privateMedia';
 import crypto from 'crypto';
 import { logger } from './utils/logger';
 import { auditNickChange } from './utils/profileNickAudit';
@@ -53,7 +42,6 @@ import { setGetEffectiveBusy } from './utils/effectiveBusy';
 import { beginFriendBusyNotification } from './utils/friendBusyPresence';
 import User, { type UserRecord } from './models/User';
 import Install from './models/Install';
-import AppConfig from './models/AppConfig';
 import { assertInstallSecretConfiguration, decideHttpInstallAuth, verifyInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL } from './utils/installSecret';
 import { attachCallKeepAlive, deliverCallKeepAlive, getCallKeepAliveStats, type CallKeepAliveAuth } from './utils/callKeepAlive';
 import MissedCall from './models/MissedCall';
@@ -470,6 +458,7 @@ app.post('/api/capacity/client-metrics', express.json(), (req, res) => {
 });
 
 /* ========= Static files ========= */
+app.use(privateMediaAccess({ enabled: () => process.env.PRIVATE_MEDIA_REQUIRED === '1' }));
 app.use('/uploads', express.static(path.join(PUBLIC_DIR, 'uploads')));
 
 // Android App Links / Apple AASA (dotfiles must be allowed)
@@ -841,16 +830,6 @@ function connectMongo(attempt = 1): void {
 }
 
 async function onMongoConnected(): Promise<void> {
-  try {
-    await assertAccountDataGenerationReceipt(async () => {
-      const receipt = await AppConfig.findOne({ key: 'accountDataGeneration' }).lean();
-      return receipt?.value;
-    });
-    resolveAccountGenerationStartup!();
-  } catch {
-    rejectAccountGenerationStartup!(new Error('account_generation_receipt_mismatch'));
-    return;
-  }
   attachMongoMatchProfile(mongoose.connection.getClient());
   const dbName = mongoose.connection.db?.databaseName;
   logger.info('MongoDB connected successfully', {
@@ -5375,7 +5354,6 @@ function printLanUrls(port: number) {
 void (async () => {
   try {
     // No public marker or registration endpoint until the reset receipt is verified.
-    await accountGenerationStartup;
   } catch {
     logger.error('Account generation startup refused: database reset receipt is missing or mismatched');
     process.exit(1);

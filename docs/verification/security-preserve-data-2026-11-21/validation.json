@@ -1,0 +1,61 @@
+{
+  "frontend": {
+    "suites": 167,
+    "tests": 1593,
+    "passed": true
+  },
+  "backend": {
+    "suites": 44,
+    "tests": 347,
+    "passed": true
+  },
+  "nativeUnitTests": 2,
+  "physicalNative": [
+    {
+      "model": "SM-A356E",
+      "roundTrip": true,
+      "tamperRejected": true,
+      "wrongKeyRejected": true
+    },
+    {
+      "model": "SM-S938B",
+      "roundTrip": true,
+      "tamperRejected": true,
+      "wrongKeyRejected": true
+    }
+  ],
+  "publicHttps": {
+    "checks": 58,
+    "passed": true,
+    "temporaryAccountsRemoved": true
+  },
+  "ui": {
+    "method": "Approximate pixel coordinates inspected on device screenshots; CTA height is configured, not measured.",
+    "a35": {
+      "density": 2.625,
+      "bannerBottomPx": 332,
+      "radarTopPx": 505,
+      "gapDp": 65.9,
+      "profileAvatarBottomPx": 515,
+      "profileDeleteCircleBottomPx": 515,
+      "ctaConfiguredHeightDp": 43
+    },
+    "s25": {
+      "density": 4,
+      "bannerBottomPx": 464,
+      "radarTopPx": 729,
+      "gapDp": 66.25,
+      "profileAvatarBottomPx": 676,
+      "profileDeleteCircleBottomPx": 676,
+      "ctaConfiguredHeightDp": 39
+    }
+  },
+  "aab": {
+    "versionCode": 214,
+    "versionName": "1.1.23",
+    "bytes": 127450525,
+    "sha256": "80c413a273d63de0b31dcc2c0aba3f92d3347bdeb819dfbc6e909d5c347e7265",
+    "resetMarkersAbsent": true,
+    "zipIntegrity": true
+  }
+}

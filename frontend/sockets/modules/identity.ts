@@ -8,7 +8,6 @@ import { clearCancelledOutboxFingerprints } from "./outbox";
 import { clearAllMessageCache } from "./messages";
 import { shared } from "./shared";
 import { getSocketInstance, socket } from "./socketCore";
-import { accountDataReset } from '../../utils/accountDataResetRuntime';
 
 // ВАЖНО: отрицательный результат нельзя кэшировать надолго — иначе после восстановления/создания пользователя
 // приложение будет зацикливаться на "user_not_found" и делать hard reset по старому кэшу.
@@ -20,15 +19,18 @@ async function identityAttach(payload: {
   installSecret?: string | null;
   profile?: { nick?: string; avatarUrl?: string };
 }) {
-  await accountDataReset.ensureReady();
-  const response = await emitAck<{ ok: boolean; userId?: string; error?: string; legacyMigrationRequired?: boolean }>(
+
+  let response = await emitAck<{ ok: boolean; userId?: string; error?: string; legacyMigrationRequired?: boolean }>(
     "identity:attach",
-    { ...payload, accountDataGeneration: accountDataReset.getGeneration() },
+    payload,
   );
-  if (response?.error === 'account_reset_required') {
-    await accountDataReset.refresh();
-    // The old payload must never be retried after the user confirms a reset.
-    return response;
+  if (response?.error === 'account_recovery_required' && shared.currentUserId) {
+    const owner = shared.currentUserId;
+    const { migrateLegacyInstall } = await import('../../utils/migrateLegacyInstall');
+    if (await migrateLegacyInstall(owner, { enrollOnly: true })) {
+      await new Promise(resolve => setTimeout(resolve, 1100));
+      response = await emitAck('identity:attach', payload);
+    }
   }
   // Установка привязана (и после переустановки секрет уже перепривязан) — отчёт Play Integrity в фоне.
   if (response?.ok) {
@@ -269,7 +271,7 @@ async function createUserInternal(): Promise<string | null> {
 
 // Функция для создания пользователя с retry
 export async function createUser(): Promise<string | null> {
-  await accountDataReset.ensureReady();
+
   if (shared.createUserPromise) {
     console.log("[createUser] Creation already in progress, waiting for existing promise");
     return shared.createUserPromise;

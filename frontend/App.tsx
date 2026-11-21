@@ -5,8 +5,6 @@ import { notificationHomeParams, getNotificationHomeRequest, getNotificationStac
 import "react-native-gesture-handler";
 import React from "react";
 import SplashLoader from "./components/SplashLoader";
-import { AccountDataResetGate } from './components/AccountDataResetGate';
-import { accountDataReset } from './utils/accountDataResetRuntime';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
@@ -475,7 +473,6 @@ const isVideoSessionRoute = (routeName?: string | null) =>
 
 function AppContent() {
   const [initialNotificationParams] = React.useState(() => {
-    if (accountDataReset.shouldOpenProfile()) return { openWelcomeProfile: true };
     const params = notificationHomeParams(NativeModules.LiviAppModule?.initialNotificationDestination || getNotificationHomeRequest()?.destination);
     if (params?.openWelcomeChatUnread) setPendingWelcomeChatsFilter('unread');
     if (params?.openWelcomeCallsMissed) setPendingWelcomeCallsFilter('missed');
@@ -5106,7 +5103,7 @@ export default function App() {
           <ThemeProvider>
             <PiPProvider onReturnToCall={navigateToCall} onEndCall={endCallImpl}>
               <AppErrorBoundary>
-                {appFontsLoaded || appFontsError ? <AccountDataResetGate><AppContent /></AccountDataResetGate> : <SplashLoader hasContentReady={false} waitForContent />}
+                {appFontsLoaded || appFontsError ? <AppContent /> : <SplashLoader hasContentReady={false} waitForContent />}
               </AppErrorBoundary>
             </PiPProvider>
           </ThemeProvider>

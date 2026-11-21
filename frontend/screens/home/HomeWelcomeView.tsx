@@ -35,6 +35,7 @@ import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
 import { RADAR_DRAWN_EXTENT, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
+import { searchRadarPlacement } from './searchRadarPlacement';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
@@ -312,7 +313,9 @@ function HomeWelcomeViewInner({
    */
 
   /** Реальная высота кнопки под радаром — считаем из тех же размеров, что и рисуем. */
-  const ctaHeight = welcomeSearchCtaHeight(isTabletLayout, splitTight);
+  const ctaHeight = welcomeSearchCtaHeight(
+    isTabletLayout, splitTight, !isLandscape && usesLargePhoneAvatar(Math.min(stageWidth, stageHeight)),
+  );
   /**
    * Колонка занимает половину строки, но не шире максимума кнопки. Без привязки
    * к строке композиция плыла: на узком landscape колонка забирала 63% ширины и
@@ -382,6 +385,13 @@ function HomeWelcomeViewInner({
     const ctaTop = contentBottom + (stageH - contentBottom - ctaHeight) * 0.62;
     return Math.round(ctaTop - (radarAreaH + ctaPadTop)) - SEARCH_CTA_PORTRAIT_LIFT;
   })();
+  const radarPlacement = !splitStage && !isTabletLayout ? searchRadarPlacement({
+    areaHeight: stageH - stageCopyReserve,
+    visibleRadius: radarDashR,
+    ctaTop: stageH - stageCopyReserve + ctaPadTop + ctaShiftY,
+    nicknameHeight: nickBlockH,
+    minCtaGap: space.ctaMinGap,
+  }) : { radarShiftY: -32, nicknameShiftY: -24 };
 
   /**
    * Телефон: аватар в любой ориентации — как на Поиске в вертикали (тот же
@@ -533,7 +543,7 @@ function HomeWelcomeViewInner({
           <View>
             <GestureDetector gesture={radarGesture}>
             {/* collapsable: иначе Android выкидывает «пустой» view и жесту не к чему крепиться. */}
-            <View collapsable={false} style={welcomeStyles.radarVisual}>
+            <View collapsable={false} style={{ transform: [{ translateY: radarPlacement.radarShiftY }] }}>
             <WelcomeRadar
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
@@ -565,7 +575,7 @@ function HomeWelcomeViewInner({
                 pointerEvents="none"
                 style={[
                   welcomeStyles.nickWrap,
-                  { top: radarSize / 2 + radarDashR + nickGap },
+                  { top: radarSize / 2 + radarDashR + nickGap, transform: [{ translateY: radarPlacement.nicknameShiftY }] },
                 ]}
               >
                 <AdaptiveText
@@ -671,9 +681,6 @@ const welcomeStyles = StyleSheet.create({
     width: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  radarVisual: {
-    transform: [{ translateY: -32 }],
   },
   /** Короткая landscape: радар слева, текст и CTA справа — без скролла. */
   stageRow: {

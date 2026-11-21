@@ -145,8 +145,8 @@ android {
         applicationId = 'com.kolt12max.livi'
         minSdkVersion = rootProject.ext.minSdkVersion
         targetSdkVersion = rootProject.ext.targetSdkVersion
-        versionCode = 213
-        versionName = "1.1.22"
+        versionCode = 214
+        versionName = "1.1.23"
         buildConfigField "String", "APPMETRICA_API_KEY", "\"${appMetricaApiKeyEscaped}\""
     }
     signingConfigs {

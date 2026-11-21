@@ -113,7 +113,7 @@ export const prefetchImages = async (urls: string[]): Promise<void> => {
   await Promise.all([...new Set(urls.map(uri => uri.trim()).filter(Boolean))].map(uri => {
     const pending = avatarWarmups.get(uri);
     if (pending) return pending;
-    const warmup = warmImage(uri).catch(error => {
+    const warmup = import('./protectedMedia').then(async ({ isPrivateMedia, resolveProtectedMedia }) => warmImage(isPrivateMedia(uri) ? await resolveProtectedMedia(uri) : uri)).catch(error => {
       logger.warn('Image warmup failed:', error);
     }).finally(() => {
       avatarWarmups.delete(uri);

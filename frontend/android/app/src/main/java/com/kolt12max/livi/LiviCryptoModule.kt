@@ -8,6 +8,10 @@ import com.facebook.react.bridge.ReactMethod
 import java.util.concurrent.Executors
 import javax.crypto.Mac
 import javax.crypto.spec.SecretKeySpec
+import android.net.Uri
+import java.io.File
+import java.security.SecureRandom
+import com.facebook.react.bridge.Arguments
 
 /**
  * Вывод ключа из пароля для резервной копии ключа сквозного шифрования
@@ -22,6 +26,39 @@ class LiviCryptoModule(reactContext: ReactApplicationContext) : ReactContextBase
   private val executor = Executors.newSingleThreadExecutor()
 
   override fun getName(): String = "LiviCrypto"
+
+  @ReactMethod
+  fun encryptMedia(uri: String, promise: Promise) {
+    executor.execute {
+      val key = ByteArray(32).also { SecureRandom().nextBytes(it) }
+      val output = File(reactApplicationContext.cacheDir, "encrypted-${java.util.UUID.randomUUID()}.livi")
+      try {
+        val input = reactApplicationContext.contentResolver.openInputStream(Uri.parse(uri)) ?: error("media_unavailable")
+        MediaFileCipher.encrypt(input, output, key)
+        promise.resolve(Arguments.createMap().apply {
+          putString("uri", Uri.fromFile(output).toString())
+          putString("key", Base64.encodeToString(key, Base64.NO_WRAP))
+        })
+      } catch (_: Exception) { output.delete(); promise.reject("E_MEDIA_ENCRYPT", "media_encryption_failed") }
+      finally { key.fill(0) }
+    }
+  }
+
+  @ReactMethod
+  fun decryptMedia(uri: String, keyB64: String, extension: String, promise: Promise) {
+    if (!extension.matches(Regex("[a-z0-9]{1,8}"))) { promise.reject("E_MEDIA_ARGS", "invalid_extension"); return }
+    executor.execute {
+      var key: ByteArray? = null
+      val output = File(reactApplicationContext.cacheDir, "decrypted-${java.util.UUID.randomUUID()}.$extension")
+      try {
+        key = Base64.decode(keyB64, Base64.NO_WRAP)
+        val input = reactApplicationContext.contentResolver.openInputStream(Uri.parse(uri)) ?: error("media_unavailable")
+        MediaFileCipher.decrypt(input, output, key)
+        promise.resolve(Uri.fromFile(output).toString())
+      } catch (_: Exception) { output.delete(); promise.reject("E_MEDIA_DECRYPT", "media_authentication_failed") }
+      finally { key?.fill(0) }
+    }
+  }
 
   @ReactMethod
   fun pbkdf2Sha256(passwordB64: String, saltB64: String, iterations: Int, keyLength: Int, promise: Promise) {

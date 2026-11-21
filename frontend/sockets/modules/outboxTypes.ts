@@ -1,3 +1,4 @@
+import type { MediaContent } from './mediaEnvelope';
 // frontend/sockets/modules/outboxTypes.ts
 import type { ChatImageMetadata } from '../../screens/chat/chatMessageTypes';
 /** Acknowledgement shared by socket and HTTP message mutations. */
@@ -49,6 +50,7 @@ export type EditOutboxItem = {
   id: string;
   messageId: string;
   text: string;
+  media?: MediaContent;
   /** Собеседник — нужен, чтобы зашифровать правку. В старых записях отсутствует. */
   to?: string;
   createdAt: number;

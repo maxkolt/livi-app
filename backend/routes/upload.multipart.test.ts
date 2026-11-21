@@ -8,6 +8,7 @@ import { securityHeaders } from '../utils/httpSecurity';
 import type { AuthenticatedRequest } from '../utils/runtimeTypes';
 jest.mock('mongoose', () => ({ __esModule: true, default: { connection: { readyState: 1 } } }));
 jest.mock('../utils/rateLimit', () => ({ checkRateLimit: jest.fn(async () => ({ ok: true })) }));
+jest.mock('../models/MediaUpload', () => ({ __esModule: true, default: { create: jest.fn(async () => ({})) } }));
 let server: Server, base: string, image: Uint8Array<ArrayBuffer>;
 const created: string[] = [];
 beforeAll(async () => {
