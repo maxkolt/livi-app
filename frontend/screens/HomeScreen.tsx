@@ -4541,6 +4541,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
    * Нужен для автосохранения при выборе: setAvatarUri() асинхронный, и вызванный
    * следом handleSaveProfile() прочитал бы из замыкания ещё прежнее значение —
    * то есть загрузил бы старый аватар вместо нового.
+   * Без override сохраняется только ник: локальный URI оставлен как превью
+   * уже загруженного фото и не должен повторно запускать загрузку и галочку.
    */
   const handleSaveProfile = async (avatarOverride?: string) => {
     if (savingRef.current) return;
@@ -4579,7 +4581,7 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
       const finalNick = String((nickLiveRef.current || nick || '')).trim();
       // Android часто возвращает content://... (а не file://). Считаем это "локальным"
       // и прогоняем через normalizeLocalImageUri перед конвертацией в base64.
-      const avatarSource = String(avatarOverride || avatarUri || '');
+      const avatarSource = String(avatarOverride ?? savedAvatarUrl ?? '');
       const isLocalFile = /^(file|content|ph|assets-library):\/\//i.test(avatarSource);
       let finalAvatarUrl = avatarSource; // По умолчанию текущий URI
 
@@ -4675,8 +4677,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
           return;
         }
       } else {
-        // Если не локальный файл, используем текущий avatarUri (может быть https или пусто)
-        finalAvatarUrl = avatarUri;
+        // Никнейм сохраняет серверный URL; выбор фото передаёт явный override.
+        finalAvatarUrl = avatarSource;
       }
 
       // Подготавливаем данные для сервера (только ник, аватар уже загружен через socket)

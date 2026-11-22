@@ -1,7 +1,34 @@
 jest.mock('@shopify/react-native-skia', () => ({}));
 
 import { fisheyeScreen, fisheyeSource } from '../../utils/fisheyeLens';
-import { radarFittedAvatarSize, radarGeometry, radarRangeRadii } from './welcomeRadarScene';
+import { radarAvatarSizeForPhoto, radarFittedAvatarSize, radarGeometry, radarRangeRadii } from './welcomeRadarScene';
+import { preferredPhoneProfileAvatarSize, profileAvatarDisplaySize, resolvePhoneProfileLayout } from './profileHubLayout';
+
+it.each([
+  [360, 620, 351],
+  [384, 704, 383],
+  [411, 780, 410],
+  [432, 820, 440],
+])('matches the Profile photo on a large %s dp phone without resizing its %s dp pane radar',
+  (shortSide, paneHeight, radarSize) => {
+    const profile = resolvePhoneProfileLayout({
+      shortSide, paneHeight, isLandscape: false, diagonalInches: 6.9,
+      rowCount: 9, gapCount: 5, bottomClearance: 8, frameOutset: () => 0,
+    });
+    const photoSize = profileAvatarDisplaySize(preferredPhoneProfileAvatarSize(shortSide, 6.9));
+    expect(photoSize).toBe(profileAvatarDisplaySize(profile.avatarSize));
+    const before = radarGeometry(radarSize, 111);
+    const avatarSize = radarAvatarSizeForPhoto(radarSize, photoSize);
+    const after = radarGeometry(radarSize, avatarSize);
+    expect(radarFittedAvatarSize(radarSize, avatarSize)).toBe(photoSize);
+    expect(after.size).toBe(before.size);
+    expect(after.rDisc).toBe(before.rDisc);
+    expect(after.rDash).toBe(before.rDash);
+    const rings = radarRangeRadii(after, true);
+    expect(rings[0]).toBeGreaterThan(after.rIn);
+    expect(rings[1]).toBeLessThan(after.rDisc);
+  },
+);
 
 it.each([96, 220, 328, 351, 383, 410, 560])(
   'preserves the existing rings for ordinary phones and tablets at %s dp', size => {

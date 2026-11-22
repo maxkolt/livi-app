@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
+import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import AdaptiveText from '../../components/AdaptiveText';
 import { FlatList } from 'react-native-gesture-handler';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
@@ -404,6 +405,7 @@ function HomeWelcomeCallsViewInner({
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
+  const segmentSideMargin = usesLargePhoneAvatar(Math.min(windowWidth, windowHeight)) ? 8 : 12;
   const filter = useSyncExternalStore<CallsFilter>(onPendingWelcomeCallsFilter, getWelcomeCallsFilterSnapshot, getWelcomeCallsFilterSnapshot);
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
@@ -947,6 +949,7 @@ function HomeWelcomeCallsViewInner({
                 styles.segmentShell,
                 tabletLayout && styles.segmentShellTablet,
                 compactLandscape && styles.segmentShellLandscape,
+                !tabletLayout && !compactLandscape && { marginHorizontal: segmentSideMargin },
               ]}
               onStartShouldSetResponder={() => true}
             >

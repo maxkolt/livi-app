@@ -47,7 +47,7 @@ import {
 import { WELCOME_SEGMENT_ACTIVE } from './FriendsListCore';
 import { displayAvatarLetter } from './friendHelpers';
 import { hasProfilePhoto } from './HomeCenterProfile';
-import { resolvePhoneProfileLayout } from './profileHubLayout';
+import { profileAvatarDisplaySize, resolvePhoneProfileLayout } from './profileHubLayout';
 import { ProfileAvatar } from './ProfileAvatar';
 import {
   WelcomeProfileRow,
@@ -71,7 +71,6 @@ const SUPPORT_EMAIL = '12345kolt@gmail.com';
 const SUPPORT_EMAIL_2 = 'kolt12max@mail.ru';
 const SUPPORT_TELEGRAM_URL = 'https://t.me/livi_app';
 const CAMERA_BTN_SIZE = 36;
-const PROFILE_AVATAR_SCALE = 0.88;
 /** Красный «удалить» строки «Удалить профиль». */
 const WELCOME_DELETE_ICON = '#A63A48';
 /** Строк в hub-профиле: 4 секции по 2 строки. */
@@ -451,8 +450,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     [hubPaneHeight, windowWidth, windowHeight, isTablet, isLandscape, twoColumnList, activeFrameId],
   );
 
-  /** Скролл при редактировании ника или когда даже минимальные строки не влезают. */
-  const nicknameActionsVisible = accountOpen || nick !== savedNick || !!savedToast;
+  /** Общий savedToast включается и после автосохранения аватара — это не редактирование ника. */
+  const nicknameActionsVisible = accountOpen || nick !== savedNick;
   const needsHubScroll = accountOpen || hubMetrics.scroll;
   const handleHubPaneLayout = useCallback(
     (event: LayoutChangeEvent) => {
@@ -615,7 +614,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     onBackFromHub,
   ]);
 
-  const avatarSize = Math.round(hubMetrics.avatarSize * PROFILE_AVATAR_SCALE);
+  const avatarSize = profileAvatarDisplaySize(hubMetrics.avatarSize);
   const nicknameActionSize = Math.min(32, hubMetrics.rowHeight - 4);
   const avatarFrameOutset = activeFrameId ? activeFrameOutset(avatarSize, activeFrameId) : 0;
   const avatarFrameSize = Math.round(avatarSize) + avatarFrameOutset * 2;
@@ -859,6 +858,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
             </View>
           ) : (
             <Pressable
+              testID="profile-nickname-edit"
               style={[styles.inlineNickAction, { height: hubMetrics.rowHeight }]}
               accessibilityRole="button"
               accessibilityLabel={t('nickname', lang)}

@@ -22,6 +22,20 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
+/** Shared photo diameter before the profile's height-dependent fitting. */
+export function preferredPhoneProfileAvatarSize(shortSide: number, diagonalInches?: unknown): number {
+  const width = Number.isFinite(shortSide) && shortSide > 0 ? shortSide : 384;
+  const diagonal = typeof diagonalInches === 'number' && Number.isFinite(diagonalInches) &&
+    diagonalInches >= 4 && diagonalInches <= 8.5
+    ? diagonalInches
+    : 5.5;
+  return Math.round(clamp(width * 0.38 + clamp((diagonal - 5.5) * 4, 0, 6), 128, 160));
+}
+
+export function profileAvatarDisplaySize(layoutSize: number): number {
+  return Math.round(layoutSize * 0.88);
+}
+
 /**
  * Fit the complete phone profile into its measured pane. The photo has its own
  * moderate size instead of inheriting the smaller Search radar geometry. A real
@@ -38,12 +52,7 @@ export function resolvePhoneProfileLayout({
   bottomClearance,
   frameOutset,
 }: PhoneProfileLayoutOptions): PhoneProfileLayout {
-  const width = Number.isFinite(shortSide) && shortSide > 0 ? shortSide : 384;
-  const diagonal = typeof diagonalInches === 'number' && Number.isFinite(diagonalInches) &&
-    diagonalInches >= 4 && diagonalInches <= 8.5
-    ? diagonalInches
-    : 5.5;
-  const preferredAvatar = Math.round(clamp(width * 0.38 + clamp((diagonal - 5.5) * 4, 0, 6), 128, 160));
+  const preferredAvatar = preferredPhoneProfileAvatarSize(shortSide, diagonalInches);
   const hasHeight = Number.isFinite(paneHeight) && paneHeight > 0;
   const compactPortrait = !isLandscape && hasHeight && paneHeight < 600;
   const veryCompactPortrait = compactPortrait && paneHeight < 460;

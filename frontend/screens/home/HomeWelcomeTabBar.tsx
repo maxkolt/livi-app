@@ -5,6 +5,7 @@ import { AppState, Platform, Pressable, StyleSheet, View, type GestureResponderE
 import Svg, { ClipPath, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import type { EdgeInsets } from 'react-native-safe-area-context';
 import { useHomeLayout } from './HomeLayoutContext';
+import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
@@ -254,7 +255,8 @@ function HomeWelcomeTabBarInner({
   const fliqLift = compactLandscape ? 5 : FLIQ_LIFT;
   const fliqHump = compactLandscape ? 4 : FLIQ_HUMP;
   const contentHeight = welcomeTabBarContentHeight(tabletLayout, compactLandscape);
-  const shellMargin = tabletLayout ? 20 : compactLandscape ? WELCOME_FRIENDS_LIST_INSET : 12;
+  const shellMargin = tabletLayout ? 20 : compactLandscape ? WELCOME_FRIENDS_LIST_INSET
+    : usesLargePhoneAvatar(Math.min(width, height)) ? 8 : 12;
   // The outer host already applies the horizontal safe-area insets. Computing the dock
   // geometry here avoids the old first frame with a plain rectangle followed by the SVG.
   const dockWidth = Math.max(0, width - insets.left - insets.right - shellMargin * 2);
@@ -363,7 +365,7 @@ function HomeWelcomeTabBarInner({
         styles.shell,
         compactLandscape ? styles.shellLandscape : null,
         tabletLayout ? styles.shellTablet : null,
-        { marginBottom: bottomGap },
+        { marginHorizontal: shellMargin, marginBottom: bottomGap },
       ]}
       pointerEvents="box-none"
     >

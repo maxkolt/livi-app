@@ -121,7 +121,8 @@ const CUBE_BUBBLE_SWAP = [
 ];
 const ELEMENT_OFFSETS = {
   mic: [0, 312],
-  'cube-top': [96, -24],
+  // Верхний правый куб частично уходит за кнопку короны.
+  'cube-top': [176, -52],
   'cube-bottom': [-CUBE_BUBBLE_SWAP[0] - 32, -CUBE_BUBBLE_SWAP[1]],
   bubble: [CUBE_BUBBLE_SWAP[0] + CUBE_RIGHT_OFFSET, CUBE_BUBBLE_SWAP[1] + 96],
 };

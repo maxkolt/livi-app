@@ -146,6 +146,20 @@ export const ChatVideoNote = memo(function ChatVideoNote({
 
 function ActiveVideoNote({
   uri,
+  ...props
+}: React.ComponentProps<typeof VideoNotePlayer>) {
+  const localUri = useProtectedMediaUri(uri);
+  // Mount the native player only with its final source. Replacing a null source
+  // during download releases the shared object before Android attaches its view.
+  return localUri ? <VideoNotePlayer key={localUri} {...props} uri={localUri} /> : (
+    <View style={styles.center} pointerEvents="none">
+      <Ionicons name="hourglass-outline" size={24} color="#fff" />
+    </View>
+  );
+}
+
+function VideoNotePlayer({
+  uri,
   size,
   paused,
   durationSec,
@@ -161,8 +175,7 @@ function ActiveVideoNote({
   onTogglePause: () => void;
   onLongPress?: () => void;
 }) {
-  const localUri = useProtectedMediaUri(uri);
-  const player = useVideoPlayer(localUri || null, (p) => {
+  const player = useVideoPlayer(uri, (p) => {
     p.loop = false;
     p.muted = false;
     p.timeUpdateEventInterval = 0.1;

@@ -30,6 +30,8 @@ type WelcomeOnlineBannerProps = {
   /** До 4 онлайн-друзей; realtime с родителя. */
   peers: WelcomeBannerPeer[];
   compact?: boolean;
+  /** Большой телефон: уменьшаем вертикальные поля панели с короной. */
+  reducedHeight?: boolean;
   /** Низкий экран: минимальная высота pill, аватары и текст мельче, счётчик в одну строку. */
   dense?: boolean;
   /** Переопределить верхний отступ pill (адаптив Search). */
@@ -52,6 +54,7 @@ function WelcomeOnlineBannerInner({
   onlineCount,
   peers,
   compact = false,
+  reducedHeight = false,
   dense = false,
   marginTop,
   sideMargin,
@@ -95,6 +98,7 @@ function WelcomeOnlineBannerInner({
           trailingAction ? styles.pillWithAction : null,
           compact && styles.pillCompact,
           compact && trailingAction ? styles.pillCompactWithAction : null,
+          reducedHeight && trailingAction ? styles.pillReducedHeight : null,
           dense && styles.pillDense,
           dense && trailingAction ? styles.pillDenseWithAction : null,
         ]}
@@ -217,6 +221,10 @@ const styles = StyleSheet.create({
     minHeight: 66,
     paddingLeft: 16,
     paddingRight: 8,
+  },
+  pillReducedHeight: {
+    minHeight: 68,
+    paddingVertical: 10,
   },
   pillDense: {
     paddingVertical: 7,

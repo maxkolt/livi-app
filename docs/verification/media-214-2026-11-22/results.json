@@ -1,0 +1,148 @@
+{
+  "aab": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+  "sha256": "de7f746bde8c8feed5a9d19909a13c81221150e27344fb7b8eec7907512f3e88",
+  "sizeBytes": 127452155,
+  "versionCode": 214,
+  "versionName": "1.1.23",
+  "debuggable": false,
+  "signatureVerified": true,
+  "matchesOriginalProductionSigner": true,
+  "bundletoolValidated": true,
+  "sameHermesAsFinalQa": false,
+  "hermesSha256": "a808abcbf0e36c4dc04130579ee3b78cfea2c37b0a15cc4e237611649585395c",
+  "qaNativePayloadPreserved": true,
+  "date": "2026-11-22",
+  "frontend": {
+    "suites": 168,
+    "tests": 1603,
+    "passed": true,
+    "typecheck": true,
+    "eslint": true,
+    "diffCheck": true
+  },
+  "phoneClassTests": 14,
+  "deviceAcceptance": {
+    "a35WifiNoVpn": {
+      "legacyImage": true,
+      "encryptedImage": true,
+      "encryptedPhotoViewer": true,
+      "legacyAudioPlayer": true,
+      "encryptedAudioPlayer": true,
+      "legacyVideo": true,
+      "encryptedVideoFirstTapWithoutCache": true,
+      "verifiedFileHashes": 6
+    },
+    "s25WifiPrivataVpn": {
+      "encryptedImage": true,
+      "encryptedAudioPlayer": true,
+      "encryptedVideoFirstTap": true,
+      "changingVideoFrames": true,
+      "verifiedFileHashes": 5
+    },
+    "humanAudibilityConfirmed": false,
+    "networkRouteChangedDuringPlayback": false
+  },
+  "searchOnline": {
+    "a35HeightDp": 78,
+    "largePhoneHeightDp": 68,
+    "portraitMarginTopDp": 14,
+    "topMarginDeltaDp": 4,
+    "largePhoneSideMarginDp": 8,
+    "a35SideMarginDp": 12,
+    "largePhoneCrownSizeDp": 36,
+    "a35CrownSizeDp": 40,
+    "largePhoneRadarAvatarNicknameLiftDp": 6,
+    "a35SceneLiftDp": 0,
+    "latestHeightDeviceVerified": false,
+    "savedScreenshotsLargePhoneHeightDp": 64
+  },
+  "production213AppsPreserved": true,
+  "playPublished": false,
+  "temporaryAccountsRemoved": 3,
+  "finalSearchScreenshots": {
+    "a35": "/private/tmp/livi-media-214-20261122/online-final-a35.png",
+    "s25": "/private/tmp/livi-media-214-20261122/online-final-s25.png"
+  },
+  "deviceAppsAfterCleanup": {
+    "A35": [
+      "com.kolt12max.livi",
+      "com.kolt12max.livi.dev"
+    ],
+    "S25Ultra": [
+      "com.kolt12max.livi",
+      "com.kolt12max.livi.dev"
+    ]
+  },
+  "navigationSideMarginDp": {
+    "largePhonePortrait": 8,
+    "a35Portrait": 12,
+    "matchesSearchOnline": true,
+    "deviceVerified": false
+  },
+  "filterSideMarginDp": {
+    "largePhonePortrait": 8,
+    "a35Portrait": 12,
+    "tabs": [
+      "friends",
+      "chat",
+      "calls"
+    ],
+    "matchesSearchOnlineAndNavigation": true,
+    "deviceVerified": false
+  },
+  "upperRightCube": {
+    "sceneDeltaPx": {
+      "x": 80,
+      "y": -28
+    },
+    "referenceScenePx": [
+      1440,
+      2578
+    ],
+    "baselineGenerationPixelDifferences": 0,
+    "backgroundPlateUnchanged": true,
+    "pixelChangesConfinedToUpperCube": true,
+    "deviceVerified": false,
+    "packagedTexturesPixelIdentical": true,
+    "lastAdjustmentPx": {
+      "x": -16,
+      "y": 12
+    }
+  },
+  "cubeMoveDeviceVerified": false,
+  "qaResourcesMatchAab": false,
+  "searchCtaDropDp": {
+    "largePhonePortrait": 4,
+    "a35": 0,
+    "landscape": 0,
+    "deviceVerified": false
+  },
+  "nicknameActionsAfterAvatarSave": {
+    "sharedSavedToastDoesNotShowNicknameActions": true,
+    "focusAndDirtyNicknameStillShowActions": true,
+    "regressionTests": 4,
+    "reproducedBeforeFix": true,
+    "deviceVerified": false
+  },
+  "nicknameSaveWithoutAvatarFeedback": {
+    "alreadyUploadedLocalPreviewIsNotUploadedAgain": true,
+    "nicknameSaved": true,
+    "avatarSuccessEventAbsent": true,
+    "onlyPencilRemainsAfterSave": true,
+    "regressionReproducedBeforeFix": true,
+    "deviceVerified": false
+  },
+  "searchProfileAvatarParity": {
+    "scope": "large-phone portrait, including S25 Ultra",
+    "sharedProfilePhotoSizing": true,
+    "radarOuterGeometryUnchanged": true,
+    "a35AndCompactLandscapePreserved": true,
+    "testedWidthsDp": [
+      360,
+      384,
+      411,
+      432
+    ],
+    "deviceVerified": false
+  }
+}

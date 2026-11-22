@@ -10,6 +10,7 @@ import {
   BackHandler,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
+import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import AdaptiveText from '../../components/AdaptiveText';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image as ExpoImage } from 'expo-image';
@@ -103,6 +104,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
   const tabletLayout = isWelcomeTabletLayout(windowWidth, windowHeight);
   const compactLandscape =
     !tabletLayout && windowWidth > 0 && windowHeight > 0 && windowWidth / windowHeight > 1.05;
+  const segmentSideMargin = usesLargePhoneAvatar(Math.min(windowWidth, windowHeight)) ? 8 : 12;
   const [filter, setFilter] = useState<FriendsFilter>('all');
   const [searchOpen, setSearchOpen] = useState(false);
   const [glassHeaderH, setGlassHeaderH] = useGlassHeaderHeight(tabletLayout, compactLandscape, searchOpen);
@@ -475,6 +477,7 @@ function HomeWelcomeFriendsViewInner(props: HomeWelcomeFriendsViewProps) {
           styles.segmentShell,
           tabletLayout && styles.segmentShellTablet,
           compactLandscape && styles.segmentShellLandscape,
+          !tabletLayout && !compactLandscape && { marginHorizontal: segmentSideMargin },
         ]}
         onStartShouldSetResponder={() => true}
       >

@@ -127,6 +127,11 @@ export function radarGeometry(size: number, avatarSize: number): RadarGeometry {
 /** Толщина тонкого круга вокруг аватара, в единицах u. */
 const INNER_RING_STROKE = 0.9;
 
+/** Position the inner circle around a requested photo without scaling the radar. */
+export function radarAvatarSizeForPhoto(size: number, photoSize: number): number {
+  return Math.max(0, photoSize - (10 - INNER_RING_STROKE) * (size / 328));
+}
+
 /**
  * Диаметр фото, край которого совпадает с внутренним краем тонкого круга:
  * без рамки круг идёт по краю аватара, рамка от края фото ложится поверх него.

@@ -1,5 +1,7 @@
 const mockEffects: Array<() => void | (() => void)> = [];
 const mockSetPaused = jest.fn();
+let mockResolvedUri: string | undefined;
+const mockUseVideoPlayer = jest.fn((_uri: unknown, _setup: unknown) => mockPlayer);
 const mockPlayer = { duration: 30, currentTime: 0, status: 'readyToPlay', play: jest.fn(), pause: jest.fn(), addListener: jest.fn() };
 let mockPanConfig: import('react-native').PanResponderCallbacks;
 let mockStore: { activeId: string | null; setActive: (id: string | null) => void };
@@ -29,7 +31,8 @@ jest.mock('react-native', () => ({
   } },
 }));
 jest.mock('expo', () => ({ useEvent: (_player: unknown, _event: unknown, initial: unknown) => initial }));
-jest.mock('expo-video', () => ({ useVideoPlayer: () => mockPlayer, VideoView: 'VideoView' }));
+jest.mock('expo-video', () => ({ useVideoPlayer: (uri: unknown, setup: unknown) => mockUseVideoPlayer(uri, setup), VideoView: 'VideoView' }));
+jest.mock('../../hooks/useProtectedMediaUri', () => ({ useProtectedMediaUri: (uri: string) => mockResolvedUri ?? uri }));
 jest.mock('expo-image', () => ({ Image: 'Image' }));
 jest.mock('@expo/vector-icons', () => ({ Ionicons: 'Ionicons' }));
 jest.mock('react-native-svg', () => ({ __esModule: true, default: 'Svg', Circle: 'Circle' }));
@@ -61,12 +64,15 @@ beforeEach(() => {
   mockPlayer.currentTime = 0;
   mockPlayer.play.mockClear();
   mockPlayer.pause.mockClear();
+  mockUseVideoPlayer.mockClear();
+  mockResolvedUri = undefined;
 });
 
 function renderActive(onLongPress?: () => void) {
   render(false, onLongPress).props.onPress();
   const child = React.Children.toArray(render(false, onLongPress).props.children).find(node => React.isValidElement<{ uri?: string }>(node) && node.props.uri === 'file:///video.mp4') as React.ReactElement;
-  return (child.type as (props: unknown) => React.ReactElement<{ children: React.ReactNode }>)(child.props);
+  const resolved = (child.type as (props: unknown) => React.ReactElement)(child.props);
+  return (resolved.type as (props: unknown) => React.ReactElement<{ children: React.ReactNode }>)(resolved.props);
 }
 const touch = (x: number, y: number) => ({ nativeEvent: { locationX: x, locationY: y } }) as GestureResponderEvent;
 const move = (dx: number, dy: number, fingers = 1) => ({ dx, dy, numberActiveTouches: fingers }) as PanResponderGestureState;
@@ -76,6 +82,20 @@ it('creates a video child only after playback is selected', () => {
   expect(hasPlayer(idle)).toBe(false);
   idle.props.onPress();
   expect(hasPlayer(render())).toBe(true);
+});
+
+it('waits for protected download before mounting a player with the resolved local file', () => {
+  render().props.onPress();
+  const child = React.Children.toArray(render().props.children).find(node => React.isValidElement<{ uri?: string }>(node) && node.props.uri === 'file:///video.mp4') as React.ReactElement;
+  const resolve = child.type as (props: unknown) => React.ReactElement<{ uri?: string }>;
+  mockResolvedUri = '';
+  expect(resolve(child.props).type).toBe('View');
+  expect(mockUseVideoPlayer).not.toHaveBeenCalled();
+  mockResolvedUri = 'file:///decrypted.mp4';
+  const ready = resolve(child.props);
+  expect(ready.key).toBe('file:///decrypted.mp4');
+  (ready.type as (props: unknown) => unknown)(ready.props);
+  expect(mockUseVideoPlayer).toHaveBeenCalledWith('file:///decrypted.mp4', expect.any(Function));
 });
 
 it('registers an outside pause that preserves the active circle and its player', () => {

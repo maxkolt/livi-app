@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
+  NativeModules,
   Platform,
   StyleSheet,
   View,
@@ -31,10 +32,11 @@ import {
 } from './AvatarDust';
 import { HomeCenterProfile, hasProfilePhoto } from './HomeCenterProfile';
 import { PHONE_AVATAR_REFERENCE_WIDTH, searchPhoneAvatarScale, usesLargePhoneAvatar } from './phoneAvatarLayout';
+import { preferredPhoneProfileAvatarSize, profileAvatarDisplaySize } from './profileHubLayout';
 import { WelcomeCrownButton } from './WelcomeCrownButton';
 import { WelcomeOnlineBanner, type WelcomeBannerPeer } from './WelcomeOnlineBanner';
 import { WelcomeRadar } from './WelcomeRadar';
-import { RADAR_DRAWN_EXTENT, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
+import { RADAR_DRAWN_EXTENT, radarAvatarSizeForPhoto, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
 import { searchRadarPlacement } from './searchRadarPlacement';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
 import type { Lang } from '../../utils/i18n';
@@ -230,6 +232,8 @@ function HomeWelcomeViewInner({
   const splitTight = splitStage && !isTabletLayout;
 
   const bannerCompact = splitTight || compactLayout || shortPhone;
+  const reducedBannerHeight = !isTabletLayout && usesLargePhoneAvatar(Math.min(stageWidth, stageHeight));
+  const searchSceneLift = reducedBannerHeight && !splitStage ? 6 : 0;
 
   /**
    * Высота панели на первый кадр, пока не пришёл onLayout: окно минус верхний
@@ -265,7 +269,7 @@ function HomeWelcomeViewInner({
   /** Баннер сверху, CTA снизу; радар центрируется в оставшемся зазоре. */
   const space = {
     // Наверху блок лежит на стекле от системной строки — к ней ближе, как шапка «Друзей».
-    bannerMarginTop: splitStage ? verticalEdgeGap : isTabletLayout ? 14 : 10,
+    bannerMarginTop: splitStage ? verticalEdgeGap : 14,
     radarPaddingTop: 0,
     stageCopyMarginTop: 0,
     stageCopyPaddingBottom: 0,
@@ -287,7 +291,7 @@ function HomeWelcomeViewInner({
    */
   const estimatedChrome = splitStage
     ? 0
-    : (bannerCompact ? 68 : 80) + space.bannerMarginTop;
+    : (reducedBannerHeight ? 68 : bannerCompact ? 68 : 80) + space.bannerMarginTop;
   /**
    * Замер сцены принимаем только если он правдоподобен. При засыпании и повороте
    * onLayout отдаёт промежуточные значения (ловил кадр 726×95 при реальных 239),
@@ -394,15 +398,20 @@ function HomeWelcomeViewInner({
   }) : { radarShiftY: -32, nicknameShiftY: -24 };
 
   /**
-   * Телефон: аватар в любой ориентации — как на Поиске в вертикали (тот же
-   * эталон берёт Профиль). Радар в landscape меньше, и под аватар подстраиваются
-   * только кольца, а не наоборот.
+   * Большой телефон в портрете: фото такого же диаметра, как в Профиле.
+   * В landscape сохраняем компактное фото, чтобы оставить место кольцам.
    * Планшет: аватар растёт вместе с радаром, но не больше 0.42 его диаметра.
    */
   const welcomeAvatarGeometry = (() => {
     if (!isTabletLayout) {
       const shortSide = Math.min(stageWidth, stageHeight);
       const largePhone = usesLargePhoneAvatar(shortSide);
+      if (largePhone && !splitStage) {
+        const photoSize = profileAvatarDisplaySize(preferredPhoneProfileAvatarSize(
+          shortSide, NativeModules.LiviAppModule?.screenDiagonalInches,
+        ));
+        return { avatarSize: radarAvatarSizeForPhoto(radarSize, photoSize) };
+      }
       const phone = welcomePhoneAvatarMetrics(largePhone ? PHONE_AVATAR_REFERENCE_WIDTH : shortSide);
       const avatarScale = largePhone ? SEARCH_WIDE_PHONE_AVATAR_SCALE : SEARCH_PHONE_AVATAR_SCALE;
       // Landscape: радар ниже, и аватар вертикали занимал почти весь диск — кольцам
@@ -509,12 +518,14 @@ function HomeWelcomeViewInner({
             onlineCount={onlineCount}
             peers={bannerPeers}
             compact={bannerCompact}
+            reducedHeight={reducedBannerHeight}
             dense={tightStage}
             marginTop={space.bannerMarginTop}
-            sideMargin={isTabletLayout ? 20 : 12}
+            sideMargin={isTabletLayout ? 20 : reducedBannerHeight ? 8 : 12}
             trailingAction={
               <WelcomeCrownButton
                 large={isTabletLayout}
+                compact={reducedBannerHeight}
                 small={tightStage}
                 surface={WELCOME_CROWN_SURFACE}
               />
@@ -543,7 +554,7 @@ function HomeWelcomeViewInner({
           <View>
             <GestureDetector gesture={radarGesture}>
             {/* collapsable: иначе Android выкидывает «пустой» view и жесту не к чему крепиться. */}
-            <View collapsable={false} style={{ transform: [{ translateY: radarPlacement.radarShiftY }] }}>
+            <View collapsable={false} style={{ transform: [{ translateY: radarPlacement.radarShiftY - searchSceneLift }] }}>
             <WelcomeRadar
               size={radarSize}
               avatarSize={showRadarAvatar ? welcomeAvatarSize : 0}
@@ -575,7 +586,7 @@ function HomeWelcomeViewInner({
                 pointerEvents="none"
                 style={[
                   welcomeStyles.nickWrap,
-                  { top: radarSize / 2 + radarDashR + nickGap, transform: [{ translateY: radarPlacement.nicknameShiftY }] },
+                  { top: radarSize / 2 + radarDashR + nickGap, transform: [{ translateY: radarPlacement.nicknameShiftY - searchSceneLift }] },
                 ]}
               >
                 <AdaptiveText
@@ -617,6 +628,7 @@ function HomeWelcomeViewInner({
               onlineCount={onlineCount}
               peers={bannerPeers}
               compact={bannerCompact}
+              reducedHeight={reducedBannerHeight}
               dense={tightStage}
               marginTop={space.bannerMarginTop}
               sideMargin={0}
@@ -636,7 +648,7 @@ function HomeWelcomeViewInner({
               {
                 paddingTop: ctaPadTop,
                 paddingBottom: space.ctaBottomPad,
-                transform: [{ translateY: ctaShiftY }],
+                transform: [{ translateY: ctaShiftY + (reducedBannerHeight && !splitStage ? 4 : 0) }],
               },
             ]}
           >
