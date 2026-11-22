@@ -587,8 +587,9 @@ export function FliqFeedView({
   const btnSize = tablet ? 44 : compact ? 32 : GLASS_HEADER_BTN;
   const btnIconSize = tablet ? 24 : compact ? 19 : 20;
   const headerH = showHeader ? (tablet ? 56 : compact ? 40 : 48) : 0;
-  // Кнопки шапки чуть ближе к центру, чем края карточки.
+  // Back keeps its existing inset; feed actions move inward over the upper cube.
   const headerInset = sideInset + (tablet ? 14 : 10);
+  const headerActionInset = savedOpen ? headerInset : Math.max(headerInset, paneW * 0.19 - btnSize / 2);
   // Карточка ролика в покое — там, откуда идёт свет (страница: карточка, полоса прогресса, панель — по центру).
   const ambientX = (rootSize.width - boxW) / 2;
   const ambientY = shownTopInset + headerH + Math.max(0, (pageH - cardH - FLIQ_PROGRESS_ROW_H - panelH) / 2);
@@ -777,12 +778,12 @@ export function FliqFeedView({
       ) : null}
       <View style={{ height: topInset }} />
       {showHeader ? (
-        <View style={[styles.header, { height: headerH, paddingHorizontal: headerInset }]}>
+        <View style={[styles.header, { height: headerH, paddingHorizontal: headerActionInset }]}>
           <WelcomeTabTitle
             label={savedOpen ? fliqT('savedTitle', lang) : 'Fliq'}
             tablet={tablet}
             compact={compact}
-            sideInset={headerInset + btnSize}
+            sideInset={headerActionInset + btnSize}
           />
           {savedOpen ? (
             <Pressable
@@ -802,7 +803,7 @@ export function FliqFeedView({
             </Pressable>
           ) : (
             <>
-              {/* «Сохранённые» — у левого края, на месте кнопки «назад» из списка сохранённых. */}
+              {/* Feed actions stay on their respective sides, closer to the title. */}
               {savedButton(btnSize)}
               <View style={styles.headerSpacer} />
               {topicsButton(btnSize)}
