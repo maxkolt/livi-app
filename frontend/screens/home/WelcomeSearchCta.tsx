@@ -441,6 +441,9 @@ export function WelcomeSearchCta({
                 color={UI_ACCENT}
               />
               <FitText
+                // Home layout can catch up after the window has already expanded from PiP.
+                // Recreate the fitted text with its final constraints to clear Android's shrunken spans.
+                key={`${Math.round(buttonMaxWidth)}:${buttonHeight}`}
                 style={[
                   styles.label,
                   tabletLayout && styles.labelTablet,

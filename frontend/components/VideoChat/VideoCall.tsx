@@ -1,3 +1,5 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
+import { notifyIncomingAnswerUiReady } from '../../utils/incomingAnswerUiReady';
 import { isPipInSystemMode, isPipVisible, setVideoCallActive, isVideoCallActiveExplicitlyFalse, isEndingCallInProgress, setEndingCallInProgress, isCallEndedFromPiPNoOpen } from '../../utils/callRuntime';
 import type { CallAudioGlobals } from '../../utils/callStateTypes';
 import type { FriendListItem } from '../../sockets/modules/friends';
@@ -26,7 +28,7 @@ import {
 } from 'react-native';
 import { useFocusEffect, useIsFocused } from '@react-navigation/native';
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MediaStream } from '@livekit/react-native-webrtc';
 import { MaterialIcons } from '@expo/vector-icons';
 import { VideoCallSession, wasCallEndedLocally } from '../../src/webrtc/sessions/VideoCallSession';
@@ -190,7 +192,7 @@ type Props = {
 
 const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const isFocused = useIsFocused();
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const { isDark } = useAppTheme();
   
   const [lang, setLang] = useState<Lang>(defaultLang);
@@ -7548,7 +7550,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
     partnerExternalHold: partnerExternalHoldUi,
     objectFit: 'cover' as const,
   };
-  if (systemPiPCompact) {
+  if (systemPiPCompact && !pip.systemPiPCaptureActive) {
     // ДИАГНОСТИКА (временная): compact не должен рисоваться на переднем плане.
     try {
       const gDiag = global as CallAudioGlobals;
@@ -7685,10 +7687,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
             } else {
               markCallPerf('videocall_video_ui_onLayout');
             }
-            (global as CallAudioGlobals).__notifyIncomingAnswerUiReady?.({
-              source: 'videocall_layout',
-              callId: callId || route?.params?.callId || null,
-            });
+            notifyIncomingAnswerUiReady(route?.params?.callId || callId);
           } catch {}
         }}
       >

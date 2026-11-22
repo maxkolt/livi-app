@@ -19,6 +19,8 @@ const isDevVariant =
 const expo = { ...(appJson.expo || {}) };
 
 if (isDevVariant) {
+  // Matches src/debug/AndroidManifest.xml; release exposes verified HTTPS only.
+  expo.scheme = ["livi", "exp+livi-video-chat"];
   expo.name = expo.name ? `${expo.name} Dev` : "LiVi Dev";
   // Не меняем slug — EAS проект привязан к slug из app.json; иначе "slug does not match".
   // Отличие dev-сборки: name "LiVi Dev", package com.kolt12max.livi.dev.

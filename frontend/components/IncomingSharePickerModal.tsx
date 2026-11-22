@@ -1,3 +1,4 @@
+import { useBottomControlsInsets } from '../utils/useBottomControlsInsets';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -8,7 +9,7 @@ import {
   ToastAndroid,
   View,
 } from 'react-native';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { NativeViewGestureHandler, FlatList as GHFlatList } from 'react-native-gesture-handler';
 import AdaptiveText from './AdaptiveText';
@@ -95,7 +96,7 @@ export default function IncomingSharePickerModal({ visible, items, onClose }: Pr
 
 /** Сам экран отправки — и в модалке главного окна, и корнем ShareActivity (components/share). */
 export function SharePickerContent({ visible, items, onClose }: Props) {
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const { width, height } = useSafeAreaFrame();
   const lang = useLang((s) => s.lang);
   const labelFont = useDigitalRegularFont();

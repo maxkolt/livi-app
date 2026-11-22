@@ -111,7 +111,7 @@
         </div>
         
         <div id="not-installed" class="hidden">
-            <p class="subtitle" style="margin-bottom: 20px;">Приложение LiVi не установлено</p>
+            <p class="subtitle" style="margin-bottom: 20px;">Не удалось открыть LiVi автоматически</p>
             <a href="#" id="ios-link" class="button">Скачать для iOS</a>
             <a href="#" id="android-link" class="button button-secondary">Скачать для Android</a>
             
@@ -137,7 +137,7 @@
             <div class="info" style="margin-top: 20px;">
                 <p class="info-text" style="font-size: 12px;">
                     Если приложение установлено, попробуйте открыть ссылку вручную:<br/>
-                    <code style="color: #4DD0E1; font-size: 11px;" id="manual-link">livi://invite/...</code>
+                    <code style="color: #4DD0E1; font-size: 11px;" id="manual-link">https://api.liviapp.com/invite/...</code>
                 </p>
             </div>
         </div>
@@ -157,6 +157,12 @@
             return 'https://play.google.com/store/apps/details?id=com.kolt12max.livi&hl=ru&referrer=' + referrer;
         }
 
+        // HTTPS opens both existing Play versions and releases without custom schemes.
+        function buildAndroidAppIntent(inviteCode) {
+            const fallback = encodeURIComponent(buildPlayStoreUrl(inviteCode));
+            return `intent://api.liviapp.com/invite/${inviteCode}#Intent;scheme=https;package=com.kolt12max.livi;S.browser_fallback_url=${fallback};end`;
+        }
+
         /** Clipboard fallback, если Install Referrer недоступен. */
         function stashInviteForInstall(inviteCode) {
             try {
@@ -167,11 +173,12 @@
             } catch (e) {}
         }
 
+        let code = null;
         try {
             // Получаем код приглашения из URL
             // Формат: /invite/{code} или /invite?code={code}
             const urlParams = new URLSearchParams(window.location.search);
-            let code = urlParams.get('code');
+            code = urlParams.get('code');
             
             // Если код не в query параметре, берем из pathname
             if (!code) {
@@ -191,14 +198,11 @@
                 document.getElementById('error').querySelector('.subtitle').textContent = 'Неверная ссылка приглашения';
                 document.getElementById('retry-link').style.display = 'none';
             } else {
-            // Пытаемся открыть приложение
-            const appUrl = `livi://invite/${code}`;
-            const fallbackUrl = `https://livi.app/invite/${code}`;
-            const PLAY_STORE_ANDROID = buildPlayStoreUrl(code);
-            
             // Определяем платформу
             const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
             const isAndroid = /Android/.test(navigator.userAgent);
+            const appUrl = isAndroid ? `https://api.liviapp.com/invite/${code}` : `livi://invite/${code}`;
+            const PLAY_STORE_ANDROID = buildPlayStoreUrl(code);
             
             document.getElementById('ios-link').href = 'https://apps.apple.com/app/livi';
             document.getElementById('android-link').href = PLAY_STORE_ANDROID;
@@ -282,10 +286,9 @@
                 }, 2500);
             } else if (isAndroid) {
                 // Для Android используем intent:// URL для более надежного открытия
-                // Формат: intent://path#Intent;scheme=scheme;package=package;end
                 // Перед fallback в Play Store кладём код в clipboard + referrer в URL.
                 stashInviteForInstall(code);
-                const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
+                const intentUrl = buildAndroidAppIntent(code);
                 
                 console.log('[invite] Attempting to open app on Android:', { intentUrl, appUrl, code });
                 
@@ -294,13 +297,8 @@
                     window.location.href = intentUrl;
                     console.log('[invite] Intent URL set');
                 } catch (e) {
-                    console.warn('[invite] Intent URL failed, trying custom scheme:', e);
-                    // Fallback на обычный custom scheme
-                    try {
-                        window.location.href = appUrl;
-                    } catch (e2) {
-                        console.error('[invite] Custom scheme also failed:', e2);
-                    }
+                    console.warn('[invite] Intent URL failed:', e);
+                    showNotInstalled();
                 }
                 
                 // Также создаем скрытую ссылку для клика (дополнительный способ)
@@ -324,12 +322,13 @@
                     }
                 }, 100);
                 
-                // Также пытаемся открыть через обычный scheme как fallback
+                // Retry the package-scoped intent; navigating to this HTTPS page
+                // again would loop when a browser blocks automatic app launches.
                 setTimeout(() => {
                     if (!opened) {
                         try {
-                            window.location.href = appUrl;
-                            console.log('[invite] Trying custom scheme fallback');
+                            window.location.href = intentUrl;
+                            console.log('[invite] Retrying Android App Link');
                         } catch (e) {
                             console.error('[invite] Failed to open app:', e);
                         }
@@ -373,7 +372,7 @@
                 e.preventDefault();
                 opened = false;
                 if (isAndroid) {
-                    const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
+                    const intentUrl = buildAndroidAppIntent(code);
                     window.location.href = intentUrl;
                 } else {
                     window.location.href = appUrl;
@@ -388,7 +387,7 @@
                     console.log('[invite] Manual open app clicked');
                     try {
                         if (isAndroid) {
-                            const intentUrl = `intent://invite/${code}#Intent;scheme=livi;package=com.kolt12max.livi;S.browser_fallback_url=${encodeURIComponent(PLAY_STORE_ANDROID)};end`;
+                            const intentUrl = buildAndroidAppIntent(code);
                             window.location.href = intentUrl;
                         } else {
                             window.location.href = appUrl;
@@ -409,11 +408,13 @@
             
             if (errorEl) errorEl.classList.remove('hidden');
             if (errorMsgEl) errorMsgEl.textContent = 'Ошибка: ' + (e.message || 'Неизвестная ошибка');
-            if (manualLinkEl && code) {
-                manualLinkEl.textContent = `livi://invite/${code}`;
+            if (manualLinkEl && code && /^[a-f\d]{24}$/i.test(code)) {
+                const manualUrl = /Android/.test(navigator.userAgent)
+                    ? buildAndroidAppIntent(code) : `livi://invite/${code}`;
+                manualLinkEl.textContent = `https://api.liviapp.com/invite/${code}`;
                 manualLinkEl.style.cursor = 'pointer';
                 manualLinkEl.onclick = () => {
-                    window.location.href = `livi://invite/${code}`;
+                    window.location.href = manualUrl;
                 };
             }
             document.getElementById('loading').classList.add('hidden');

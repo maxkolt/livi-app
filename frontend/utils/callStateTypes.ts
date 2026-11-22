@@ -85,7 +85,6 @@ export type CallAudioGlobals = typeof global & {
   __toggleCamRef?: CallRef<(() => void) | null>;
   __cycleAudioRouteRef?: CallRef<(() => void) | null>;
   __systemPiPCompactDiagAtRef?: CallRef<number>;
-  __notifyIncomingAnswerUiReady?: (info?: { source?: string; callId?: string | null }) => void;
   __connectingToRoomRef?: { roomName: string | null; session: VideoCallSession | null };
   __syncDirectCallAudioOnlyUiRef?: CallRef<((session: VideoCallSession | null) => void) | null>;
   __videoCallRoomDisconnectPromiseRef?: CallRef<Promise<void> | null>;

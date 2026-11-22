@@ -212,9 +212,9 @@ export function forceAndroidSystemPiPPeerVideoVisible(): void {
   if (Platform.OS !== 'android') return;
   try {
     lastNativePlaceholderOnly = false;
-    lastNativeFrameReady = true;
+    lastNativeFrameReady = false;
+    // Only the mounted capture view may acknowledge a clean frame.
     NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(false);
-    NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
     logHomePiPTrace('js_force_pip_peer_video', {});
   } catch (_) {}
 }
@@ -559,7 +559,7 @@ export function armAndroidLeaveHintForVideoCallHome(opts?: { allowFromInAppPiP?:
         } else {
           upd({
             pendingSystemPiP: true,
-            systemPiPCaptureActive: false,
+            systemPiPCaptureActive: true,
             systemPiPCaptureRequestId: 0,
             allowVideoRender: true,
           });

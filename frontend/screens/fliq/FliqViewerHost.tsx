@@ -1,9 +1,10 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 // Просмотр одного ролика по ссылке (карточка в чате): родной плеер источника на весь
 // экран в стиле LiVi, под ним «Переслать» и «Открыть в …». Слой в основном окне
 // (FullScreenPortal), один на приложение — монтируется в App.tsx.
 import React, { useCallback, useEffect, useState } from 'react';
 import { ActivityIndicator, AppState, Linking, Pressable, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { create } from 'zustand';
 import { FullScreenPortal } from '../../components/FullScreenPortal';
@@ -56,7 +57,7 @@ export default function FliqViewerHost() {
 }
 
 function FliqViewer({ link, onClose }: { link: FliqLink; onClose: () => void }) {
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const { width, height } = useSafeAreaFrame();
   const lang = useLang((s) => s.lang);
   const labelFont = useDigitalMediumFont();

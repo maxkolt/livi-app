@@ -1,4 +1,5 @@
 import { sha256 } from '@noble/hashes/sha2';
+import { NativeModules } from 'react-native';
 import { fromBase64, toBase64, utf8Encode } from '../sockets/modules/e2eCrypto';
 
 const apiBase = () => (require('../sockets/modules/constants') as typeof import('../sockets/modules/constants')).API_BASE;
@@ -40,7 +41,6 @@ export function peekProtectedMedia(uri: string): string | undefined { return rea
 export async function resolveProtectedMedia(uri: string): Promise<string> {
   if (!isPrivateMedia(uri)) return uri;
   const FileSystem = await import('expo-file-system');
-  const { NativeModules } = await import('react-native');
   const { getInstallAuthHeaders } = await import('./installId');
   const owner = currentOwner();
   if (!owner) throw new Error('unauthorized');
@@ -75,7 +75,6 @@ export async function resolveProtectedMedia(uri: string): Promise<string> {
 }
 
 export async function encryptMediaForUpload(uri: string, type: 'image' | 'audio' | 'video'): Promise<{ uri: string; key: MediaKey }> {
-  const { NativeModules } = await import('react-native');
   if (typeof NativeModules.LiviCrypto?.encryptMedia !== 'function') throw new Error('media_encryption_requires_update');
   const encrypted = await NativeModules.LiviCrypto.encryptMedia(uri) as { uri: string; key: string };
   const ext = uri.split(/[?#]/)[0].split('.').pop()?.toLowerCase();

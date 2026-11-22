@@ -43,7 +43,6 @@ import {
   refreshSystemPiPLeaveContextSnapshot,
   commitSystemPiPLeaveContextSnapshot,
   clearSystemPiPLeaveContextSnapshot,
-  isSystemPiPLeaveAudioOrigin,
   isSystemPiPSessionAudioOrigin,
   markSystemPiPSessionAudioOrigin,
   clearSystemPiPSessionAudioOrigin,
@@ -758,30 +757,15 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           } catch (_) {}
           armCallAudioPreservePriority(6000);
           setPendingSystemPiP(false);
-          // Audio/logo origin: CaptureHost всегда mounted (тихий fill под native logo) —
-          // иначе mid-PiP peer cam не успевает remount RTC до expand.
-          // Полный video UI на VideoCall → compact RemoteVideo, без dual RTC.
-          const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
-          const audioUi = isInAudioOnlyCallUi();
-          const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
+          // One app-level video layer owns system PiP on every route. Keep the
+          // call screen mounted underneath so return never rebuilds its previews.
           const peerLiveNow = !shouldUseSystemPiPPlaceholderOnly();
-          const videoUiOwnsCapture =
-            onVideoCallRoute && !audioUi && !audioOrigin && peerLiveNow;
-          if (videoUiOwnsCapture) {
-            setSystemPiPCaptureActive(false);
-            setSystemPiPCaptureRequestId(0);
-            setAllowVideoRender(true);
+          setSystemPiPCaptureActive(true);
+          setAllowVideoRender(peerLiveNow);
+          if (peerLiveNow) {
             try {
               forceAndroidSystemPiPPeerVideoVisible();
             } catch (_) {}
-          } else {
-            setSystemPiPCaptureActive(true);
-            setAllowVideoRender(peerLiveNow);
-            if (peerLiveNow) {
-              try {
-                forceAndroidSystemPiPPeerVideoVisible();
-              } catch (_) {}
-            }
           }
           try {
             if (isPipVisible()) {
@@ -1418,15 +1402,16 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
       mediaStreamHasLiveVideo(sessionRemoteStream) ||
       mediaStreamHasLiveVideo(remoteStreamRef.current);
     const peerLive = hasLive || remoteCamOn === true || sessionRemoteCam;
+    const hasVideo = peerLive || !shouldUseSystemPiPPlaceholderOnly();
     try {
       // Снимаем native logo когда peer cam on / live — CaptureHost покажет RTC или тихий fill.
-      if (peerLive) {
+      if (hasVideo) {
         forceAndroidSystemPiPPeerVideoVisible();
       } else {
         NativeModules.LiviAppModule?.setSystemPiPCapturePlaceholderOnly?.(true);
       }
     } catch (_) {}
-    if (!peerLive) {
+    if (!hasVideo) {
       setAllowVideoRender((prev) => (prev === false ? prev : false));
       return;
     }
@@ -1440,25 +1425,9 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
         }
       } catch (_) {}
     }
-    // Audio/logo enter → peer video: CaptureHost обязателен (audio UI не рисует RemoteVideo).
-    // Полный video UI на VideoCall → compact RemoteVideo, без dual RTC.
-    const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
-    const audioUi = isInAudioOnlyCallUi();
-    let stayOnVideo = false;
-    try {
-      stayOnVideo = global.__stayOnVideoCallUiRef?.current === true;
-    } catch (_) {}
-    const audioOrigin = isSystemPiPLeaveAudioOrigin() || isSystemPiPSessionAudioOrigin();
-    const videoUiOwnsCapture =
-      onVideoCallRoute && stayOnVideo && !audioUi && !audioOrigin && hasLive;
-    if (!videoUiOwnsCapture) {
-      setSystemPiPCaptureActive((prev) => (prev ? prev : true));
-      if (hasLive) {
-        setSystemPiPCaptureRequestId((id) => id + 1);
-      }
-    } else {
-      setSystemPiPCaptureActive((prev) => (prev ? false : prev));
-    }
+    // Keep the same capture owner after remote-track updates as on initial entry.
+    setSystemPiPCaptureActive((prev) => (prev ? prev : true));
+
   }, [
     inSystemPiPMode,
     pendingSystemPiP,
@@ -2168,19 +2137,10 @@ export function PiPProvider({ children, onReturnToCall, onEndCall }: Props) {
           NativeModules.LiviAppModule?.setSystemPiPCaptureFrameReady?.(true);
         } catch (_) {}
       } else {
-        // Peer cam on → video. На VideoCall — compact RemoteVideo (TextureView).
-        // CaptureHost только вне VideoCall / на audio shell, иначе dual RTCView → чёрный кадр.
-        const onVideoCallRoute = readRootCurrentRouteName() === 'VideoCall';
-        const audioUi = isInAudioOnlyCallUi();
         setPendingSystemPiP(true);
         setAllowVideoRender(true);
-        if (onVideoCallRoute && !audioUi) {
-          setSystemPiPCaptureActive(false);
-          setSystemPiPCaptureRequestId(0);
-        } else {
-          setSystemPiPCaptureActive(true);
-          setSystemPiPCaptureRequestId((id) => id + 1);
-        }
+        setSystemPiPCaptureActive(true);
+        setSystemPiPCaptureRequestId((id) => id + 1);
         try {
           g.__pendingSystemPiPSyncRef = g.__pendingSystemPiPSyncRef || { current: false };
           g.__pendingSystemPiPSyncRef.current = true;

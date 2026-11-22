@@ -10,6 +10,9 @@ export interface SocketData {
   partnerSid?: string | null;
   roomId?: string;
   busy?: boolean;
+  /** Matchmaking owns this flag; client presence cannot restart a stopped search. */
+  randomChatBusy?: boolean;
+  randomPresenceVersion?: number;
   inCall?: boolean;
   isNexting?: boolean;
   lastNextTransitionId?: string;

@@ -1,0 +1,121 @@
+{
+  "checkedAtMoscow": "2026-11-22T17:01:08.205369+03:00",
+  "version": {
+    "code": 215,
+    "name": "1.1.24",
+    "package": "com.kolt12max.livi"
+  },
+  "scope": "Current working tree, including pre-existing uncommitted changes; no commit or Play publication performed.",
+  "artifacts": {
+    "aab": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "aabBytes": 127454747,
+    "aabSha256": "13362e365c4f4e782e6256f2f7854ba9751dff0d9559558ff9584c55313126d3",
+    "archive": "/private/tmp/livi-app-links-215-20261122/livi-215-release-final.aab",
+    "apk": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/apk/release/app-release.apk",
+    "apkSha256": "feb098ddbaf70fabf362cf17635458c85336a53054c988995d65acc0935de3ed"
+  },
+  "checks": {
+    "frontend": {
+      "suites": 174,
+      "passed": 1648,
+      "failed": 0,
+      "skipped": 0
+    },
+    "backend": {
+      "suites": 41,
+      "passed": 304,
+      "failed": 0,
+      "skipped": 52,
+      "skipReason": "LIVI_REWARDS_TEST_MONGO_URI is not configured; all 52 skipped tests belong to 4 MongoDB integration suites."
+    },
+    "kotlin": {
+      "suites": 6,
+      "passed": 20,
+      "failures": 0
+    },
+    "typecheck": "passed frontend and backend",
+    "eslint": "passed frontend and backend",
+    "diffCheck": "passed",
+    "bundletool": "validate and manifest dump passed using installed AGP bundletool classpath",
+    "aabSignature": "verified; upload certificate matches previous final AAB 214",
+    "apkZipalign16KiB": "passed",
+    "nativeLibraries": {
+      "libraries": 96,
+      "libraries64Bit": 48,
+      "all64Bit16KiBAligned": true,
+      "unchangedFrom214": 96
+    },
+    "appLinks": {
+      "manifest": "/private/tmp/livi-app-links-215-20261122/aab-manifest.xml",
+      "versionCode": "215",
+      "publicAppLinks": [
+        "https://api.liviapp.com/invite/"
+      ],
+      "customSchemes": [],
+      "internalCallActivities": "preserved",
+      "trustedPlayCertificates": 2
+    },
+    "embeddedExpoConfig": {
+      "package": "com.kolt12max.livi",
+      "versionCode": 215,
+      "publicCustomScheme": null,
+      "iosScheme": "livi"
+    }
+  },
+  "domain": {
+    "url": "https://api.liviapp.com/.well-known/assetlinks.json",
+    "httpStatus": 200,
+    "redirect": false,
+    "contentType": "application/json; charset=utf-8",
+    "googleDigitalAssetLinks": "2 matching statements; no error",
+    "installedPlayVersion": 213,
+    "androidDomainVerification": "verified",
+    "packageScopedHttpsResolution": "MainActivity",
+    "unrestrictedShellResolution": "ResolverActivity; automatic browser-to-app behavior was not proved by this command"
+  },
+  "server": {
+    "changedFiles": [
+      "public/invite.html"
+    ],
+    "sha256": "24d04286373953125774cbd8912920959a5b3d2dfd8f4a6cc89f3cb034d745a0",
+    "backup": "/opt/backend/backup-app-links-20261122T135012Z",
+    "service": "livi-backend",
+    "pid": 4800,
+    "restarts": 0,
+    "restarted": false,
+    "assetlinksChanged": false,
+    "publicHealthOk": true,
+    "livePageMatchesTestedSource": true
+  },
+  "device": {
+    "model": "Samsung Galaxy A35",
+    "testedApp": "com.kolt12max.livi.dev",
+    "versionCode": 215,
+    "updatePreservedData": true,
+    "coldStart": true,
+    "expoSchemeLaunch": "passed after restoring USB reverse 8081",
+    "existingChatAndPhotoViewer": "passed visually",
+    "shareSheet": "opened then dismissed; nothing sent",
+    "explicitInternalCallUriWithoutCallId": "MainActivity received intent; no real call changed",
+    "deprecatedWarningCounts": {
+      "ProgressBarAndroid": 0,
+      "Clipboard": 0,
+      "PushNotificationIOS": 0
+    },
+    "jsErrorCounts": {
+      "TypeError": 0,
+      "ReferenceError": 0,
+      "Invariant Violation": 0
+    }
+  },
+  "notVerified": [
+    "Play Console after uploading 215; no suitable connected Play Console plugin found",
+    "Real two-phone calls, bidirectional media, VPN on/off and notification tap acceptance after this patch",
+    "Fresh Play installation with an actual invitation; simulated landing-page tests preserve referrer and clipboard",
+    "iOS physical-device behavior"
+  ],
+  "remaining": [
+    "Upload AAB 215 and wait for Google Play processing; select version 215 in Deep links and verify the current Console result"
+  ],
+  "logs": "/private/tmp/livi-app-links-215-20261122"
+}

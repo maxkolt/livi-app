@@ -213,7 +213,7 @@ export function CallScreenChrome({
               <AvatarImage
                 userId={partnerUserId}
                 uri={partnerAvatarUri}
-                size={54}
+                size={64}
                 containerStyle={styles.avatar}
                 fallbackText={letter || '—'}
                 fallbackTextStyle={styles.avatarLetter}
@@ -607,16 +607,16 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   avatarWrap: {
-    width: 48,
-    height: 48,
+    width: 56,
+    height: 56,
   },
   avatar: {
     position: 'absolute',
-    left: -3,
-    top: -3,
-    width: 54,
-    height: 54,
-    borderRadius: 27,
+    left: -4,
+    top: -4,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     backgroundColor: WELCOME_CHROME_BTN_BG,
   },
   avatarLetter: {

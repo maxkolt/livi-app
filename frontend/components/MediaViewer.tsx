@@ -1,3 +1,4 @@
+import { bottomControlsInset } from '../utils/bottomControlsInset';
 import type { PanGestureHandlerGestureEvent, PanGestureHandlerStateChangeEvent, PinchGestureHandlerGestureEvent, PinchGestureHandlerStateChangeEvent, TapGestureHandlerStateChangeEvent } from 'react-native-gesture-handler';
 // components/MediaViewer.tsx
 import React from 'react';
@@ -10,6 +11,7 @@ import {
   Platform,
   Image,
   Keyboard,
+  Share,
   TextInput,
 } from 'react-native';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
@@ -205,6 +207,9 @@ export default function MediaViewer({
 }: MediaViewerProps) {
   const { width: screenWidth, height: screenHeight } = useSafeAreaFrame();
   const safeInsets = useSafeAreaInsets();
+  const footerLift = bottomControlsInset(
+    safeInsets.bottom, Platform.OS, screenWidth > screenHeight,
+  ) - safeInsets.bottom;
   const lang = useLang((s) => s.lang);
   const [busy, setBusy] = React.useState(false);
   const [caption, setCaption] = React.useState('');
@@ -747,7 +752,6 @@ export default function MediaViewer({
       } else {
         // Fallback на стандартный Share из RN (требует url)
         try {
-          const { Share } = await import('react-native');
           await (Share).share({ url: local });
         } catch {}
       }
@@ -1121,7 +1125,7 @@ export default function MediaViewer({
             </Animated.View>
           ) : null}
 
-          <SafeAreaView pointerEvents="box-none" edges={['bottom']} style={styles.footerSafe}>
+          <SafeAreaView pointerEvents="box-none" edges={['bottom']} style={[styles.footerSafe, { paddingBottom: footerLift }]}>
             <Animated.View
               pointerEvents={chromeVisible ? 'box-none' : 'none'}
               style={{ opacity: chromeOpacity }}

@@ -49,6 +49,7 @@ class ActiveCallForegroundService : Service() {
             return START_NOT_STICKY
         }
         instance = this
+        refreshCameraType()
         LiviAppModule.setActiveCallForegroundRunningStatic(true)
         acquireCallWakeLock()
         if (alreadyRunning) LiviAppModule.maintainActiveCallVoiceAudioStatic(applicationContext)
@@ -129,7 +130,8 @@ class ActiveCallForegroundService : Service() {
                 this,
                 NOTIFICATION_ID,
                 buildNotification(),
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE or
+                    (if (cameraTypeGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0),
             )
             microphoneTypeGranted = true
             android.util.Log.d(TAG, "microphone FGS type granted after resume")
@@ -139,6 +141,27 @@ class ActiveCallForegroundService : Service() {
             if (retryIfRefused) {
                 audioMaintainHandler.postDelayed({ promoteMicrophone(false) }, PROMOTE_RETRY_MS)
             }
+        }
+    }
+
+    /** Arm camera access while the video call is visible, before the Home gesture. */
+    private fun refreshCameraType() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R || instance !== this) return
+        val wantCamera = !audioOnly && androidx.core.content.ContextCompat.checkSelfPermission(
+            this, android.Manifest.permission.CAMERA,
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (wantCamera == cameraTypeGranted) return
+        // While-in-use permission cannot be newly acquired from the background.
+        if (wantCamera && !MainActivity.isInForeground) return
+        val types = ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL or
+            (if (microphoneTypeGranted) ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE else 0) or
+            (if (wantCamera) ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA else 0)
+        try {
+            ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), types)
+            cameraTypeGranted = wantCamera
+            android.util.Log.i(TAG, "camera FGS type=$wantCamera")
+        } catch (e: RuntimeException) {
+            android.util.Log.w(TAG, "camera FGS type update deferred", e)
         }
     }
 
@@ -214,6 +237,7 @@ class ActiveCallForegroundService : Service() {
     private var audioOnly: Boolean = false
     /** FGS уже с типом microphone (или он не нужен до Android 14). */
     @Volatile private var microphoneTypeGranted = false
+    @Volatile private var cameraTypeGranted = false
 
     private fun buildNotification(): Notification {
         val channelId = if (audioOnly) CHANNEL_ID_AUDIO else CHANNEL_ID
@@ -292,8 +316,10 @@ class ActiveCallForegroundService : Service() {
         /** MainActivity.onResume: LiVi снова на экране — добрать тип microphone, если старт был из фона. */
         fun promoteMicrophoneIfNeeded() {
             val svc = instance ?: return
-            if (svc.microphoneTypeGranted) return
-            svc.audioMaintainHandler.post { svc.promoteMicrophone(true) }
+            svc.audioMaintainHandler.post {
+                svc.promoteMicrophone(true)
+                svc.refreshCameraType()
+            }
         }
 
         fun start(context: Context, partnerNick: String?, audioOnly: Boolean = false) {

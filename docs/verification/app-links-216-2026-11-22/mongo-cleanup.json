@@ -1,0 +1,9 @@
+{
+  "dbPath": "/private/tmp/livi-app-links-216-20261122/mongo-db",
+  "port": 27216,
+  "testDatabasesRemoved": true,
+  "shutdownRequested": true,
+  "otherMongoInstancesTouched": false,
+  "shutdownExitCode": 0,
+  "stopped": true
+}

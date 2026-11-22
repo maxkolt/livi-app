@@ -13,6 +13,7 @@ import {
 } from './constants';
 import { formatWelcomeUsersOnlineLine } from './utils/welcomeOnlineLabel';
 import { useDigitalRegularFont } from './brandFont';
+import { useHomeLayout } from './HomeLayoutContext';
 
 export type WelcomeBannerPeer = {
   id: string;
@@ -69,6 +70,10 @@ function WelcomeOnlineBannerInner({
 
   // «Онлайн» — «цифровой» Exo 2, как ник и подписи навбара; размер прежний.
   const onlineFont = useDigitalRegularFont();
+  const { width: layoutWidth } = useHomeLayout();
+  // The Home width can recover after Dimensions has already remounted AdaptiveText.
+  // Reset both fitted labels once their containing layout reaches its final size.
+  const textLayoutKey = `${Math.round(layoutWidth)}:${compact}:${dense}`;
   const stackPeers = useMemo(() => {
     const live = peers.slice(0, STACK_VISIBLE);
     const out: WelcomeBannerPeer[] = [];
@@ -103,7 +108,7 @@ function WelcomeOnlineBannerInner({
           dense && trailingAction ? styles.pillDenseWithAction : null,
         ]}
       >
-      <View style={[styles.textCol, dense && styles.textColDense]}>
+      <View key={textLayoutKey} style={[styles.textCol, dense && styles.textColDense]}>
         <View style={[styles.onlineRow, dense && styles.onlineRowDense]}>
           <View style={[styles.onlineDot, dense && styles.onlineDotDense]} />
           <AdaptiveText

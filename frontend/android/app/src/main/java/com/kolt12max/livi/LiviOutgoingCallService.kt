@@ -326,13 +326,21 @@ class LiviOutgoingCallService : Service() {
                 mp.setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
             }
             mp.isLooping = true
-            mp.setVolume(0.35f, 0.35f)
+            // The bundled recording is already quiet. Keep its full level and let
+            // STREAM_VOICE_CALL control loudness, without another ~9 dB attenuation.
+            mp.setVolume(1f, 1f)
             mp.setOnPreparedListener { player ->
                 try {
                     am.mode = AudioManager.MODE_IN_COMMUNICATION
                     applyRingbackRoute(am)
                 } catch (_: Exception) {}
                 player.start()
+                android.util.Log.i(
+                    TAG,
+                    "ringback started callId=${callId.take(32)} playing=${player.isPlaying} " +
+                        "voiceVolume=${am.getStreamVolume(AudioManager.STREAM_VOICE_CALL)}/" +
+                        "${am.getStreamMaxVolume(AudioManager.STREAM_VOICE_CALL)}",
+                )
             }
             mp.prepareAsync()
             mediaPlayer = mp

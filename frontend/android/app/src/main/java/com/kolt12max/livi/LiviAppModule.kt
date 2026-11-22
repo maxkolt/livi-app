@@ -4081,7 +4081,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       }
       Handler(Looper.getMainLooper()).post {
         try {
-          appCtx.startActivity(mainIntent)
+          appCtx.startActivity(mainIntent, if (withAnswerCover) incomingAnswerLaunchOptions() else null)
           try {
             MainActivity.lastResumedInstance?.overridePendingTransition(0, 0)
           } catch (_: Exception) {}

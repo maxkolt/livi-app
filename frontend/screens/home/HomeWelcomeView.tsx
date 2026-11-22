@@ -4,7 +4,6 @@ import {
   Animated,
   Easing,
   NativeModules,
-  Platform,
   StyleSheet,
   View,
   type LayoutChangeEvent,
@@ -39,6 +38,7 @@ import { WelcomeRadar } from './WelcomeRadar';
 import { RADAR_DRAWN_EXTENT, radarAvatarSizeForPhoto, radarFittedAvatarSize, radarGeometry } from './welcomeRadarScene';
 import { searchRadarPlacement } from './searchRadarPlacement';
 import { WelcomeSearchCta, welcomeSearchCtaHeight, welcomeSearchCtaWidth } from './WelcomeSearchCta';
+import { welcomeTabBarMetrics } from './welcomeTabBarLayout';
 import type { Lang } from '../../utils/i18n';
 import { logger } from '../../utils/logger';
 import type { HomeStyles } from './styles';
@@ -240,11 +240,8 @@ function HomeWelcomeViewInner({
    * inset и таб-бар. Без этого первый рендер считал, что места целое окно, и на
    * следующем кадре контент заметно ужимался.
    */
-  const tabBarBottomGap =
-    Math.max(insets.bottom, Platform.OS === 'android' ? 6 : 2) +
-    (splitStage ? 4 : 8);
-  const estimatedTabBar =
-    (isTabletLayout ? 76 : splitStage ? 50.5 : 66.5) + tabBarBottomGap;
+  const tabBar = welcomeTabBarMetrics(stageWidth, stageHeight, insets.bottom);
+  const estimatedTabBar = tabBar.contentHeight + tabBar.bottomGap;
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
   const viewHeight =
     measured.h > 0 && Math.abs(measured.h - expectedPaneH) < 2
@@ -387,7 +384,7 @@ function HomeWelcomeViewInner({
     // Видимый край — пунктирное кольцо; RADAR_DRAWN_EXTENT шире (с прежним пустым полем).
     const contentBottom = radarAreaH / 2 + radarDashR + nickBlockH;
     const ctaTop = contentBottom + (stageH - contentBottom - ctaHeight) * 0.62;
-    return Math.round(ctaTop - (radarAreaH + ctaPadTop)) - SEARCH_CTA_PORTRAIT_LIFT;
+    return Math.round(ctaTop - (radarAreaH + ctaPadTop)) - SEARCH_CTA_PORTRAIT_LIFT - tabBar.ctaLift;
   })();
   const radarPlacement = !splitStage && !isTabletLayout ? searchRadarPlacement({
     areaHeight: stageH - stageCopyReserve,

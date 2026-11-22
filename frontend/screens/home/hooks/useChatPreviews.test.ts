@@ -194,3 +194,30 @@ it('confirms live deliveries without another server request and ignores older re
   expect(mockFetch).not.toHaveBeenCalled();
   expect(noteIncomingChatPreview({ ...message('foreign', 'wrong account', 41_000, peer), to: 'someone-else' }, 'ru', 1)).toBeNull();
 });
+
+it('keeps a chat accessible when a local call entry is newer than its confirmed unread preview', async () => {
+  const peer = 'call-after-unread';
+  mockLocal.mockResolvedValue([{
+    ...message('local-call-entry', 'Входящий звонок', 60_000, peer),
+    callDirection: 'incoming', localOnly: true,
+  }]);
+  mockFetch.mockResolvedValue({ ok: true, previews: {
+    [peer]: message('unread-before-call', 'Сообщение до звонка', 50_000, peer),
+  } });
+  await prefetchChatPreviews([peer], 'ru', false, { [peer]: 4 });
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 4 })[peer]?.text)
+    .toBe('Сообщение до звонка');
+  // Generic refreshes preserve both local chronology and unread confirmation.
+  await prefetchChatPreviews([peer], 'ru', true);
+  expect(getChatPreviewSnapshot()[peer].id).toBe('local-call-entry');
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 4 })[peer]?.id)
+    .toBe('unread-before-call');
+});
+
+it('shows a delivered unread message despite a newer local call event', () => {
+  const peer = 'push-after-call';
+  noteLocalChatPreview(peer, message('newer-call', 'Входящий звонок', 80_000, peer), 'ru');
+  noteIncomingChatPreview(message('delayed-push', 'Доставленное сообщение', 70_000, peer), 'ru', 2);
+  expect(selectChatPreviews(getChatPreviewSnapshot(), { [peer]: 2 })[peer]?.id).toBe('delayed-push');
+  expect(getChatPreviewSnapshot()[peer].id).toBe('newer-call');
+});

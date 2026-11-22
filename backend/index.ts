@@ -137,7 +137,7 @@ type LeanUser = {
 type ProfileFields = Pick<UserRecord, 'nick' | 'avatar' | 'avatarVer' | 'avatarB64' | 'avatarThumbB64'>;
 type ProfileAck = (result: { ok: boolean; profile?: Partial<ProfileFields>; error?: string }) => void;
 type ReauthAck = (result: { ok: boolean; userId?: string; missed?: MissedCallDelivery[]; legacyMigrationRequired?: boolean; error?: string }) => void;
-type SocketPresenceData = Pick<AuthedSocket['data'], 'inCall' | 'busy' | 'roomId' | 'partnerSid'>;
+type SocketPresenceData = Pick<AuthedSocket['data'], 'inCall' | 'busy' | 'roomId' | 'partnerSid' | 'randomChatBusy'>;
 
 /* ========= ENV ========= */
 const PORT = Number(process.env.PORT ?? 3000);
@@ -2471,19 +2471,14 @@ async function runCallPushRetryCycle(callId: string): Promise<void> {
   );
 }
 
-function socketDataLooksRandomOrQueueBusy(sdata: SocketPresenceData, uid: string): boolean {
+function socketDataLooksRandomOrQueueBusy(sdata: SocketPresenceData): boolean {
+  // Only matchmaking can establish/clear random occupancy. A previous client
+  // busy flag is not evidence that the user is still searching after Stop.
+  if (sdata.randomChatBusy !== undefined) return sdata.randomChatBusy;
   const rid = String(sdata.roomId || '').trim();
   // room_{socket}_{socket} / rand_room_* — всегда рандом
   if (rid && !isDirectCallRoomId(rid)) return true;
   if (sdata.partnerSid) return true;
-  if (sdata.busy === true && !isDirectCallRoomId(rid)) {
-    const entry = callOfUser.get(uid);
-    const link = entry?.callId ? callsById.get(entry.callId) : undefined;
-    // Живой direct (ringing/call) без random-room — не рандом.
-    // Залипший callOfUser без link в callsById не должен маскировать поиск.
-    if (entry?.callId && link && !recentlyEndedCalls.has(entry.callId)) return false;
-    return true;
-  }
   if (sdata.inCall === true && !isDirectCallRoomId(rid)) return true;
   return false;
 }
@@ -2491,7 +2486,9 @@ function socketDataLooksRandomOrQueueBusy(sdata: SocketPresenceData, uid: string
 async function userHasActiveRandomChat(io: Server, userId: string): Promise<boolean> {
   for (const s of getSocketsForUser(io, userId)) {
     const sdata = ((s).data || {});
-    if (socketDataLooksRandomOrQueueBusy(sdata, userId)) return true;
+    if (socketDataLooksRandomOrQueueBusy(sdata)) return true;
+    // Stop clears local occupancy before asynchronous Redis cleanup finishes.
+    if (sdata.randomChatBusy === false) continue;
     try {
       if (await queueStore.isInQueue(s.id)) return true;
       if (await queueStore.isLocked(s.id)) return true;
@@ -2640,6 +2637,8 @@ function isSocketBusyForFriendsExport(
   const rid = String(d.roomId || '');
   const inDirectOccupancy = callOfUser.has(userId) || activeRoomByUserId.has(userId);
   const isNonDirectRoom = !!rid && !isDirectCallRoomId(rid);
+  if (d.randomChatBusy === true) return true;
+  if (d.randomChatBusy === false && !inDirectOccupancy && !isDirectCallRoomId(rid)) return false;
 
   // Рандом (поиск / room_{socket}_* / partnerSid): busy без direct room id.
   // Залипший callOfUser раньше блокировал looksLikeRandomBusy → REST isBusy:false
@@ -3863,13 +3862,21 @@ io.on('connection', async (sock: AuthedSocket) => {
 
 
   /* ---- presence update от клиента ---- */
+  let presenceUpdateVersion = 0;
   sock.on('presence:update', async (payload: PresenceUpdateInput | null | undefined) => {
     try {
       const userId = String((sock).data?.userId || '');
       if (!userId) return;
+      const updateVersion = ++presenceUpdateVersion;
+      const randomPresenceVersion = sock.data.randomPresenceVersion || 0;
+      const isCurrent = () => sock.connected && String(sock.data.userId || '') === userId &&
+        updateVersion === presenceUpdateVersion &&
+        randomPresenceVersion === (sock.data.randomPresenceVersion || 0);
 
       const status = payload?.status;
-      const busy = status === 'busy';
+      const directBusyClaim = isDirectCallRoomId(payload?.roomId) || isDirectCallRoomId(sock.data.roomId);
+      const busy = status === 'busy' && (sock.data.randomChatBusy !== false || directBusyClaim);
+      if (status === 'busy' && !busy) return;
       const idleOnline = !busy && payload?.idle === true;
 
       const hasAnotherBusySocket = getSocketsForUser(io, userId).some((s) => {
@@ -3878,6 +3885,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       });
 
       const inRandomChat = await userHasActiveRandomChat(io, userId);
+      if (!isCurrent()) return;
 
       if (busy && !inRandomChat) {
         const payloadRoomId = String(payload?.roomId || '').trim();
@@ -3954,7 +3962,7 @@ io.on('connection', async (sock: AuthedSocket) => {
           sockData.busy === true ||
           sockData.inCall === true;
         const sockStillBusy =
-          ringingOrInitiatorBusy || socketDataLooksRandomOrQueueBusy(sockData, userId);
+          ringingOrInitiatorBusy || socketDataLooksRandomOrQueueBusy(sockData);
 
         const pendingActive = activeRoomByUserId.get(userId);
         const pendingStillLive =
@@ -3970,7 +3978,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       // Текущий сокет: при erroneous presence:online во время рандома/очереди учитываем partnerSid/inCall/markBusy.
       const currentSockData = ((sock)?.data || {});
       const currentStillInRandomOrQueue =
-        !busy && socketDataLooksRandomOrQueueBusy(currentSockData, userId);
+        !busy && socketDataLooksRandomOrQueueBusy(currentSockData);
       const busyRequested =
         busy || hasAnotherBusySocket || currentStillInRandomOrQueue || (!busy && inRandomChat);
 
@@ -4008,6 +4016,10 @@ io.on('connection', async (sock: AuthedSocket) => {
         idleOnline && !busy && !inRandomChat && !isUserInLiveDirectCall(io, userId)
           ? false
           : effectiveBusyRaw;
+
+      // Stop/Next/newer presence may complete while the Redis/DB reads above
+      // are pending. Such a continuation must not restore the previous busy.
+      if (!isCurrent()) return;
 
       // Обновляем состояние сокета (при ignoreBusyForCaller не трогаем data.busy — он уже true с call:initiate, просто не рассылаем друзьям)
       const prevBusy = !!(sock).data?.busy;
@@ -4049,6 +4061,8 @@ io.on('connection', async (sock: AuthedSocket) => {
           status,
           busy,
           busyRequested,
+          randomChatBusy: sock.data.randomChatBusy,
+          randomPresenceVersion,
           effectiveBusy,
           broadcast: shouldBroadcast,
           presenceStateChanged,

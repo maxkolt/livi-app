@@ -286,6 +286,12 @@ class MainActivity : ReactActivity() {
   fun showIncomingAnswerCover() {
     try {
       armIncomingAnswerCover = true
+      // Incoming/Outgoing is another task. Its handoff is not a Home gesture.
+      if (!isInPictureInPictureMode) {
+        cancelPendingPiPEnterAttempts()
+        hideSystemPiPBackdropForCapture()
+        syncSystemPiPAutoEnterParams(false)
+      }
       ReactFindViewUtil.removeViewListener(answerContentListener)
       val decor = window?.decorView as? ViewGroup ?: return
       val cover = incomingAnswerCoverView ?: run {
@@ -477,6 +483,18 @@ class MainActivity : ReactActivity() {
   private fun showSystemPiPBackdropForCapture() {
     try {
       val decor = window?.decorView as? ViewGroup ?: return
+      // Gesture navigation can pause RN before its compact layout commits. The
+      // video-only TextureViews are prebound while foregrounded; reveal them
+      // synchronously instead of waiting for a JS round trip after onPause.
+      if (!LiviAppModule.getSystemPiPCapturePlaceholderOnly()) {
+        val video = ReactFindViewUtil.findView(decor, "livi-system-pip-video")
+        if (video != null && video.width > 0 && video.height > 0) {
+          video.alpha = 1f
+          systemPiPBackdrop?.visibility = View.GONE
+          LiviAppModule.setSystemPiPCaptureFrameReadyStatic(true)
+          return
+        }
+      }
       val backdrop = systemPiPBackdrop ?: run {
         val inflated = layoutInflater.inflate(R.layout.system_pip_backdrop, decor, false)
         decor.addView(
@@ -497,6 +515,12 @@ class MainActivity : ReactActivity() {
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "showSystemPiPBackdropForCapture failed", e)
     }
+  }
+
+  private fun hidePreparedSystemPiPVideo() {
+    try {
+      ReactFindViewUtil.findView(window.decorView, "livi-system-pip-video")?.alpha = 0f
+    } catch (_: Exception) {}
   }
 
   /** Called from LiviAppModule when JS flips placeholderOnly while already in PiP. */
@@ -579,6 +603,7 @@ class MainActivity : ReactActivity() {
     isPiPEnterAttemptRunning = false
     leaveHintPiPEnterRunnable = null
     if (!isInPictureInPictureMode) {
+      hidePreparedSystemPiPVideo()
       hideSystemPiPBackdropForCapture()
     }
   }
@@ -607,6 +632,7 @@ class MainActivity : ReactActivity() {
   }
 
   private fun shouldArmSystemPiPEnter(): Boolean {
+    if (armIncomingAnswerCover) return false
     return SystemPiPAutoEnterPolicy.isArmed(
       requestedByUi = LiviAppModule.getShouldEnterPiPOnLeaveHint(),
       activeCall = LiviAppModule.isActiveCallForegroundRunning(),
@@ -762,6 +788,7 @@ class MainActivity : ReactActivity() {
     leaveHintPiPEnterRunnable = tryEnterPiP
     try {
       LiviAppModule.emitAboutToEnterSystemPiP(decorW, decorH, currentHomePiPTraceId)
+      showSystemPiPBackdropForCapture()
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "emitAboutToEnterSystemPiP failed ($reason)", e)
       cancelPendingPiPEnterAttempts()
@@ -1036,6 +1063,7 @@ class MainActivity : ReactActivity() {
     expandedEmittedForPipExit = true
     LiviAppModule.setPiPOnLeaveHintEnabled(false)
     hideSystemPiPBackdropForCapture()
+    hidePreparedSystemPiPVideo()
     android.util.Log.i("MainActivity", "PiP exit: $reason -> emitting SystemPiPExpanded")
     LiviAppModule.emitSystemPiPExpanded()
   }
@@ -1323,6 +1351,13 @@ class MainActivity : ReactActivity() {
     }
   }
 
+  override fun onPictureInPictureUiStateChanged(pipState: android.app.PictureInPictureUiState) {
+    super.onPictureInPictureUiStateChanged(pipState)
+    if (Build.VERSION.SDK_INT >= 35 && pipState.isTransitioningToPip && shouldArmSystemPiPEnter()) {
+      showSystemPiPBackdropForCapture()
+    }
+  }
+
   override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {
     super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -1354,6 +1389,7 @@ class MainActivity : ReactActivity() {
       }
       LiviAppModule.emitSystemPiPModeChanged(isInPictureInPictureMode)
       if (!isInPictureInPictureMode) {
+        hidePreparedSystemPiPVideo()
         hideSystemPiPBackdropForCapture()
         if (dismissingSystemPiPAfterCallEnd) {
           prepareSystemPiPDismissalAfterCallEnded()

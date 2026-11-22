@@ -50,24 +50,9 @@ export const useFriendRequests = create<FriendRequestsState>(() => ({
 const isOid = (s?: string) => !!s && /^[a-f\d]{24}$/i.test(s);
 const cacheKey = (ownerId: string) => `friend_requests_v1:${ownerId}`;
 
-/**
- * Dev-сборка: одна тестовая заявка всегда в списке — видно страницу и красную точку.
- * Dev ходит на боевой сервер, поэтому «Принять»/«Удалить» по ней — только на
- * устройстве: убирают её до перезапуска приложения.
- */
-const DEV_TEST_REQUEST: FriendRequestItem = {
-  id: '0000000000000000000000de',
-  nick: 'Тестовая заявка',
-  avatarVer: 0,
-  avatarThumbB64: '',
-  online: true,
-};
-let devTestDismissed = false;
-
-function withDevTest(items: FriendRequestItem[]): FriendRequestItem[] {
-  if (!__DEV__ || devTestDismissed || items.some((it) => it.id === DEV_TEST_REQUEST.id)) return items;
-  return [...items, DEV_TEST_REQUEST];
-}
+// Older development builds injected this UI-only request. Never restore it from cache.
+const LEGACY_TEST_REQUEST_ID = '0000000000000000000000de';
+const isRealRequestId = (id: string) => isOid(id) && id !== LEGACY_TEST_REQUEST_ID;
 
 function toItem(row: FriendRequestListItem, prev?: FriendRequestItem): FriendRequestItem {
   return {
@@ -80,14 +65,14 @@ function toItem(row: FriendRequestListItem, prev?: FriendRequestItem): FriendReq
 }
 
 function persist(ownerId: string, items: FriendRequestItem[]) {
-  const real = items.filter((it) => it.id !== DEV_TEST_REQUEST.id);
-  AsyncStorage.setItem(cacheKey(ownerId), JSON.stringify(real)).catch(() => {});
+  AsyncStorage.setItem(cacheKey(ownerId), JSON.stringify(items)).catch(() => {});
 }
 
 function setItems(ownerId: string, items: FriendRequestItem[]) {
   if (useFriendRequests.getState().ownerId !== ownerId) return;
-  useFriendRequests.setState({ items: withDevTest(items) });
-  persist(ownerId, items);
+  const realItems = items.filter((it) => isRealRequestId(it.id));
+  useFriendRequests.setState({ items: realItems });
+  persist(ownerId, realItems);
 }
 
 /** Аккаунт сменился — свой кэш (заявки не смешиваются между аккаунтами). */
@@ -95,15 +80,14 @@ async function ensureOwner(): Promise<string | null> {
   const ownerId = String(getCurrentUserId() || '').trim();
   if (!isOid(ownerId)) return null;
   if (useFriendRequests.getState().ownerId === ownerId) return ownerId;
-  useFriendRequests.setState({ ownerId, items: withDevTest([]), busy: {} });
+  useFriendRequests.setState({ ownerId, items: [], busy: {} });
   try {
     const raw = await AsyncStorage.getItem(cacheKey(ownerId));
     const cached: FriendRequestItem[] | null = raw ? JSON.parse(raw) : [];
     const state = useFriendRequests.getState();
-    const onlyDevTest = state.items.every((it) => it.id === DEV_TEST_REQUEST.id);
-    if (state.ownerId === ownerId && onlyDevTest && Array.isArray(cached)) {
+    if (state.ownerId === ownerId && state.items.length === 0 && Array.isArray(cached)) {
       useFriendRequests.setState({
-        items: withDevTest(cached.filter((it) => isOid(String(it?.id || '')))),
+        items: cached.filter((it) => isRealRequestId(String(it?.id || ''))),
       });
     }
   } catch {}
@@ -144,7 +128,7 @@ export async function upsertFriendRequest(row: {
   online?: boolean;
 }) {
   const id = String(row.id || '').trim();
-  if (!isOid(id)) return;
+  if (!isRealRequestId(id)) return;
   const ownerId = await ensureOwner();
   if (!ownerId || ownerId === id) return;
   const items = useFriendRequests.getState().items;
@@ -162,17 +146,11 @@ export async function removeFriendRequest(id: string) {
 }
 
 async function respond(id: string, accept: boolean): Promise<boolean> {
+  if (!isRealRequestId(id)) return false;
   const { busy } = useFriendRequests.getState();
   if (busy[id]) return false;
   useFriendRequests.setState({ busy: { ...busy, [id]: accept ? 'accept' : 'decline' } });
   try {
-    if (id === DEV_TEST_REQUEST.id) {
-      // Тестовая заявка — без сервера: короткая «работа» и строка уходит до перезапуска.
-      await new Promise((r) => setTimeout(r, 400));
-      devTestDismissed = true;
-      await removeFriendRequest(id);
-      return false;
-    }
     const r = await respondFriend(id, accept);
     const ok = !!r?.ok;
     if (ok) await removeFriendRequest(id);

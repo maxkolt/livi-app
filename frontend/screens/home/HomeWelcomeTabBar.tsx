@@ -1,12 +1,14 @@
 import type { AppRuntimeGlobals } from '../../utils/appRuntimeTypes';
 import React, { memo, useRef, useSyncExternalStore } from 'react';
 import { getNotificationHomeTabSnapshot, subscribeNotificationHomeRequest } from '../../utils/notificationHome';
-import { AppState, Platform, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
+import { AppState, Pressable, StyleSheet, View, type GestureResponderEvent } from 'react-native';
 import Svg, { ClipPath, Defs, Ellipse, LinearGradient, Path, RadialGradient, Rect, Stop } from 'react-native-svg';
 import type { EdgeInsets } from 'react-native-safe-area-context';
 import { useHomeLayout } from './HomeLayoutContext';
 import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
+import { welcomeTabBarContentHeight, welcomeTabBarMetrics } from './welcomeTabBarLayout';
+export { welcomeTabBarBottomGap, welcomeTabBarContentHeight } from './welcomeTabBarLayout';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
 import { shouldSkipHomeUiSettle } from '../../utils/globalEvents';
@@ -245,7 +247,9 @@ function HomeWelcomeTabBarInner({
   const tabletLayout = isWelcomeTabletLayout(width, height);
   const compactLandscape =
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
-  const bottomGap = welcomeTabBarBottomGap(insets.bottom, tabletLayout, compactLandscape);
+  const { bottomGap, contentHeight, smallPhonePortrait } = welcomeTabBarMetrics(width, height, insets.bottom);
+  const rowOffsetY = smallPhonePortrait
+    ? (contentHeight - welcomeTabBarContentHeight(tabletLayout, compactLandscape)) / 2 : 0;
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
   const callIconSize = tabletLayout ? 28 : compactLandscape ? 23 : 25;
   const profileDiscSize = tabletLayout ? 32 : compactLandscape ? 26 : PROFILE_ACTIVE_DOT;
@@ -254,7 +258,6 @@ function HomeWelcomeTabBarInner({
   const pressInHandledRef = useRef<{ id: WelcomeTabId; at: number } | null>(null);
   const fliqLift = compactLandscape ? 5 : FLIQ_LIFT;
   const fliqHump = compactLandscape ? 4 : FLIQ_HUMP;
-  const contentHeight = welcomeTabBarContentHeight(tabletLayout, compactLandscape);
   const shellMargin = tabletLayout ? 20 : compactLandscape ? WELCOME_FRIENDS_LIST_INSET
     : usesLargePhoneAvatar(Math.min(width, height)) ? 8 : 12;
   // The outer host already applies the horizontal safe-area insets. Computing the dock
@@ -282,7 +285,7 @@ function HomeWelcomeTabBarInner({
   const activePillSpan = { left: -faceOverhang, right: -faceOverhang };
   // Центр иконок от верха блока: отступ ряда, отступ вкладки, половина iconWrap.
   const iconCenterY =
-    (tabletLayout ? 8 + 8 + 17 : compactLandscape ? 1 + 3 + 15 : 6 + 6 + 15) - fliqLift;
+    (tabletLayout ? 8 + 8 + 17 : compactLandscape ? 1 + 3 + 15 : 6 + 6 + 15) - fliqLift + rowOffsetY;
   const tabs: TabDef[] = [
     {
       id: 'search',
@@ -385,6 +388,7 @@ function HomeWelcomeTabBarInner({
             styles.row,
             tabletLayout && styles.rowTablet,
             compactLandscape && styles.rowLandscape,
+            smallPhonePortrait && { transform: [{ translateY: rowOffsetY }] },
           ]}
         >
           {tabs.map((tab) => {
@@ -505,18 +509,6 @@ function HomeWelcomeTabBarInner({
       </View>
     </View>
   );
-}
-
-/** Зазор от нижнего края навбара до края экрана (над системными кнопками). */
-export function welcomeTabBarBottomGap(insetBottom: number, tabletLayout: boolean, compactLandscape: boolean) {
-  // Навбар с нижним стеклом прижат ближе к системным кнопкам.
-  const floatGap = compactLandscape ? 4 : tabletLayout ? 8 : 8;
-  return Math.max(insetBottom, Platform.OS === 'android' ? 6 : 2) + floatGap;
-}
-
-/** Fixed geometry shared with HomeScreen, so content never shifts after an onLayout pass. */
-export function welcomeTabBarContentHeight(tabletLayout: boolean, compactLandscape: boolean) {
-  return tabletLayout ? 76 : compactLandscape ? 50.5 : 66.5;
 }
 
 const styles = StyleSheet.create({

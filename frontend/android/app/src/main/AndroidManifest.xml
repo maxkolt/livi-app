@@ -25,6 +25,7 @@
   <!-- CallKeep: foreground service для микрофона в фоне при звонке (Android 11+) -->
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+  <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_PHONE_CALL"/>
   <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
@@ -103,43 +104,14 @@
         <action android:name="android.intent.action.MAIN"/>
         <category android:name="android.intent.category.LAUNCHER"/>
       </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi"/>
-        <data android:scheme="exp+livi-video-chat"/>
-      </intent-filter>
-      <!-- Только ссылки-приглашения: без host LiVi предлагался для открытия любой https-ссылки. -->
+      <!-- Only verified invitations are public. Native call fallbacks target
+           MainActivity explicitly and do not need BROWSABLE scheme filters.
+           Expo/custom development schemes live in src/debug. -->
       <intent-filter android:autoVerify="true" data-generated="true">
         <action android:name="android.intent.action.VIEW"/>
         <data android:scheme="https" android:host="api.liviapp.com" android:pathPrefix="/invite/"/>
         <category android:name="android.intent.category.BROWSABLE"/>
         <category android:name="android.intent.category.DEFAULT"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi" android:host="incoming-call"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi" android:host="answer-call"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi" android:host="decline-call"/>
-      </intent-filter>
-      <intent-filter>
-        <action android:name="android.intent.action.VIEW"/>
-        <category android:name="android.intent.category.DEFAULT"/>
-        <category android:name="android.intent.category.BROWSABLE"/>
-        <data android:scheme="livi" android:host="cancel-outgoing"/>
       </intent-filter>
     </activity>
     <!-- «Поделиться» из других приложений — отдельное окно, а не главное LiVi:
@@ -200,7 +172,7 @@
       <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE" android:value="Display incoming video call screen over other apps"/>
     </service>
     <!-- Активный видеозвонок: держим процесс в foreground, чтобы сокет не засыпал в фоне/PiP -->
-    <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|microphone"/>
+    <service android:name=".ActiveCallForegroundService" android:exported="false" android:foregroundServiceType="phoneCall|microphone|camera"/>
     <!-- «Надёжные звонки» (включает пользователь в профиле): своё соединение с сервером LiVi
          параллельно FCM, когда VPN или сеть мешают уведомлениям Google. -->
     <service android:name=".CallKeepAliveService" android:exported="false" android:foregroundServiceType="specialUse">

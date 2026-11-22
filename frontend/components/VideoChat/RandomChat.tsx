@@ -1,3 +1,4 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 import type { CallAudioGlobals, CallRef } from '../../utils/callStateTypes';
 import type { NavigationPerfGlobals } from '../../utils/navigationPerf';
 import type { CallScreenReturnTarget } from '../../navigation/types';
@@ -28,7 +29,7 @@ import { OrientationCoverModal } from '../OrientationCoverModal';
 import { showAppAlert } from '../AppAlert';
 import { SystemBars } from 'react-native-edge-to-edge';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { SafeAreaView, useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaFrame } from 'react-native-safe-area-context';
 import { MediaStream, RTCView } from '@livekit/react-native-webrtc';
 import { RandomChatSession } from '../../src/webrtc/sessions/RandomChatSession';
 import type { CamSide, WebRTCSessionConfig } from '../../src/webrtc/types';
@@ -116,7 +117,7 @@ const RandomChat: React.FC<Props> = ({ route }) => {
       logger.info('[search-nav] RandomChat.firstRender', { elapsedMs: now - t0 });
     } catch {}
   }
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const frame = useSafeAreaFrame();
   const {
     size: rootSize,

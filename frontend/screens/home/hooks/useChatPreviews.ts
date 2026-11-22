@@ -39,7 +39,7 @@ export type { ChatPreview };
 
 let previewMemory: Record<string, ChatPreview> = {};
 let previewAccountId = '';
-const unreadPreviewVersions = new Map<string, { count: number; id: string; updatedAt?: number }>();
+const unreadPreviewVersions = new Map<string, { count: number; preview: ChatPreview; updatedAt?: number }>();
 const unreadPreviewRequests = new Map<string, number>();
 
 /** Unverified disk history cannot identify the newest unread message after a cold launch. */
@@ -50,7 +50,13 @@ export function selectChatPreviews(
   for (const [peerId, count] of Object.entries(unreadByUser)) {
     if (count <= 0) continue;
     const confirmed = unreadPreviewVersions.get(peerId);
-    if (!confirmed || (confirmed.count !== -1 && confirmed.count !== count) || confirmed.id !== previews[peerId]?.id) delete visible[peerId];
+    if (!previews[peerId] || !confirmed || (confirmed.count !== -1 && confirmed.count !== count)) {
+      delete visible[peerId];
+    } else {
+      // Local call entries and pending sends can be newer than the server message.
+      // They must not invalidate an independently confirmed unread preview.
+      visible[peerId] = keepReadStatus(previews[peerId], confirmed.preview);
+    }
   }
   return visible;
 }
@@ -94,14 +100,16 @@ export function noteIncomingChatPreview(message: ChatMessage & { unreadUpdatedAt
   const text = previewTextFromMessage(message, lang);
   if (!at || !text.trim()) return null;
   const prev = previewMemory[peerId];
-  const preview = prev && prev.at > at ? prev : previewWithStatus(message, text, at);
+  const incomingPreview = previewWithStatus(message, text, at);
+  const preview = prev && prev.at > at ? prev : incomingPreview;
   previewMemory = { ...previewMemory, [peerId]: preview };
   const confirmed = unreadPreviewVersions.get(peerId);
-  const staleCount = (prev && prev.at > at && !!confirmed) ||
+  const staleCount = (confirmed && confirmed.preview.at > at) ||
     ((message.unreadUpdatedAt || 0) > 0 && (confirmed?.updatedAt || 0) > message.unreadUpdatedAt!);
   unreadPreviewVersions.set(peerId, {
     count: staleCount ? confirmed!.count : count ?? confirmed?.count ?? -1,
-    id: preview.id || '', updatedAt: staleCount ? confirmed?.updatedAt : message.unreadUpdatedAt ?? confirmed?.updatedAt,
+    preview: confirmed && confirmed.preview.at > at ? confirmed.preview : incomingPreview,
+    updatedAt: staleCount ? confirmed?.updatedAt : message.unreadUpdatedAt ?? confirmed?.updatedAt,
   });
   // An earlier server response cannot invalidate this newer delivery.
   unreadPreviewRequests.set(peerId, (unreadPreviewRequests.get(peerId) || 0) + 1);
@@ -245,7 +253,7 @@ async function refreshPreviewsFromServer(
         // Associate confirmation with the count captured when this request began.
         // A later unread delivery invalidates it synchronously during rendering.
         if (requestVersions.has(peerId) && requestVersions.get(peerId) === unreadPreviewRequests.get(peerId)) {
-          unreadPreviewVersions.set(peerId, { count: unreadByUser[peerId], id: preview.id || '' });
+          unreadPreviewVersions.set(peerId, { count: unreadByUser[peerId], preview });
         }
         if (next[peerId] && next[peerId].at > preview.at) continue;
         next[peerId] = keepReadStatus(next[peerId], preview);

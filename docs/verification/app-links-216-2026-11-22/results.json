@@ -1,0 +1,132 @@
+{
+  "checkedAtMoscow": "2026-11-22T17:14:10.167923+03:00",
+  "version": {
+    "code": 216,
+    "name": "1.1.25",
+    "package": "com.kolt12max.livi"
+  },
+  "supersedes": 215,
+  "artifacts": {
+    "aab": "/Users/maximkoltovich/LiVi/livi-app/frontend/android/app/build/outputs/bundle/release/app-release.aab",
+    "archive": "/private/tmp/livi-app-links-216-20261122/livi-216-release-final.aab",
+    "aabBytes": 127454395,
+    "sha256": "22bb34a1dafe280bea837f8d60ba42df00fd70ef90d7f5c416d18491436866a4",
+    "apkSha256": "33d8a865217606ff8ab98706b881987963cd97d53ea5a34ad2894c63a980542e",
+    "mapping": "/private/tmp/livi-app-links-216-20261122/mapping.txt",
+    "hermesSourceMap": "/private/tmp/livi-app-links-216-20261122/index.android.bundle.map"
+  },
+  "checks": {
+    "frontend": {
+      "suites": 175,
+      "passed": 1689,
+      "failed": 0,
+      "skipped": 0
+    },
+    "backend": {
+      "previousFullRunPassed": 304,
+      "previousSkipped": 52,
+      "isolatedMongoRunPassed": 52,
+      "totalCovered": 356,
+      "failed": 0,
+      "remainingSkipped": 0
+    },
+    "kotlin": {
+      "suites": 6,
+      "passed": 20,
+      "failures": 0
+    },
+    "totalPassed": 2065,
+    "strictLinkRoutingTests": 41,
+    "frontendTypecheck": "passed",
+    "changedFrontendEslint": "passed",
+    "priorFullFrontendBackendLint": "passed in 215 baseline; newly changed files also checked",
+    "diffCheck": "passed",
+    "releaseBuild": "passed",
+    "debugBuild": "passed",
+    "artifact": {
+      "bundletool": "passed",
+      "signature": "verified",
+      "apkZipalign16KiB": "passed",
+      "embeddedVersionCode": 216,
+      "embeddedPublicScheme": null,
+      "newRoutingParserInSourceMap": true,
+      "embeddedHermesBundleMatchesCurrentBuild": true,
+      "nativeLibrariesUnchangedFrom215": 96
+    },
+    "appLinks": {
+      "manifest": "/private/tmp/livi-app-links-216-20261122/aab-manifest.xml",
+      "versionCode": "216",
+      "publicAppLinks": [
+        "https://api.liviapp.com/invite/"
+      ],
+      "customSchemes": [],
+      "internalCallActivities": "preserved",
+      "trustedPlayCertificates": 1
+    }
+  },
+  "device216": {
+    "versionCode": 216,
+    "cases": [
+      {
+        "embeddedCommand": "incoming-call",
+        "deliveredToMainActivity": true
+      },
+      {
+        "embeddedCommand": "answer-call",
+        "deliveredToMainActivity": true
+      },
+      {
+        "embeddedCommand": "decline-call",
+        "deliveredToMainActivity": true
+      },
+      {
+        "embeddedCommand": "cancel-outgoing",
+        "deliveredToMainActivity": true
+      }
+    ],
+    "callHandlersInvoked": false,
+    "realCallOrFriendMessageSent": false,
+    "uiBeforeAndAfter": "Home/Search unchanged",
+    "startup": "passed after opening the project in dev client",
+    "dataPreserved": true,
+    "playApplicationUnchanged": true,
+    "jsErrors": {
+      "TypeError": 0,
+      "ReferenceError": 0,
+      "Invariant Violation": 0
+    },
+    "deprecatedWarnings": {
+      "ProgressBarAndroid": 0,
+      "Clipboard": 0,
+      "PushNotificationIOS": 0
+    }
+  },
+  "mediaDeviceAcceptance": "Existing chat/photo/full-screen viewer/share-sheet passed in 215; protectedMedia and MediaViewer unchanged by the 216 routing patch.",
+  "temporaryMongo": {
+    "dbPath": "/private/tmp/livi-app-links-216-20261122/mongo-db",
+    "port": 27216,
+    "testDatabasesRemoved": true,
+    "shutdownRequested": true,
+    "otherMongoInstancesTouched": false,
+    "shutdownExitCode": 0,
+    "stopped": true
+  },
+  "production": {
+    "invitePageMatchesTestedSource": true,
+    "assetlinksMatches215VerifiedState": true,
+    "healthOk": true,
+    "noNewServerChangesIn216": true,
+    "previousHtmlBackup": "/opt/backend/backup-app-links-20261122T135012Z/invite.html"
+  },
+  "notVerified": [
+    "Play Console after uploading 216",
+    "Real two-phone calls, bidirectional media and VPN on/off after the patch",
+    "Fresh installation through Google Play with a real invite",
+    "iOS physical acceptance"
+  ],
+  "remaining": [
+    "Upload final AAB 216 and inspect Deep links for version 216 after Google Play processing"
+  ],
+  "logs": "/private/tmp/livi-app-links-216-20261122",
+  "baselineEvidence": "docs/verification/app-links-215-2026-11-22/README.md"
+}

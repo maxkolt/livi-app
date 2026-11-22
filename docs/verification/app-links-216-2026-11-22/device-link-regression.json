@@ -1,0 +1,23 @@
+{
+  "versionCode": 216,
+  "cases": [
+    {
+      "embeddedCommand": "incoming-call",
+      "deliveredToMainActivity": true
+    },
+    {
+      "embeddedCommand": "answer-call",
+      "deliveredToMainActivity": true
+    },
+    {
+      "embeddedCommand": "decline-call",
+      "deliveredToMainActivity": true
+    },
+    {
+      "embeddedCommand": "cancel-outgoing",
+      "deliveredToMainActivity": true
+    }
+  ],
+  "callHandlersInvoked": false,
+  "realCallOrFriendMessageSent": false
+}

@@ -1,3 +1,4 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 /**
  * «Заявки в друзья» — страница из вкладки «Друзья» (кнопка рядом с короной).
  *
@@ -13,7 +14,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import AdaptiveText from '../../components/AdaptiveText';
 import AvatarImage from '../../components/AvatarImage';
 import { FullScreenPortal } from '../../components/FullScreenPortal';
@@ -79,7 +80,7 @@ export function FriendRequestsPage({ visible, onClose, ...rest }: Props) {
 }
 
 function FriendRequestsContent({ visible, onClose, lang, friendIds, onAccepted }: Props) {
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const { width, height } = useSafeAreaFrame();
   const tablet = isWelcomeTabletLayout(width, height);
   const landscape = !tablet && width > 0 && height > 0 && width / height > 1.05;

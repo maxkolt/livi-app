@@ -1,12 +1,13 @@
 const mockDownload = jest.fn();
 const mockDecrypt = jest.fn();
+const mockEncrypt = jest.fn();
 let mockOwner = 'alice';
 jest.mock('../sockets/modules/constants', () => ({ API_BASE: 'https://api.test' }));
 jest.mock('../sockets/modules/authState', () => ({ getCurrentUserId: () => mockOwner }));
 jest.mock('./installId', () => ({ getInstallAuthHeaders: async () => ({ 'x-install-id': 'install', 'x-install-secret': 'proof' }) }));
 jest.mock('expo-file-system', () => ({ cacheDirectory: 'file:///cache/', getInfoAsync: async () => ({ exists: true }), downloadAsync: (...args: unknown[]) => mockDownload(...args), deleteAsync: jest.fn(async () => undefined) }));
-jest.mock('react-native', () => ({ NativeModules: { LiviCrypto: { decryptMedia: (...args: unknown[]) => mockDecrypt(...args) } } }));
-import { attachMediaKey, parseMediaKey, mediaWireUrl, resolveProtectedMedia } from './protectedMedia';
+jest.mock('react-native', () => ({ NativeModules: { LiviCrypto: { decryptMedia: (...args: unknown[]) => mockDecrypt(...args), encryptMedia: (...args: unknown[]) => mockEncrypt(...args) } } }));
+import { attachMediaKey, parseMediaKey, mediaWireUrl, resolveProtectedMedia, encryptMediaForUpload } from './protectedMedia';
 const key = { v: 1 as const, k: Buffer.alloc(32, 3).toString('base64'), e: 'jpg' };
 beforeEach(() => { mockOwner = 'alice'; jest.clearAllMocks(); mockDecrypt.mockResolvedValue('file:///cache/plain.jpg'); });
 it('keeps a valid key only in local metadata and strips it from the network URL', () => {
@@ -38,4 +39,15 @@ it('never decrypts or caches an unauthorized download', async () => {
 it('does not expose a cached result after the signed-in owner changes during download', async () => {
   mockDownload.mockImplementationOnce(async (_url: string, dest: string) => { mockOwner = 'bob'; return { status: 200, uri: dest }; });
   await expect(resolveProtectedMedia(attachMediaKey('/uploads/media/account-change.livi', key))).rejects.toThrow('identity_changed');
+});
+
+it.each([
+  ['image', 'jpg'], ['audio', 'm4a'], ['video', 'mp4'],
+] as const)('keeps native encryption and key metadata for %s uploads', async (type, extension) => {
+  const uri = `file:///cache/message.${extension}`;
+  mockEncrypt.mockResolvedValueOnce({ uri: 'file:///cache/encrypted.livi', key: key.k });
+  await expect(encryptMediaForUpload(uri, type)).resolves.toEqual({
+    uri: 'file:///cache/encrypted.livi', key: { v: 1, k: key.k, e: extension },
+  });
+  expect(mockEncrypt).toHaveBeenCalledWith(uri);
 });

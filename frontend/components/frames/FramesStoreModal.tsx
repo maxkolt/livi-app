@@ -1,6 +1,7 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import { Image as ExpoImage } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { CosmeticFramePreview } from './CosmeticFramePreview';
@@ -402,7 +403,7 @@ function FramesStoreContent({
 }) {
   const lang = useLang((state) => state.lang);
   const L = useCallback((key: string) => t(key, lang), [lang]);
-  const liveInsets = useSafeAreaInsets();
+  const liveInsets = useBottomControlsInsets();
   const frame = useSafeAreaFrame();
   const {
     size: rootSize,

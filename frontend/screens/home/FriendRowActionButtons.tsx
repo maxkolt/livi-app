@@ -1,6 +1,6 @@
 import type { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import type { RootStackParamList } from '../../navigation/types';
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useSyncExternalStore } from 'react';
 import { AppState, Platform, Text, View } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Vibration } from 'react-native';
@@ -9,6 +9,7 @@ import {
   FRIEND_ROW_HIT_CHAT,
 } from '../../constants/uiTokens';
 import { isCallKeepAvailable } from '../../utils/callKeep';
+import { getCallLifecycle, subscribeCallLifecycle } from '../../utils/callLifecycle';
 import { logger } from '../../utils/logger';
 import { type Lang } from '../../utils/i18n';
 import { CHAT_OPEN_DEBOUNCE_MS } from './constants';
@@ -217,6 +218,9 @@ export function FriendRowInviteButton({
 }) {
   const friendIdStr = String(friend.id);
   const missedCount = missedByUser[friendIdStr] || 0;
+  // The cached Friends pane can keep identical props across call teardown.
+  // Runtime refs alone do not wake its disabled buttons when the session ends.
+  useSyncExternalStore(subscribeCallLifecycle, getCallLifecycle, getCallLifecycle);
   /** Cancel→redial: стартуем на pressIn, не ждём onPress (JS может быть занят 1с+). */
   const startedCallOnPressInRef = useRef(false);
 

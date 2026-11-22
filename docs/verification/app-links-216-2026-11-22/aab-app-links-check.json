@@ -1,0 +1,10 @@
+{
+  "manifest": "/private/tmp/livi-app-links-216-20261122/aab-manifest.xml",
+  "versionCode": "216",
+  "publicAppLinks": [
+    "https://api.liviapp.com/invite/"
+  ],
+  "customSchemes": [],
+  "internalCallActivities": "preserved",
+  "trustedPlayCertificates": 1
+}

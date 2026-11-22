@@ -95,11 +95,10 @@ import {
 } from './home';
 import {
   HomeWelcomeTabBar,
-  welcomeTabBarBottomGap,
-  welcomeTabBarContentHeight,
   type WelcomeTabPressMeta,
   type WelcomeTabId,
 } from './home/HomeWelcomeTabBar';
+import { welcomeTabBarMetrics } from './home/welcomeTabBarLayout';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { SpatialStageBackground } from './home/SpatialDepth';
@@ -116,7 +115,6 @@ import {
   WELCOME_POPUP_ACCENT,
   WELCOME_STAGE_BG,
   APP_TOP_CONTENT_GAP,
-  isWelcomeTabletLayout,
 } from './home/constants';
 import { useStableSafeAreaInsets } from './home/useStableSafeAreaInsets';
 import { logNavigationPerf, navigationPerfNow, nextNavigationPerfId } from '../utils/navigationPerf';
@@ -485,12 +483,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   // inset именно той ориентации, которую сейчас раздаёт HomeLayoutProvider.
   const homeInsets =
     homeInsetsByOrientationRef.current[tabBarOrientationKey] ?? rawHomeInsets;
-  const tabBarTablet = isWelcomeTabletLayout(layoutWidth, layoutHeight);
-  const tabBarCompactLandscape = tabBarLandscape && !tabBarTablet;
   /** Exact shared geometry: no estimate -> onLayout correction -> content jump. */
-  const tabBarBottomGap = welcomeTabBarBottomGap(homeInsets.bottom, tabBarTablet, tabBarCompactLandscape);
-  const tabBarH =
-    welcomeTabBarContentHeight(tabBarTablet, tabBarCompactLandscape) + tabBarBottomGap;
+  const { bottomGap: tabBarBottomGap, contentHeight: tabBarContentHeight } =
+    welcomeTabBarMetrics(layoutWidth, layoutHeight, homeInsets.bottom);
+  const tabBarH = tabBarContentHeight + tabBarBottomGap;
   const [searchTopBlockBottom, setSearchTopBlockBottom] = useState<number | null>(null);
   const onSearchTopBlockBottom = useCallback((bottom: number | null) => {
     setSearchTopBlockBottom((prev) =>

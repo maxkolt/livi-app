@@ -231,6 +231,8 @@ async function emitPresenceUpdateToFriends(io: Server, userId: string, busy: boo
 // busy flag after Stop or another state change, including a replacement socket.
 async function markBusy(io: Server, s: AuthedSocket, busy: boolean, capturedUserId?: string) {
   s.data = s.data || {};
+  s.data.randomChatBusy = busy;
+  s.data.randomPresenceVersion = (s.data.randomPresenceVersion || 0) + 1;
   s.data.busy = busy;
   const userId = String(capturedUserId || s.data.userId || '');
   if (userId) {

@@ -1,0 +1,10 @@
+{
+  "bundletool": "passed",
+  "signature": "verified",
+  "apkZipalign16KiB": "passed",
+  "embeddedVersionCode": 216,
+  "embeddedPublicScheme": null,
+  "newRoutingParserInSourceMap": true,
+  "embeddedHermesBundleMatchesCurrentBuild": true,
+  "nativeLibrariesUnchangedFrom215": 96
+}

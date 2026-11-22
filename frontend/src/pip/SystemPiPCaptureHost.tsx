@@ -11,7 +11,7 @@ import { PIP_ROUNDED, PIP_TEXTURE_VIEW } from '../../components/VideoChat/shared
 // Keep the existing capture configuration, including legacy pass-through props.
 type CaptureVideoProps = React.ComponentProps<typeof RTCView> & {
   stream: MediaStream | null;
-  useTextureView: boolean;
+  textureView: boolean;
   zOrderMediaOverlay: boolean;
 };
 
@@ -73,8 +73,10 @@ export default function SystemPiPCaptureHost() {
   let sessionRemoteCamOn: boolean | undefined;
   let sessionLocalStream: MediaStream | null = null;
   let sessionLocalCamOn: boolean | undefined;
+  let sessionCanPrewarm = false;
   try {
     const session = (global as CallAudioGlobals).__webrtcSessionRef?.current;
+    sessionCanPrewarm = !!session && !(typeof session.isEnded === 'function' && session.isEnded());
     sessionRemoteStream =
       typeof session?.getRemoteStream === 'function' ? session.getRemoteStream() : null;
     if (typeof session?.getRemoteCamEnabled === 'function') {
@@ -130,21 +132,6 @@ export default function SystemPiPCaptureHost() {
   }, []);
 
   useEffect(() => {
-    if (!active) return;
-    markFrameReady();
-    const t = setTimeout(markFrameReady, 32);
-    return () => clearTimeout(t);
-  }, [
-    active,
-    peerCamOn,
-    selfCamOn,
-    canBindRtc,
-    pipRemoteViewKey,
-    remoteStreamVersion,
-    markFrameReady,
-  ]);
-
-  useEffect(() => {
     if (!active || !peerCamOn) return;
     if (mediaStreamHasLiveVideo(effectiveRemoteStream)) return;
     const arm = () => {
@@ -164,7 +151,9 @@ export default function SystemPiPCaptureHost() {
     return () => clearTimeout(t);
   }, [active, peerCamOn, effectiveRemoteStream]);
 
-  if (!active) return null;
+  // Keep TextureViews bound while the call is visible. Native reveals this
+  // already laid-out layer at gesture start, before RN pauses its frame loop.
+  if (!active && !(Platform.OS === 'android' && sessionCanPrewarm && canBindRtc)) return null;
 
   const mainIsRemote = canBindRemote;
   const mainIsLocalOnly = !canBindRemote && canBindLocal;
@@ -172,7 +161,8 @@ export default function SystemPiPCaptureHost() {
 
   return (
     <View
-      style={[styles.root, !canBindRtc ? styles.rootUnderLogo : null]}
+      nativeID={canBindRtc ? 'livi-system-pip-video' : undefined}
+      style={[styles.root, !canBindRtc ? styles.rootUnderLogo : null, { opacity: active ? 1 : 0 }]}
       pointerEvents="none"
       collapsable={false}
       onLayout={canBindRtc ? markFrameReady : undefined}
@@ -183,7 +173,7 @@ export default function SystemPiPCaptureHost() {
           {...({
             stream: effectiveRemoteStream,
             streamURL: remoteStreamUrl,
-            useTextureView: true,
+            textureView: true,
             renderToHardwareTextureAndroid: true,
             zOrderMediaOverlay: false,
           } satisfies CaptureVideoProps)}
@@ -191,6 +181,8 @@ export default function SystemPiPCaptureHost() {
           objectFit="cover"
           mirror={false}
           zOrder={0}
+          onLayout={markFrameReady}
+          onDimensionsChange={markFrameReady}
         />
       ) : null}
       {mainIsLocalOnly ? (
@@ -199,7 +191,7 @@ export default function SystemPiPCaptureHost() {
           {...({
             stream: effectiveLocalStream,
             streamURL: localStreamUrl,
-            useTextureView: true,
+            textureView: true,
             renderToHardwareTextureAndroid: true,
             zOrderMediaOverlay: false,
           } satisfies CaptureVideoProps)}
@@ -207,6 +199,8 @@ export default function SystemPiPCaptureHost() {
           objectFit="cover"
           mirror={true}
           zOrder={0}
+          onLayout={markFrameReady}
+          onDimensionsChange={markFrameReady}
         />
       ) : null}
       {showLocalInset ? (
@@ -216,8 +210,7 @@ export default function SystemPiPCaptureHost() {
             {...({
               stream: effectiveLocalStream,
               streamURL: localStreamUrl,
-              useTextureView: true,
-              textureView: PIP_TEXTURE_VIEW,
+              textureView: true,
               renderToHardwareTextureAndroid: true,
               zOrderMediaOverlay: true,
             } satisfies CaptureVideoProps)}

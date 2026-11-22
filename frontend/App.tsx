@@ -5,6 +5,7 @@ import { notificationHomeParams, getNotificationHomeRequest, getNotificationStac
 import "react-native-gesture-handler";
 import React from "react";
 import SplashLoader from "./components/SplashLoader";
+import { isIncomingAnswerUiReady, subscribeIncomingAnswerUiReady } from './utils/incomingAnswerUiReady';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
 import { Platform } from "react-native";
@@ -56,6 +57,7 @@ import { forceCallLogUiNow, recordCancelledCall, recordNoAnswerCall, recordPendi
 import { markChatCallBubbleEligible } from './screens/chat/chatCallEvents';
 import { getInstallId, getInstallSecret } from './utils/installId';
 import { closeCallAudioSession } from './utils/callAudioSession';
+import { parseInternalCallLink, parseInviteCodeFromLink } from './utils/deepLinks';
 import { callLifecycle, getCallLifecycle } from './utils/callLifecycle';
 import { notifyIncomingShare, parseNativeShareItems, pullPendingShareFromNative } from './utils/incomingShare';
 import { ensureInitialMediaPermissions, ensureCallMediaPermissions, needsNearbyDevicesPermission, requestNearbyDevicesPermissionAndroid } from './utils/mediaPermissions';
@@ -590,11 +592,9 @@ function AppContent() {
     } catch {}
   }, []);
   /**
-   * Звонящий: Main уже на переднем плане (Outgoing был поверх него) — снимаем native solid,
-   * как только «Соединение…» нарисовано. Иначе до VideoCall.onLayout (2–3 с) был пустой фон.
-   * Снимает сам native по nativeID: JS эти секунды занят подключением, а по JS-commit рано —
-   * UI-поток ещё создаёт VideoCall, и под снятой крышкой мелькал список звонков.
-   * Callee не трогаем: там Main поднимается из-под Incoming, и ранний clear давал вспышку Home.
+   * После подъёма Main показываем уже нарисованное «Соединение…» обоим участникам.
+   * Native ждёт два кадра по nativeID; JS-крышка остаётся до layout самого VideoCall.
+   * Проверки active + bringMain защищают принимающего от вспышки Home при смене задач.
    */
   const tryRevealIncomingAnswerConnectingCover = React.useCallback(() => {
     if (!incomingAnswerCoverShownRef.current || !incomingAnswerCoverRevealEarlyRef.current) return;
@@ -670,7 +670,7 @@ function AppContent() {
     callId?: string;
     /** Android incoming: не снимать крышку до bringMain. */
     awaitBringMain?: boolean;
-    /** Звонящий: показать «Соединение…» сразу после отрисовки, не ждать VideoCall.onLayout. */
+    /** Показывать «Соединение…» после native paint, не ожидая VideoCall.onLayout. */
     revealConnectingEarly?: boolean;
   }) => {
     const meta = resolveIncomingAnswerCoverMeta(opts);
@@ -683,12 +683,12 @@ function AppContent() {
     }
     const gen = ++incomingAnswerCoverGenRef.current;
     incomingAnswerCoverShownRef.current = true;
-    incomingAnswerCoverUiReadyRef.current = false;
+    incomingAnswerCoverUiReadyRef.current = isIncomingAnswerUiReady(opts?.callId);
     incomingAnswerCoverFlushScheduledRef.current = false;
     incomingAnswerCoverCallIdRef.current = String(opts?.callId || '').trim() || null;
     incomingAnswerCoverBringMainDoneRef.current = opts?.awaitBringMain === true ? false : true;
     incomingAnswerNativeClearedForContentRef.current = false;
-    incomingAnswerCoverRevealEarlyRef.current = opts?.revealConnectingEarly === true;
+    incomingAnswerCoverRevealEarlyRef.current = opts?.revealConnectingEarly !== false;
     for (const t of incomingAnswerCoverDisarmTimersRef.current) {
       try { clearTimeout(t); } catch {}
     }
@@ -741,25 +741,13 @@ function AppContent() {
       incomingAnswerCoverDisarmTimersRef.current = [];
     };
   }, []);
-  // Только SafeArea onLayout VideoCall (source=videocall_layout). Голый вызов — no-op
-  // (старый useLayoutEffect на mount иначе снимал крышку до bringMain → вспышка Home).
-  React.useEffect(() => {
-    const g = global as AppRuntimeGlobals;
-    g.__notifyIncomingAnswerUiReady = (info?: { source?: string; callId?: string | null }) => {
+  // A buffered, call-scoped layout event survives subscription/cover ordering.
+  React.useLayoutEffect(() => {
+    const onReady = (callId: string) => {
       if (!incomingAnswerCoverShownRef.current) return;
-      if (info?.source !== 'videocall_layout') {
-        try {
-          markCallPerf('answer_cover_ignore_notify', {
-            source: info?.source || null,
-            appState: AppState.currentState,
-          });
-        } catch {}
-        return;
-      }
       const expected = incomingAnswerCoverCallIdRef.current;
-      const got = String(info?.callId || '').trim();
-      if (expected && got && expected !== got) {
-        try { markCallPerf('answer_cover_ignore_wrong_call', { expected, got }); } catch {}
+      if (expected && expected !== callId) {
+        try { markCallPerf('answer_cover_ignore_wrong_call', { expected, got: callId }); } catch {}
         return;
       }
       incomingAnswerCoverUiReadyRef.current = true;
@@ -771,9 +759,10 @@ function AppContent() {
       } catch {}
       tryFlushIncomingAnswerCover();
     };
-    return () => {
-      if (g.__notifyIncomingAnswerUiReady) delete g.__notifyIncomingAnswerUiReady;
-    };
+    const unsubscribe = subscribeIncomingAnswerUiReady(onReady);
+    const callId = incomingAnswerCoverCallIdRef.current;
+    if (callId && isIncomingAnswerUiReady(callId)) onReady(callId);
+    return unsubscribe;
   }, [tryFlushIncomingAnswerCover]);
   /**
    * Android: «Доступ к звонкам» — показ входящих на весь экран / поверх окон, пока ни один
@@ -1218,7 +1207,7 @@ function AppContent() {
             // Native stage-cover держим до VideoCall.onLayout (clearIncomingAnswerCover).
           } catch {}
         }
-        // Полную JS+native крышку снимает только VideoCall.onLayout → __notifyIncomingAnswerUiReady.
+        // JS-крышка снимается по сохранённому layout-сигналу конкретного VideoCall.
       }
     });
   }, [
@@ -2427,13 +2416,9 @@ function AppContent() {
   // ===== Deep Linking: звонки livi://incoming-call | livi://answer-call | livi://decline-call =====
   const handleIncomingCallDeepLink = async (url: string) => {
     try {
-      const m = url.match(/livi:\/\/incoming-call[?]?(.*)/i);
-      if (!m) return;
-      const search = m[1] || '';
-      const params = new URLSearchParams(search.startsWith('?') ? search : `?${search}`);
-      const callId = params.get('callId') || params.get('call_id') || '';
-      const from = params.get('from') || params.get('userId') || '';
-      const fromNick = params.get('fromNick') ?? '';
+      const link = parseInternalCallLink(url);
+      if (!link || link.action !== 'incoming-call') return;
+      const { callId, from, fromNick } = link;
       if (callId && from) {
         logger.info('[App] Incoming call deep link: presentIncomingCall', { callId, from });
         if (Platform.OS === 'android') {
@@ -2454,29 +2439,24 @@ function AppContent() {
 
   const handleCallDeepLink = async (url: string) => {
     try {
-      if (/livi:\/\/answer-call/i.test(url)) {
-        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
-        const callId = params.get('callId') || params.get('call_id') || '';
-        const from = params.get('from') || params.get('userId') || '';
-        const fromNick = params.get('fromNick') ?? '';
+      const link = parseInternalCallLink(url);
+      if (!link) return false;
+      const { action, callId, from, fromNick } = link;
+      if (action === 'answer-call') {
         if (callId && from) {
           logger.info('[App] answer-call deep link: opening call', { callId, from, fromNick: fromNick || null });
           await completeAndroidIncomingAnswer(from, callId, fromNick || undefined);
           return true;
         }
       }
-      if (/livi:\/\/decline-call/i.test(url)) {
-        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
-        const callId = params.get('callId') || params.get('call_id') || '';
+      if (action === 'decline-call') {
         if (callId) {
           logger.info('[App] decline-call deep link', { callId });
           await handleDeclineCallFromDeepLink(callId);
           return true;
         }
       }
-      if (/livi:\/\/cancel-outgoing/i.test(url)) {
-        const params = new URLSearchParams(url.replace(/^[^?]*\?/, ''));
-        const callId = params.get('callId') || params.get('call_id') || '';
+      if (action === 'cancel-outgoing') {
         if (callId) {
           logger.info('[App] cancel-outgoing deep link', { callId });
           try { cancelCall(callId); } catch {}
@@ -2664,19 +2644,8 @@ function AppContent() {
 
     const handleInviteLink = async (url: string) => {
       try {
-        if (url.includes('expo-development-client') || /^exp\+livi-video-chat:\/\//i.test(url)) {
-          return;
-        }
-
-        let inviteMatch = url.match(/livi:\/\/invite\/([a-f\d]{24})/i);
-        if (!inviteMatch) {
-          inviteMatch = url.match(/\/invite\/([a-f\d]{24})/i);
-        }
-        if (!inviteMatch) {
-          return;
-        }
-
-        const code = inviteMatch[1];
+        const code = parseInviteCodeFromLink(url);
+        if (!code) return;
         logger.info('[App] Extracted invite code:', code);
         presentedInviteCodeRef.current = null;
         await savePendingInviteCode(code);
@@ -2719,9 +2688,7 @@ function AppContent() {
           const handled = await handleCallDeepLink(initialUrl);
           if (!handled) {
             await handleIncomingCallDeepLink(initialUrl);
-            if (!initialUrl.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(initialUrl)) {
-              await handleInviteLink(initialUrl);
-            }
+            await handleInviteLink(initialUrl);
           }
         }
       } catch (e) {
@@ -2736,9 +2703,7 @@ function AppContent() {
       const handled = await handleCallDeepLink(event.url);
       if (!handled) {
         await handleIncomingCallDeepLink(event.url);
-        if (!event.url.includes('expo-development-client') && !/^exp\+livi-video-chat:\/\//i.test(event.url)) {
-          await handleInviteLink(event.url);
-        }
+        await handleInviteLink(event.url);
       }
     };
 

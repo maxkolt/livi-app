@@ -15,6 +15,13 @@ import androidx.core.view.WindowInsetsCompat
  * Native call screens use [applySystemBarInsets] so buttons stay above the nav bar.
  */
 object EdgeToEdgeHelper {
+  private fun bottomControlsInset(view: View, bottom: Int): Int {
+    val resources = view.resources
+    val density = resources.displayMetrics.density
+    val portrait = resources.configuration.orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    return if (portrait && bottom <= 24f * density) (48f * density + .5f).toInt() else bottom
+  }
+
   @JvmStatic
   fun apply(activity: Activity) {
     val window = activity.window ?: return
@@ -66,7 +73,7 @@ object EdgeToEdgeHelper {
         initialLeft + bars.left,
         initialTop + bars.top,
         initialRight + bars.right,
-        initialBottom + bars.bottom,
+        initialBottom + bottomControlsInset(v, bars.bottom),
       )
       insets
     }
@@ -92,7 +99,7 @@ object EdgeToEdgeHelper {
         initialLeft + bars.left,
         initialTop + bars.top,
         initialRight + bars.right,
-        initialBottom + bars.bottom,
+        initialBottom + bottomControlsInset(view, bars.bottom),
       )
     }
 
@@ -104,7 +111,7 @@ object EdgeToEdgeHelper {
         initialLeft + bars.left,
         initialTop + bars.top,
         initialRight + bars.right,
-        initialBottom + bars.bottom,
+        initialBottom + bottomControlsInset(view, bars.bottom),
       )
       insets
     }

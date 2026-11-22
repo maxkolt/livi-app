@@ -560,7 +560,7 @@ class IncomingCallActivity : AppCompatActivity() {
             putExtra(MainActivity.EXTRA_ANSWER_LAUNCHED_AT, android.os.SystemClock.elapsedRealtime())
         }
         MainActivity.armIncomingAnswerCover = true
-        startActivity(intent)
+        startActivity(intent, incomingAnswerLaunchOptions())
         try {
             overridePendingTransition(0, 0)
         } catch (_: Exception) {}

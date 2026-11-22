@@ -1,3 +1,4 @@
+import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 // Полноэкранный просмотр сохранённых Fliq: только ролик, вертикальный свайп и закрытие.
 import React, { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -13,7 +14,7 @@ import {
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { Portal } from 'react-native-paper';
-import { useSafeAreaFrame, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaFrame } from 'react-native-safe-area-context';
 import type { Lang } from '../../utils/i18n';
 import { useOverlayBackHandler } from '../../components/AppOverlay';
 import { HOME_NAV_BG, UI_ACCENT, UI_INACTIVE, WELCOME_HEADER_TITLE } from '../home/constants';
@@ -41,7 +42,7 @@ type Props = {
 
 export function FliqSavedViewer({ items, initialIndex, lang, onClose }: Props) {
   const { width, height } = useSafeAreaFrame();
-  const insets = useSafeAreaInsets();
+  const insets = useBottomControlsInsets();
   const muted = useFliqSound((s) => s.muted);
   const setMuted = useFliqSound((s) => s.setMuted);
   const hydrateSound = useFliqSound((s) => s.hydrate);

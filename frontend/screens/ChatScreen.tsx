@@ -1,3 +1,4 @@
+import { bottomControlsInset } from '../utils/bottomControlsInset';
 import { useChatSessionState } from './chat/useChatSessionState';
 import { useChatScroll } from './chat/useChatScroll';
 import type { ChatBubbleRow } from './chat/chatList';
@@ -1277,9 +1278,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     return () => { subs.forEach(s => s.remove()); offClose?.(); try { socket.off('call:timeout', forceClose); } catch {}; try { socket.off('call:declined', forceClose); } catch {}; try { socket.off('call:cancel', forceClose); } catch {}; try { socket.off('call:incoming', onIncoming); } catch {}; try { socket.off('call:accepted', clearIncomingTimer); } catch {}; try { socket.off('call:declined', clearIncomingTimer); } catch {}; try { socket.off('call:cancel', clearIncomingTimer); } catch {}; try { socket.off('call:timeout', clearIncomingTimer); } catch {}; clearIncomingTimer(); };
   }, []);
 
+  const androidControlsNavInset = bottomControlsInset(
+    Math.max(0, androidPinnedNavInset), Platform.OS, navOrientation === 'landscape',
+  );
+
   // Android: pad для списка/empty/overlays — IME (окно не resize) или emoji-панель.
   const androidKeyboardPad = emojiPanelOpen
-    ? chatEmojiPanelHeight + Math.max(0, androidPinnedNavInset)
+    ? chatEmojiPanelHeight + androidControlsNavInset
     : Math.max(0, androidImeInset);
   /**
    * progress×(−ime) + (1−p)×(−nav).
@@ -1302,7 +1307,7 @@ export default function ChatScreen({ route, navigation }: Props) {
         ),
         Animated.multiply(
           Animated.add(1, Animated.multiply(keyboardAnimation.progress, -1)),
-          -androidPinnedNavInset,
+          -androidControlsNavInset,
         ),
       );
   const androidListKeyboardTranslateY = androidDockKeyboardTranslateY;
@@ -2619,12 +2624,18 @@ export default function ChatScreen({ route, navigation }: Props) {
       : Math.max(0, androidPinnedNavInset, insets.bottom)
     : Math.max(0, insets.bottom);
 
+  // The dock stays lifted for gestures; extend only its background through that
+  // extra space. Equal bottom/padding changes preserve the input's position.
+  const composerBackgroundBottomInset = Platform.OS === 'android' && !emojiPanelOpen
+    ? Math.max(composerSystemBottomInset, androidControlsNavInset)
+    : composerSystemBottomInset;
+
   const handleInputBarLayout = React.useCallback((e: LayoutChangeEvent) => {
     const measuredH = Math.max(0, Math.round(Number(e?.nativeEvent?.layout?.height || 0)));
     if (Platform.OS === 'ios') setIosComposerBoxH((prev) => (Math.abs(prev - measuredH) <= 1 ? prev : measuredH));
     // Продолжение под системную навигацию — фон, а не высота композера для ленты;
     // отступ над навигацией тоже не меряем (см. resolvedInputBarHForChrome).
-    const h = Math.max(0, measuredH - composerSystemBottomInset - androidComposerNavGap);
+    const h = Math.max(0, measuredH - composerBackgroundBottomInset - androidComposerNavGap);
     if (!h || Math.abs(inputHeight - h) <= 1) return;
     // Во время IME-анимации на Android не переписываем высоту — иначе paddingTop
     // списка меняется поверх native translate и даёт прыжок в конце.
@@ -2637,7 +2648,7 @@ export default function ChatScreen({ route, navigation }: Props) {
     }
     lastChatComposerHeight = h;
     setInputHeight(h);
-  }, [composerSystemBottomInset, androidComposerNavGap, inputHeight]);
+  }, [composerBackgroundBottomInset, androidComposerNavGap, inputHeight]);
 
   // Список на весь экран под chrome: облака уезжают под шапку/композер и растворяются у края.
   // Инсеты — через padding контента; под IME оставляем только keyboard pad.
@@ -2646,10 +2657,10 @@ export default function ChatScreen({ route, navigation }: Props) {
   // labels are centered here without moving the last bubble.
   const InlineGapIndicator = DeleteToastInline || (!isEmpty ? GapCenterIndicator : null);
   const androidEmojiBottomReserve = emojiPanelOpen
-    ? chatEmojiPanelHeight + Math.max(0, insets.bottom)
+    ? chatEmojiPanelHeight + androidControlsNavInset
     : 0;
   /** На сколько лента (Android) продлена вниз под кнопки навигации — см. её bottom. */
-  const androidFeedNavExtend = Platform.OS === 'android' && !emojiPanelOpen ? Math.max(0, androidPinnedNavInset) : 0;
+  const androidFeedNavExtend = Platform.OS === 'android' && !emojiPanelOpen ? androidControlsNavInset : 0;
   // The list translates up with the dock. Reserve that lift at the oldest end
   // too, so the first date and bubble can scroll fully below the fixed header.
   const androidFeedTopReserve = headerTotalH + 10 + (emojiPanelOpen
@@ -3006,7 +3017,7 @@ export default function ChatScreen({ route, navigation }: Props) {
             pressedBackgroundColor={COMPOSER_PRESSED_BUTTON_BG}
             marginRight={12}
           >
-            <ChatAttachmentIcon size={28} color={COMPOSER_BUTTON_ICON} />
+            <ChatAttachmentIcon size={24} color={COMPOSER_BUTTON_ICON} />
           </ChatRoundButton>
         )}
 
@@ -3549,7 +3560,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                   position: 'absolute',
                   left: chatChromeSideInset,
                   right: chatChromeSideInset,
-                  bottom: -composerSystemBottomInset,
+                  bottom: -composerBackgroundBottomInset,
                   zIndex: 20,
                   elevation: 20,
                   transform: [
@@ -3566,7 +3577,7 @@ export default function ChatScreen({ route, navigation }: Props) {
                 // Без зависимости от записи: иначе высота композера меняется
                 // и лента над ним сдвигается при старте/отмене голосового.
                 paddingTop: 6,
-                paddingBottom: 2 + androidComposerNavGap + composerSystemBottomInset,
+                paddingBottom: 2 + androidComposerNavGap + composerBackgroundBottomInset,
                 overflow: 'hidden',
                 borderTopLeftRadius: WELCOME_CHROME_EDGE_RADIUS,
                 borderTopRightRadius: WELCOME_CHROME_EDGE_RADIUS,
@@ -3590,7 +3601,7 @@ export default function ChatScreen({ route, navigation }: Props) {
               <View
                 style={[
                   {
-                    paddingBottom: Math.max(0, insets.bottom),
+                    paddingBottom: androidControlsNavInset,
                     // Стекло рисует фон окна целиком: без клипа оно закрывает ленту и композер.
                     overflow: 'hidden',
                   },
