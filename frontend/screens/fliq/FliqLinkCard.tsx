@@ -1,6 +1,6 @@
 // Карточка ролика в сообщении чата (YouTube / TikTok / Instagram): превью, название,
 // источник. Тап — плеер поверх приложения (FliqViewerHost), долгое нажатие — меню сообщения.
-import React, { memo, useEffect, useRef, useState } from 'react';
+import React, { memo, useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,21 +25,33 @@ export const FliqLinkCard = memo(function FliqLinkCard({
   link: FliqLink;
   onLongPress?: () => void;
 }) {
-  const [meta, setMeta] = useState<FliqMeta | undefined>(() => peekFliqMeta(link));
-  const linkRef = useRef(link);
-  linkRef.current = link;
+  const [result, setResult] = useState<{ url: string; meta?: FliqMeta }>(() => ({
+    url: link.url, meta: peekFliqMeta(link),
+  }));
+  // A recycled message row must never show another video's title or thumbnail.
+  const meta = result.url === link.url ? result.meta : peekFliqMeta(link);
   useEffect(() => {
-    const cached = peekFliqMeta(linkRef.current);
+    const cached = peekFliqMeta(link);
     if (cached) {
-      setMeta(cached);
+      setResult({ url: link.url, meta: cached });
       return;
     }
     let alive = true;
-    void fetchFliqMeta(linkRef.current).then((m) => {
-      if (alive) setMeta(m);
-    });
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let attempts = 0;
+    const load = () => {
+      void fetchFliqMeta(link).then(value => {
+        if (alive) setResult({ url: link.url, meta: value });
+      }).catch(() => {
+        // A busy bounded queue must not permanently deprive a visible card of
+        // metadata. Only mounted cards retry; no global waiting list is retained.
+        if (alive) retry = setTimeout(load, Math.min(1000 * 2 ** Math.min(attempts++, 4), 15_000));
+      });
+    };
+    load();
     return () => {
       alive = false;
+      clearTimeout(retry);
     };
   }, [link.url]);
 

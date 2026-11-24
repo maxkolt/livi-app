@@ -3,13 +3,28 @@ import * as FileSystem from 'expo-file-system';
 import { Platform } from 'react-native';
 import { sha256 } from '@noble/hashes/sha256';
 import { bytesToHex } from '@noble/hashes/utils';
+import { ExpiringLruCache } from './expiringLruCache';
+import { subscribeMemoryPressure } from './memoryPressure';
+import { subscribeAvatarCacheInvalidation } from './avatarCacheInvalidation';
 
 const DATA_URI_PREFIX = 'data:';
 const isDataUri = (uri: string) =>
   typeof uri === 'string' && uri.trim().toLowerCase().startsWith(DATA_URI_PREFIX);
 
-const resolvedCache: Record<string, string> = {};
+const resolvedCache = new ExpiringLruCache<string, string>({
+  maxEntries: 256, maxCost: 256 * 1024, ttlMs: 30 * 60 * 1000,
+  cost: (value, key) => (value.length + key.length) * 2,
+});
 const pendingConversions = new Map<string, Promise<string>>();
+let cacheGeneration = 0;
+
+/** Metadata only: keep complete files and references already held by visible images. */
+export function clearResolvedAvatarFiles(): void {
+  cacheGeneration++;
+  resolvedCache.clear();
+}
+subscribeMemoryPressure(clearResolvedAvatarFiles);
+subscribeAvatarCacheInvalidation(userId => { if (userId === undefined) clearResolvedAvatarFiles(); });
 
 function cacheKeyForDataUri(uri: string): string {
   // JPEGs often share their entire header. Hash all image data so a different
@@ -20,7 +35,7 @@ function cacheKeyForDataUri(uri: string): string {
 /** Синхронно: уже разрешённый file: URI для этого data: (без записи на диск). */
 export function peekResolvedDataUriCache(uri: string): string | null {
   if (!uri || Platform.OS !== 'android' || !isDataUri(uri)) return null;
-  return resolvedCache[cacheKeyForDataUri(uri)] || null;
+  return resolvedCache.get(cacheKeyForDataUri(uri)) || null;
 }
 
 /**
@@ -32,11 +47,13 @@ export async function resolveDataUriForAndroid(uri: string): Promise<string> {
   if (Platform.OS !== 'android' || !isDataUri(uri)) return uri;
 
   const cacheKey = cacheKeyForDataUri(uri);
-  if (resolvedCache[cacheKey]) return resolvedCache[cacheKey];
+  const cached = resolvedCache.get(cacheKey);
+  if (cached) return cached;
 
   const pending = pendingConversions.get(cacheKey);
   if (pending) return pending;
 
+  const generation = cacheGeneration;
   const conversion = (async () => {
     let temporaryUri = '';
     try {
@@ -65,7 +82,7 @@ export async function resolveDataUriForAndroid(uri: string): Promise<string> {
         await FileSystem.moveAsync({ from: temporaryUri, to: fileUri });
         temporaryUri = '';
       }
-      resolvedCache[cacheKey] = fileUri;
+      if (generation === cacheGeneration) resolvedCache.set(cacheKey, fileUri);
       return fileUri;
     } catch {
       if (temporaryUri) await FileSystem.deleteAsync(temporaryUri, { idempotent: true }).catch(() => {});

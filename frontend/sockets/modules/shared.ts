@@ -1,4 +1,5 @@
-import type { ChatMessage } from '../../screens/chat/chatMessageTypes';
+import { createMessageCache } from './messageCache';
+import { subscribeMemoryPressure } from '../../utils/memoryPressure';
 // frontend/sockets/modules/shared.ts
 import type { AppStateStatus } from "react-native";
 import { AppState } from "react-native";
@@ -74,7 +75,7 @@ export const shared = {
   pendingWaitLogged: new Set<string>(),
 
   // messages cache
-  messageCache: new Map<string, { messages: ChatMessage[]; timestamp: number }>(),
+  messageCache: createMessageCache(),
   globallyDeletedMessageIdsMem: null as Set<string> | null,
   globallyDeletedMessageIdsLoadPromise: null as Promise<Set<string>> | null,
 
@@ -87,3 +88,4 @@ export const shared = {
   // typing log
   devTypingLogState: new Map<string, boolean>(),
 };
+subscribeMemoryPressure(() => shared.messageCache.clear());

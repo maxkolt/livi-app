@@ -1,0 +1,1371 @@
+{
+  "date": "2026-11-24",
+  "package": "com.kolt12max.livi.dev",
+  "versionCode": 215,
+  "versionName": "1.1.24",
+  "afterUserStoppedManualInteraction": true,
+  "devices": [
+    {
+      "identity": {
+        "serial": "RFCX306PWLE",
+        "android": "17",
+        "model": "SM-A356E",
+        "apkSha256": "f57baa87ab410d1d9bbeef1a5bb7d7461848c734df911b0bb3ceba25d25efe76"
+      },
+      "vpn": null,
+      "pid": "17029",
+      "basicResults": [
+        {
+          "label": "missing-canvas",
+          "status": "rejected",
+          "error": "No Skia View currently available.",
+          "ms": 9
+        },
+        {
+          "label": "missing-view",
+          "status": "rejected",
+          "error": "Failed to create image from view tag",
+          "ms": 11
+        },
+        {
+          "label": "invalid-uri",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 12
+        },
+        {
+          "label": "good",
+          "status": "resolved",
+          "ms": 19,
+          "image": {
+            "width": 512,
+            "height": 512
+          }
+        },
+        {
+          "label": "corrupt",
+          "status": "resolved",
+          "ms": 21,
+          "image": null
+        },
+        {
+          "label": "missing",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 22
+        },
+        {
+          "label": "empty",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 23
+        },
+        {
+          "label": "complex-view",
+          "status": "rejected",
+          "error": "Failed to create image from view tag",
+          "ms": 34
+        },
+        {
+          "label": "canvas",
+          "status": "resolved",
+          "ms": 44,
+          "image": {
+            "width": 922,
+            "height": 921
+          }
+        },
+        {
+          "label": "view",
+          "status": "resolved",
+          "ms": 44,
+          "image": {
+            "width": 160,
+            "height": 61
+          }
+        },
+        {
+          "label": "truncated",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 224
+        },
+        {
+          "label": "slow-good",
+          "status": "resolved",
+          "ms": 1521,
+          "image": {
+            "width": 512,
+            "height": 512
+          }
+        },
+        {
+          "label": "slow-error",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 1525
+        },
+        {
+          "label": "timeout",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 15011
+        }
+      ],
+      "reloads": [
+        {
+          "device": {
+            "serial": "RFCX306PWLE",
+            "model": "SM-A356E",
+            "vpn": "off"
+          },
+          "index": 1,
+          "pid": "17029",
+          "token": "RFCX306PWLE-1-1795539786586",
+          "requested": 1795539786801,
+          "ready": 1795539791949,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-1-1795539786586",
+                "outcome": "error"
+              },
+              "received": 1795539786695,
+              "released": 1795539794045,
+              "finished": 1795539794047,
+              "closed": 1795539794047
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-1-1795539786586",
+                "outcome": "ok"
+              },
+              "received": 1795539786696,
+              "released": 1795539794046,
+              "finished": 1795539794047,
+              "closed": 1795539794047
+            }
+          ],
+          "result": {
+            "token": "RFCX306PWLE-1-1795539786586-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        },
+        {
+          "device": {
+            "serial": "RFCX306PWLE",
+            "model": "SM-A356E",
+            "vpn": "off"
+          },
+          "index": 2,
+          "pid": "17029",
+          "token": "RFCX306PWLE-2-1795539811340",
+          "requested": 1795539811620,
+          "ready": 1795539817684,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-2-1795539811340",
+                "outcome": "error"
+              },
+              "received": 1795539811464,
+              "released": 1795539819019,
+              "finished": 1795539819020,
+              "closed": 1795539819020
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-2-1795539811340",
+                "outcome": "ok"
+              },
+              "received": 1795539811465,
+              "released": 1795539819019,
+              "finished": 1795539819020,
+              "closed": 1795539819020
+            }
+          ],
+          "result": {
+            "token": "RFCX306PWLE-2-1795539811340-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        },
+        {
+          "device": {
+            "serial": "RFCX306PWLE",
+            "model": "SM-A356E",
+            "vpn": "off"
+          },
+          "index": 3,
+          "pid": "17029",
+          "token": "RFCX306PWLE-3-1795539837449",
+          "requested": 1795539837739,
+          "ready": 1795539844584,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-3-1795539837449",
+                "outcome": "error"
+              },
+              "received": 1795539837565,
+              "released": 1795539846085,
+              "finished": 1795539846085,
+              "closed": 1795539846085
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "RFCX306PWLE-3-1795539837449",
+                "outcome": "ok"
+              },
+              "received": 1795539837569,
+              "released": 1795539846085,
+              "finished": 1795539846085,
+              "closed": 1795539846085
+            }
+          ],
+          "result": {
+            "token": "RFCX306PWLE-3-1795539837449-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        }
+      ],
+      "fliq": {
+        "pass": true,
+        "controlledAmbientFromStart": true,
+        "realNetwork": {
+          "url": "https://i.ytimg.com/vi/rLVug8OMirA/hqdefault.jpg",
+          "started": 1795540026044,
+          "result": {
+            "status": "pending_at_final_check"
+          }
+        },
+        "peaks": {
+          "bytes": 6291456,
+          "entries": 6,
+          "pending": 8,
+          "active": 2
+        },
+        "hiddenReleaseMs": 1888,
+        "phases": [
+          {
+            "label": "initial",
+            "at": 1795540023616,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 0,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "real-feed-visible",
+            "at": 1795540026132,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/rLVug8OMirA/hqdefault.jpg",
+              "cache": {
+                "bytes": 2097152,
+                "entries": 2,
+                "pending": 1,
+                "active": 1,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "real-ambient-result",
+            "at": 1795540026245,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/rLVug8OMirA/hqdefault.jpg",
+              "cache": {
+                "bytes": 2097152,
+                "entries": 2,
+                "pending": 1,
+                "active": 1,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "fixture-visible",
+            "at": 1795540030745,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/rLVug8OMirA/hqdefault.jpg",
+              "cache": {
+                "bytes": 3145728,
+                "entries": 3,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-0",
+            "at": 1795540033160,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 1,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/xP1cA2b5U8g/hqdefault.jpg",
+              "cache": {
+                "bytes": 4194304,
+                "entries": 4,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-1",
+            "at": 1795540034160,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 2,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/OWUTzmwrIyQ/hqdefault.jpg",
+              "cache": {
+                "bytes": 5242880,
+                "entries": 5,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-2",
+            "at": 1795540035170,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 3,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/lyAFIwgEXW0/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-3",
+            "at": 1795540036205,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-4",
+            "at": 1795540037209,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "before-prefetch-stress",
+            "at": 1795540037226,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "prefetch-bounded",
+            "at": 1795540040471,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "native-memory-pressure",
+            "at": 1795540041213,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "hidden-release",
+            "at": 1795540043812,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 4,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "logical-timeout-native-still-busy",
+            "at": 1795540044349,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 4,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 2,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "late-data-dropped",
+            "at": 1795540046368,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 4,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "background-release",
+            "at": 1795540051628,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 4,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 4194304,
+                "entries": 4,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "resume",
+            "at": 1795540055066,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/tvp-oNj8y54/hqdefault.jpg",
+              "cache": {
+                "bytes": 4194304,
+                "entries": 4,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          }
+        ]
+      },
+      "restored": {
+        "originalLoader": true,
+        "productionTimeout": true,
+        "state": {
+          "ambient": [],
+          "activeImages": 0,
+          "index": 4,
+          "feedActive": false,
+          "url": null,
+          "cache": {
+            "bytes": 0,
+            "entries": 0,
+            "pending": 0,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      "newNativeCrashesDuringCleanRecheck": 0
+    },
+    {
+      "identity": {
+        "serial": "R5GL550T4TB",
+        "android": "16",
+        "model": "SM-S938B",
+        "apkSha256": "f57baa87ab410d1d9bbeef1a5bb7d7461848c734df911b0bb3ceba25d25efe76"
+      },
+      "vpn": "com.privatasolutions.vpn",
+      "pid": "13116",
+      "basicResults": [
+        {
+          "label": "missing-canvas",
+          "status": "rejected",
+          "error": "No Skia View currently available.",
+          "ms": 1
+        },
+        {
+          "label": "invalid-uri",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 2
+        },
+        {
+          "label": "missing-view",
+          "status": "rejected",
+          "error": "Failed to create image from view tag",
+          "ms": 3
+        },
+        {
+          "label": "complex-view",
+          "status": "rejected",
+          "error": "Failed to create image from view tag",
+          "ms": 39
+        },
+        {
+          "label": "canvas",
+          "status": "resolved",
+          "ms": 53,
+          "image": {
+            "width": 1268,
+            "height": 1268
+          }
+        },
+        {
+          "label": "view",
+          "status": "resolved",
+          "ms": 54,
+          "image": {
+            "width": 232,
+            "height": 87
+          }
+        },
+        {
+          "label": "good",
+          "status": "resolved",
+          "ms": 81,
+          "image": {
+            "width": 512,
+            "height": 512
+          }
+        },
+        {
+          "label": "missing",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 82
+        },
+        {
+          "label": "empty",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 82
+        },
+        {
+          "label": "truncated",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 287
+        },
+        {
+          "label": "corrupt",
+          "status": "resolved",
+          "ms": 1023,
+          "image": null
+        },
+        {
+          "label": "slow-good",
+          "status": "resolved",
+          "ms": 1588,
+          "image": {
+            "width": 512,
+            "height": 512
+          }
+        },
+        {
+          "label": "slow-error",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 1589
+        },
+        {
+          "label": "timeout",
+          "status": "rejected",
+          "error": "Failed to load non-empty Skia data from URI",
+          "ms": 15005
+        }
+      ],
+      "reloads": [
+        {
+          "device": {
+            "serial": "R5GL550T4TB",
+            "model": "SM-S938B",
+            "vpn": "Privata on"
+          },
+          "index": 1,
+          "pid": "13116",
+          "token": "R5GL550T4TB-1-1795539802415",
+          "requested": 1795539802769,
+          "ready": 1795539804854,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-1-1795539802415",
+                "outcome": "error"
+              },
+              "received": 1795539802490,
+              "released": 1795539804866,
+              "finished": 1795539804866,
+              "closed": 1795539804866
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-1-1795539802415",
+                "outcome": "ok"
+              },
+              "received": 1795539802491,
+              "released": 1795539804866,
+              "finished": 1795539804866,
+              "closed": 1795539804866
+            }
+          ],
+          "result": {
+            "token": "R5GL550T4TB-1-1795539802415-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        },
+        {
+          "device": {
+            "serial": "R5GL550T4TB",
+            "model": "SM-S938B",
+            "vpn": "Privata on"
+          },
+          "index": 2,
+          "pid": "13116",
+          "token": "R5GL550T4TB-2-1795539829726",
+          "requested": 1795539830072,
+          "ready": 1795539832193,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-2-1795539829726",
+                "outcome": "error"
+              },
+              "received": 1795539829799,
+              "released": 1795539832198,
+              "finished": 1795539832198,
+              "closed": 1795539832198
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-2-1795539829726",
+                "outcome": "ok"
+              },
+              "received": 1795539829800,
+              "released": 1795539832198,
+              "finished": 1795539832198,
+              "closed": 1795539832198
+            }
+          ],
+          "result": {
+            "token": "R5GL550T4TB-2-1795539829726-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        },
+        {
+          "device": {
+            "serial": "R5GL550T4TB",
+            "model": "SM-S938B",
+            "vpn": "Privata on"
+          },
+          "index": 3,
+          "pid": "13116",
+          "token": "R5GL550T4TB-3-1795539857962",
+          "requested": 1795539858273,
+          "ready": 1795539860392,
+          "queuedSnapshots": 8,
+          "requests": [
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-3-1795539857962",
+                "outcome": "ok"
+              },
+              "received": 1795539858012,
+              "released": 1795539860402,
+              "finished": 1795539860403,
+              "closed": 1795539860403
+            },
+            {
+              "path": "/barrier",
+              "query": {
+                "token": "R5GL550T4TB-3-1795539857962",
+                "outcome": "error"
+              },
+              "received": 1795539858012,
+              "released": 1795539860403,
+              "finished": 1795539860403,
+              "closed": 1795539860403
+            }
+          ],
+          "result": {
+            "token": "R5GL550T4TB-3-1795539857962-new",
+            "results": [
+              "fresh"
+            ]
+          }
+        }
+      ],
+      "fliq": {
+        "pass": true,
+        "controlledAmbientFromStart": false,
+        "realNetwork": {
+          "url": "https://i.ytimg.com/vi/svSUAh2ZvtA/hqdefault.jpg",
+          "started": 1795540018820,
+          "result": {
+            "status": "resolved",
+            "ms": 1175,
+            "image": {
+              "width": 480,
+              "height": 360
+            }
+          }
+        },
+        "peaks": {
+          "bytes": 6291456,
+          "entries": 6,
+          "pending": 8,
+          "active": 2
+        },
+        "hiddenReleaseMs": 1765,
+        "phases": [
+          {
+            "label": "initial",
+            "at": 1795540018470,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 0,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "real-feed-visible",
+            "at": 1795540018773,
+            "state": {
+              "ambient": [
+                [
+                  null,
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/svSUAh2ZvtA/hqdefault.jpg",
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 3,
+                "active": 2,
+                "queued": 1
+              }
+            }
+          },
+          {
+            "label": "real-ambient-result",
+            "at": 1795540019602,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 480,
+                    "height": 360
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/svSUAh2ZvtA/hqdefault.jpg",
+              "cache": {
+                "bytes": 691200,
+                "entries": 1,
+                "pending": 2,
+                "active": 2,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "fixture-visible",
+            "at": 1795540021396,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 0,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/svSUAh2ZvtA/hqdefault.jpg",
+              "cache": {
+                "bytes": 3145728,
+                "entries": 3,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-0",
+            "at": 1795540023135,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 1,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/kOZmjXxkebI/hqdefault.jpg",
+              "cache": {
+                "bytes": 4194304,
+                "entries": 4,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-1",
+            "at": 1795540024039,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 2,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/Lw5JL-7nvIA/hqdefault.jpg",
+              "cache": {
+                "bytes": 5242880,
+                "entries": 5,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-2",
+            "at": 1795540024964,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 3,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/AayfkrUV66E/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-3",
+            "at": 1795540025870,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 4,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/3S6wRBIkqw0/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "swipe-4",
+            "at": 1795540026778,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 5,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/7rXEnWhawng/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "before-prefetch-stress",
+            "at": 1795540026794,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 5,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/7rXEnWhawng/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "prefetch-bounded",
+            "at": 1795540028885,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 5,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/7rXEnWhawng/hqdefault.jpg",
+              "cache": {
+                "bytes": 6291456,
+                "entries": 6,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "native-memory-pressure",
+            "at": 1795540029565,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 5,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/7rXEnWhawng/hqdefault.jpg",
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "hidden-release",
+            "at": 1795540032507,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 5,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "logical-timeout-native-still-busy",
+            "at": 1795540033035,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 5,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 2,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "late-data-dropped",
+            "at": 1795540035049,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 5,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "background-release",
+            "at": 1795540036740,
+            "state": {
+              "ambient": [],
+              "activeImages": 0,
+              "index": 5,
+              "feedActive": false,
+              "url": null,
+              "cache": {
+                "bytes": 0,
+                "entries": 0,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          },
+          {
+            "label": "resume",
+            "at": 1795540038014,
+            "state": {
+              "ambient": [
+                [
+                  {
+                    "width": 512,
+                    "height": 512
+                  },
+                  null
+                ]
+              ],
+              "activeImages": 1,
+              "index": 5,
+              "feedActive": true,
+              "url": "https://i.ytimg.com/vi/7rXEnWhawng/hqdefault.jpg",
+              "cache": {
+                "bytes": 4194304,
+                "entries": 4,
+                "pending": 0,
+                "active": 0,
+                "queued": 0
+              }
+            }
+          }
+        ]
+      },
+      "restored": {
+        "originalLoader": true,
+        "productionTimeout": true,
+        "state": {
+          "ambient": [],
+          "activeImages": 0,
+          "index": 5,
+          "feedActive": false,
+          "url": null,
+          "cache": {
+            "bytes": 0,
+            "entries": 0,
+            "pending": 0,
+            "active": 0,
+            "queued": 0
+          }
+        }
+      },
+      "newNativeCrashesDuringCleanRecheck": 0
+    }
+  ]
+}

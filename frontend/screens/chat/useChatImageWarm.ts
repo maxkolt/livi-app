@@ -2,9 +2,8 @@ import type { ChatMessage } from './chatMessageTypes';
 /** Anti-flicker: prefetch recent chat images before first paint / after history ready. */
 
 import React from "react";
-import { Platform } from "react-native";
 import { prefetchImages } from "../../utils/imageOptimization";
-import { getMessageImageUris } from "./chatAlbum";
+import { selectChatImageWarmSources } from './chatImageWarmSources';
 
 type Options = {
   historyReady: boolean;
@@ -53,24 +52,9 @@ export function useChatImageWarm({
   React.useEffect(() => {
     if (!historyReady) return;
     let cancelled = false;
-    const urls: string[] = [];
-    const seen = new Set<string>();
-    const tail = messages.length > 40 ? messages.slice(-40) : messages;
-    for (const m of tail) {
-      if (String(m?.type || "") !== "image") continue;
-      for (const u of getMessageImageUris(m)) {
-        const r = resolveMediaUri(u);
-        if (!r || seen.has(r)) continue;
-        if (Platform.OS === "android" && /^data:/i.test(r)) continue;
-        if (!/^(https?:|file:)/i.test(r)) continue;
-        seen.add(r);
-        urls.push(r);
-        if (urls.length >= 56) break;
-      }
-      if (urls.length >= 56) break;
-    }
+    const urls = selectChatImageWarmSources(messages, resolveMediaUri);
     if (chatImagesWarm) {
-      if (urls.length > 0) void prefetchImages(urls).catch(() => {});
+      if (urls.length > 0) void prefetchImages(urls, { diskOnly: true }).catch(() => {});
       return;
     }
     if (urls.length === 0) {
@@ -84,7 +68,7 @@ export function useChatImageWarm({
     (async () => {
       try {
         await Promise.race([
-          prefetchImages(urls),
+          prefetchImages(urls, { diskOnly: true }),
           new Promise<void>((resolve) => setTimeout(resolve, 340)),
         ]);
       } catch {}

@@ -21,12 +21,14 @@ jest.mock('expo-file-system', () => ({
   moveAsync: (options: { from: string; to: string }) => mockMove(options),
   deleteAsync: (path: string) => mockDelete(path),
 }));
-import { peekResolvedDataUriCache, resolveDataUriForAndroid } from './dataUriToFileUri';
+import { clearResolvedAvatarFiles, peekResolvedDataUriCache, resolveDataUriForAndroid } from './dataUriToFileUri';
+import { notifyMemoryPressure } from './memoryPressure';
 
 const fileFor = (uri: string) => `file:///cache/glide_data_uri_avatar_${bytesToHex(sha256(uri))}.jpg`;
 const flush = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };
 
 beforeEach(() => {
+  jest.useFakeTimers(); clearResolvedAvatarFiles();
   mockFiles.clear();
   mockWrite.mockReset().mockImplementation(async (path, value) => { mockFiles.set(path, value); });
   mockMove.mockReset().mockImplementation(async ({ from, to }) => {
@@ -36,6 +38,7 @@ beforeEach(() => {
   });
   mockDelete.mockReset().mockImplementation(async path => { mockFiles.delete(path); });
 });
+afterEach(() => { clearResolvedAvatarFiles(); jest.useRealTimers(); });
 
 it('stores different photos separately even with identical JPEG headers and byte lengths', async () => {
   // JPEG headers can exceed the old 2000-character hash window.
@@ -115,4 +118,31 @@ it('reuses a complete cache file but replaces a truncated file left by an older 
   expect(await resolveDataUriForAndroid(partial)).toBe(fileFor(partial));
   expect(mockWrite).toHaveBeenCalledTimes(1);
   expect(mockFiles.get(fileFor(partial))).toBe(partial.split(',')[1]);
+});
+
+it('bounds resolved path metadata and reuses evicted disk files without rewriting them', async () => {
+  const sources = Array.from({ length: 257 }, (_, i) => `data:image/jpeg;base64,${Buffer.from('avatar-' + i).toString('base64')}`);
+  for (const source of sources) await resolveDataUriForAndroid(source);
+  expect(peekResolvedDataUriCache(sources[0])).toBeNull();
+  expect(peekResolvedDataUriCache(sources[256])).toBe(fileFor(sources[256]));
+  expect(await resolveDataUriForAndroid(sources[0])).toBe(fileFor(sources[0]));
+  expect(mockWrite).toHaveBeenCalledTimes(257);
+  jest.advanceTimersByTime(30 * 60 * 1000 + 1);
+  expect(peekResolvedDataUriCache(sources[0])).toBeNull();
+  expect(mockFiles.has(fileFor(sources[0]))).toBe(true);
+  expect(await resolveDataUriForAndroid(sources[0])).toBe(fileFor(sources[0]));
+  expect(mockWrite).toHaveBeenCalledTimes(257);
+});
+
+it('releases metadata on memory pressure and does not repopulate it from an old conversion', async () => {
+  const data = 'data:image/jpeg;base64,cHJlc3N1cmUtYXZhdGFy';
+  let finish!: () => void;
+  mockWrite.mockImplementationOnce((path, value) => new Promise(resolve => {
+    finish = () => { mockFiles.set(path, value); resolve(); };
+  }));
+  const pending = resolveDataUriForAndroid(data); await flush();
+  notifyMemoryPressure(); finish(); expect(await pending).toBe(fileFor(data));
+  expect(peekResolvedDataUriCache(data)).toBeNull();
+  expect(await resolveDataUriForAndroid(data)).toBe(fileFor(data));
+  expect(mockWrite).toHaveBeenCalledTimes(1);
 });

@@ -2,6 +2,9 @@
 
 import * as FileSystem from "expo-file-system";
 import { isPrivateMedia, resolveProtectedMedia } from '../../utils/protectedMedia';
+import { MediaRequestQueue } from '../../utils/mediaRequestQueue';
+
+const downloads = new MediaRequestQueue();
 
 /** Stable cache file name for a remote voice URL. */
 function voiceCacheFileNameForRemoteUrl(remoteUri: string): string {
@@ -30,6 +33,7 @@ export function formatVoiceDurationDot(ms: number): string {
 type CacheMaps = {
   pathByUrl: Map<string, string>;
   inflightByUrl: Map<string, Promise<string>>;
+  isCurrent?: () => boolean;
 };
 
 /** Download remote voice to cacheDirectory once; reuse path / in-flight promise. */
@@ -55,16 +59,23 @@ export async function ensureVoiceCachedToLocalFile(
   const inflight = maps.inflightByUrl.get(u);
   if (inflight) return inflight;
 
-  const task = (async () => {
+  const task = downloads.run(u, async (isCurrent, onExpire) => {
+    const dest = `${baseDir}${voiceCacheFileNameForRemoteUrl(u)}`;
     try {
-      const dest = `${baseDir}${voiceCacheFileNameForRemoteUrl(u)}`;
-      const { uri: localUri } = await FileSystem.downloadAsync(u, dest);
-      maps.pathByUrl.set(u, localUri);
-      return localUri;
-    } finally {
-      maps.inflightByUrl.delete(u);
-    }
-  })();
+      if ((await FileSystem.getInfoAsync(dest)).exists) return dest;
+      const download = FileSystem.createDownloadResumable(u, dest + '.download');
+      onExpire(() => { void download.cancelAsync().catch(() => {}); });
+      const result = await download.downloadAsync();
+      if (!result || result.status !== 200 || !isCurrent()) throw new Error('voice_download_failed');
+      await FileSystem.moveAsync({ from: result.uri, to: dest });
+      return dest;
+    } finally { await FileSystem.deleteAsync(dest + '.download', { idempotent: true }).catch(() => {}); }
+  }).then(localUri => {
+    if (!maps.isCurrent || maps.isCurrent()) maps.pathByUrl.set(u, localUri);
+    return localUri;
+  }).finally(() => {
+    if (maps.inflightByUrl.get(u) === task) maps.inflightByUrl.delete(u);
+  });
 
   maps.inflightByUrl.set(u, task);
   return task;

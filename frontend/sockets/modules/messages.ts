@@ -681,12 +681,6 @@ export function isGloballyDeletedMessageId(messageId: string): boolean {
   return shared.globallyDeletedMessageIdsMem?.has(id) ?? false;
 }
 
-function filterOutGloballyDeletedMessages<T extends { id?: unknown }>(messages: T[]): T[] {
-  const tombstones = shared.globallyDeletedMessageIdsMem;
-  if (!tombstones || tombstones.size === 0) return messages;
-  return messages.filter((msg) => !tombstones.has(trimMessageId(msg?.id)));
-}
-
 async function rememberGloballyDeletedMessageIds(rawIds: readonly string[]): Promise<void> {
   const incoming = rawIds.map(trimMessageId).filter(Boolean);
   if (incoming.length === 0) return;
@@ -792,30 +786,19 @@ function parseStoredChatMessagesJson(
   peerId: string,
 ): ChatMessage[] {
   const parsed: ChatMessage[] = JSON.parse(savedMessages);
-  const mapped = parsed
-    .filter((msg) => {
-      const isFromCurrentUser = msg.from === currentUser && msg.to === peerId;
-      const isToCurrentUser = msg.from === peerId && msg.to === currentUser;
-      return isFromCurrentUser || isToCurrentUser;
-    })
-    .map((msg) => {
-      let correctedMsg = { ...msg };
-      if (!msg.from || !msg.to) {
-        if (msg.sender === "me") {
-          correctedMsg.from = currentUser;
-          correctedMsg.to = peerId;
-        } else if (msg.sender === "peer") {
-          correctedMsg.from = peerId;
-          correctedMsg.to = currentUser;
-        }
-      }
-      return {
-        ...correctedMsg,
-        timestamp: new Date(msg.timestamp!),
-        sender: correctedMsg.from === currentUser ? "me" : "peer",
-      };
-    });
-  return filterOutGloballyDeletedMessages(mapped);
+  // JSON.parse owns these objects exclusively. Normalize/compact in place rather
+  // than allocating two copies of every row and extra arrays for a long history.
+  let write = 0;
+  for (const msg of parsed) {
+    const belongs = (msg.from === currentUser && msg.to === peerId) ||
+      (msg.from === peerId && msg.to === currentUser);
+    if (!belongs || isGloballyDeletedMessageId(String(msg.id || ''))) continue;
+    msg.timestamp = new Date(msg.timestamp!);
+    msg.sender = msg.from === currentUser ? 'me' : 'peer';
+    parsed[write++] = msg;
+  }
+  parsed.length = write;
+  return parsed;
 }
 
 /**

@@ -6,6 +6,7 @@ import Svg, { Circle, Defs, LinearGradient as SvgLinearGradient, Stop } from 're
 import { useResolvedImageUri } from '../hooks/useResolvedImageUri';
 import { getAvatarImageProps } from '../utils/imageOptimization';
 import { getAvatarUri } from '../utils/avatarCache';
+import { searchAvatarFileByKey } from '../utils/avatarFileCache';
 import { getCosmeticFrame } from '../utils/cosmeticCatalog';
 import { useUserActiveFrame } from '../utils/cosmetics';
 import { logger } from '../utils/logger';
@@ -21,8 +22,6 @@ import Reanimated, { useAnimatedStyle, type SharedValue } from 'react-native-rea
  * Размер здесь не лочится: его держит HomeWelcomeView на геометрию окна. Лок на
  * пользователя оставлял портретный размер в landscape, и фото закрывало кольца.
  */
-const searchAvatarFileByKey = new Map<string, string>();
-
 function searchAvatarFileKey(userId?: string, avatarVer?: number): string {
   if (!userId || !(avatarVer && avatarVer > 0)) return '';
   return `${userId}_v${avatarVer}`;

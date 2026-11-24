@@ -57,7 +57,7 @@ jest.mock('../../utils/logger', () => ({
 }));
 
 
-import { fetchChatPreviews } from './messages';
+import { fetchChatPreviews, getChatMessagesLocal } from './messages';
 import { emitAck } from './emit';
 import { socket } from './socketCore';
 import { shared } from './shared';
@@ -101,4 +101,34 @@ it('does not manufacture a preview when both transports fail', async () => {
   (emitAck as jest.Mock).mockRejectedValue(new Error('socket offline'));
   mockHttp.mockRejectedValue(new Error('network offline'));
   expect((await fetchChatPreviews(['peer'])).previews).toEqual({});
+});
+
+it('keeps the complete offline history and photo metadata when normalizing in place', async () => {
+  shared.messageCache.clear();
+  const rows = Array.from({ length: 10000 }, (_, i) => ({
+    id: String(i), from: i % 2 ? 'peer' : 'me', to: i % 2 ? 'me' : 'peer',
+    timestamp: preview.timestamp, type: 'text', text: `offline ${i}`,
+  }));
+  store.set('chat_messages_me_peer', JSON.stringify(rows));
+  const loading = getChatMessagesLocal('peer', 'me');
+  await jest.advanceTimersByTimeAsync(1);
+  const history = await loading;
+  expect(history).toHaveLength(10000);
+  expect(history[0]).toMatchObject({ id: '0', text: 'offline 0', sender: 'me' });
+  expect(history[9999]).toMatchObject({ id: '9999', text: 'offline 9999', sender: 'peer' });
+  expect(history[0].timestamp).toBeInstanceOf(Date);
+});
+
+it('compacts only foreign and globally deleted rows out of local history', async () => {
+  shared.messageCache.clear();
+  shared.globallyDeletedMessageIdsMem = new Set(['deleted']);
+  store.set('chat_messages_me_peer', JSON.stringify([
+    { ...preview, id: 'foreign', from: 'other' },
+    { ...preview, id: 'deleted' },
+    { ...preview, id: 'photo', type: 'image', uri: 'file:///image.jpg', imageWidth: 900, imageHeight: 1600, text: 'caption' },
+  ]));
+  const loading = getChatMessagesLocal('peer', 'me');
+  await jest.advanceTimersByTimeAsync(1);
+  expect(await loading).toMatchObject([{ id: 'photo', imageWidth: 900, imageHeight: 1600, text: 'caption' }]);
+  shared.globallyDeletedMessageIdsMem = null;
 });

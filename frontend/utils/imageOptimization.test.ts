@@ -17,6 +17,7 @@ const immutableFile = (n: number) => `file:///cache/glide_data_uri_avatar_${n.to
 const flush = async () => { for (let i = 0; i < 12; i++) await Promise.resolve(); };
 
 beforeEach(() => {
+  jest.useFakeTimers();
   jest.resetModules();
   mockPrefetch.mockReset().mockResolvedValue(true);
   mockLoad.mockReset().mockImplementation(async () => ({ width: 96, height: 96, scale: 1 }));
@@ -24,6 +25,7 @@ beforeEach(() => {
   mockWarn.mockReset();
   images = require('./imageOptimization');
 });
+afterEach(() => { images.clearImageWarmupMemory(); jest.useRealTimers(); });
 
 it('sends only remote HTTP sources to native URL prefetch and decodes local sources normally', async () => {
   const data = 'data:image/jpeg;base64,YQ==';
@@ -138,4 +140,63 @@ it('uses the original URI for full-screen avatar previews even after a capped na
   await images.prefetchImages([file]);
   expect(images.getAvatarImageProps(file, 'row').source).not.toEqual({ uri: file });
   expect(images.getAvatarImageProps(file, 'modal', { useDecodedSource: false }).source).toEqual({ uri: file });
+});
+
+it('warms chat photos on disk without retaining a decoded bitmap for local files', async () => {
+  await images.prefetchImages(['https://api.test/photo.jpg', 'file:///cache/photo.jpg'], { diskOnly: true });
+  expect(mockPrefetch).toHaveBeenCalledWith('https://api.test/photo.jpg', 'disk');
+  expect(mockLoad).not.toHaveBeenCalled();
+});
+
+it('bounds a large warmup burst, expires waiters and ignores a late native result', async () => {
+  const finishes: Array<(image: { width: number; height: number; scale: number }) => void> = [];
+  mockLoad.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+  const warming = images.prefetchImages(Array.from({ length: 1000 }, (_, i) => immutableFile(1000 + i)));
+  await flush();
+  expect(mockLoad).toHaveBeenCalledTimes(2);
+  expect(jest.getTimerCount()).toBe(32);
+  jest.advanceTimersByTime(15001); await warming;
+  expect(jest.getTimerCount()).toBe(0);
+  await images.prefetchImages([immutableFile(1000)]);
+  expect(mockLoad).toHaveBeenCalledTimes(2);
+  finishes.forEach(finish => finish({ width: 96, height: 96, scale: 1 })); await flush();
+  expect(images.getAvatarImageProps(immutableFile(1000), 'late').source).toEqual({ uri: immutableFile(1000) });
+  mockLoad.mockResolvedValue({ width: 96, height: 96, scale: 1 });
+  await images.prefetchImages([immutableFile(1000)]);
+  expect(mockLoad).toHaveBeenCalledTimes(3);
+});
+
+it('bounds retained source strings by bytes, including sources held by timed-out native operations', async () => {
+  mockLoad.mockImplementation(() => new Promise(() => {}));
+  const data = 'data:image/jpeg;base64,' + 'A'.repeat(1024 * 1024);
+  const warming = images.prefetchImages([data + 'a', data + 'b']);
+  await flush();
+  expect(mockResolve).toHaveBeenCalledTimes(1);
+  jest.advanceTimersByTime(15001); await warming;
+  await images.prefetchImages([data + 'c']);
+  expect(mockResolve).toHaveBeenCalledTimes(1);
+});
+
+it('clears waiting warmups on memory pressure and expires decoded references while idle', async () => {
+  const file = immutableFile(2000);
+  await images.prefetchImages([file]);
+  jest.advanceTimersByTime(5 * 60 * 1000 + 1);
+  expect(images.getAvatarImageProps(file, 'expired').source).toEqual({ uri: file });
+  const finishes: Array<(image: { width: number; height: number; scale: number }) => void> = [];
+  mockLoad.mockImplementation(() => new Promise(resolve => { finishes.push(resolve); }));
+  const warming = images.prefetchImages([2001, 2002, 2003].map(immutableFile)); await flush();
+  const { notifyMemoryPressure } = require('./memoryPressure');
+  notifyMemoryPressure(); await warming;
+  finishes.forEach(finish => finish({ width: 96, height: 96, scale: 1 })); await flush();
+  expect(mockLoad).toHaveBeenCalledTimes(3); // One completed load plus two active loads; no waiting load.
+  expect(images.getAvatarImageProps(immutableFile(2001), 'cleared').source).toEqual({ uri: immutableFile(2001) });
+});
+
+it('bounds Android call-file priming before it reaches file conversion', async () => {
+  mockResolve.mockImplementation(() => new Promise(() => {}));
+  for (let i = 0; i < 1000; i++) images.warmAndroidAvatarFile(`data:image/jpeg;base64,avatar-${i}`);
+  await flush(); expect(mockResolve).toHaveBeenCalledTimes(2);
+  expect(jest.getTimerCount()).toBe(32);
+  jest.advanceTimersByTime(15001); await flush();
+  expect(jest.getTimerCount()).toBe(0);
 });

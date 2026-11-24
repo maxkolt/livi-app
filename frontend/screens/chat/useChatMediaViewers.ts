@@ -12,9 +12,21 @@ type ChatSelectedMedia = {
 };
 
 export function useChatMediaViewers() {
-  const [mediaViewerVisible, setMediaViewerVisible] = React.useState(false);
+  const [mediaViewerVisible, setMediaViewerVisibleState] = React.useState(false);
+  const mediaViewerVisibleRef = React.useRef(false);
+  const setMediaViewerVisible = React.useCallback((next: React.SetStateAction<boolean>) => {
+    const visible = typeof next === 'function' ? next(mediaViewerVisibleRef.current) : next;
+    mediaViewerVisibleRef.current = visible;
+    setMediaViewerVisibleState(visible);
+  }, []);
   const [selectedMedia, setSelectedMedia] = React.useState<ChatSelectedMedia | null>(null);
-  const [composeViewerVisible, setComposeViewerVisible] = React.useState(false);
+  const [composeViewerVisible, setComposeViewerVisibleState] = React.useState(false);
+  const composeViewerVisibleRef = React.useRef(false);
+  const setComposeViewerVisible = React.useCallback((next: React.SetStateAction<boolean>) => {
+    const visible = typeof next === 'function' ? next(composeViewerVisibleRef.current) : next;
+    composeViewerVisibleRef.current = visible;
+    setComposeViewerVisibleState(visible);
+  }, []);
   const [composeAssets, setComposeAssets] = React.useState<PickedChatImage[]>([]);
   const composeAsset = composeAssets[0] || null;
 
@@ -25,7 +37,15 @@ export function useChatMediaViewers() {
 
   const closeMediaViewer = React.useCallback(() => {
     setMediaViewerVisible(false);
-    setSelectedMedia(null);
+  }, []);
+
+  const finishMediaViewerClose = React.useCallback(() => {
+    // A delayed hide from a previous opening cannot clear a newly opened photo.
+    if (!mediaViewerVisibleRef.current) setSelectedMedia(null);
+  }, []);
+
+  const finishComposeViewerClose = React.useCallback(() => {
+    if (!composeViewerVisibleRef.current) setComposeAssets([]);
   }, []);
 
   const openComposeViewer = React.useCallback((asset: PickedChatImage | PickedChatImage[]) => {
@@ -44,6 +64,7 @@ export function useChatMediaViewers() {
     setSelectedMedia,
     openMediaViewer,
     closeMediaViewer,
+    finishMediaViewerClose,
     composeViewerVisible,
     setComposeViewerVisible,
     composeAsset,
@@ -51,5 +72,6 @@ export function useChatMediaViewers() {
     setComposeAssets,
     openComposeViewer,
     closeComposeViewer,
+    finishComposeViewerClose,
   };
 }

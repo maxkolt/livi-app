@@ -1088,11 +1088,13 @@ export default function ChatScreen({ route, navigation }: Props) {
     setMediaViewerVisible,
     selectedMedia,
     setSelectedMedia,
+    finishMediaViewerClose,
     composeViewerVisible,
     setComposeViewerVisible,
     composeAsset,
     composeAssets,
     setComposeAssets,
+    finishComposeViewerClose,
   } = useChatMediaViewers();
   const attachSheetRef = useRef<ChatAttachSheetHandle>(null);
   const {
@@ -3713,28 +3715,24 @@ export default function ChatScreen({ route, navigation }: Props) {
       )}
 
       {/* Полноэкранный просмотр медиа */}
-      <MediaViewer
+      {selectedMedia ? <MediaViewer
         visible={mediaViewerVisible}
         onClose={closeMediaViewer}
-        onClosed={() => {
-          try {
-            setSelectedMedia(null);
-          } catch {}
-        }}
+        onClosed={finishMediaViewerClose}
         mediaType={selectedMedia?.type || 'image'}
         uri={selectedMedia?.uri || ''}
         name={selectedMedia?.name}
         uris={selectedMedia?.uris}
         initialIndex={selectedMedia?.index}
-      />
+      /> : null}
 
       {/* Предпросмотр выбранного фото перед отправкой (можно обрезать или отправить как есть) */}
-      <MediaViewer
+      {composeAssets.length > 0 ? <MediaViewer
         visible={composeViewerVisible}
         onClose={() => {
           setComposeViewerVisible(false);
         }}
-        onClosed={() => setComposeAssets([])}
+        onClosed={finishComposeViewerClose}
         mediaType="image"
         uri={composeAsset?.uri || ''}
         uris={composeAssets.map((asset) => asset.uri)}
@@ -3746,7 +3744,7 @@ export default function ChatScreen({ route, navigation }: Props) {
           else void sendPickedAlbum(assets, caption);
           setComposeViewerVisible(false);
         }}
-      />
+      /> : null}
 
       {/* Меню чата: очистка переписки (шифрование включено всегда — настроек нет) */}
       <AppDialogModal

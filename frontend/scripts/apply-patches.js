@@ -3,7 +3,7 @@
  * Применяет патчи к node_modules. Запускается из корня frontend (postinstall).
  * Путь patches/ всегда относительно текущей директории — корректно для вложенных пакетов (@expo/...).
  */
-const { execSync } = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
@@ -11,10 +11,12 @@ const root = path.resolve(__dirname, '..');
 const patchesDir = path.join(root, 'patches');
 
 const patches = [
+  { dir: 'node_modules/react-native', file: 'react-native+0.79.6-animated-props-retention.patch', required: true },
   { dir: 'node_modules/@baronha/react-native-photo-editor', file: 'baronha-photo-editor-gradle-compat.patch' },
   { dir: 'node_modules/@livekit/react-native', file: 'livekit-react-native-gradle-compat.patch' },
   { dir: 'node_modules/@shopify/react-native-skia', file: 'react-native-skia-gradle-compat.patch' },
   { dir: 'node_modules/@shopify/react-native-skia', file: 'react-native-skia+2.2.4-lifecycle.patch' },
+  { dir: 'node_modules/@shopify/react-native-skia', file: 'react-native-skia+2.2.4-promises.patch', required: true },
   { dir: 'node_modules/expo-notifications', file: 'expo-notifications+0.31.4.patch' },
   { dir: 'node_modules/expo-dev-launcher', file: 'expo-dev-launcher+5.1.16.patch' },
   { dir: 'node_modules/expo-dev-launcher', file: 'expo-dev-launcher+5.1.16-android.patch' },
@@ -41,15 +43,33 @@ const patches = [
 
 process.chdir(root);
 
-for (const { dir, file } of patches) {
+for (const { dir, file, required } of patches) {
   const patchPath = path.join(patchesDir, file);
   const targetDir = path.join(root, dir);
   if (!fs.existsSync(patchPath)) {
+    if (required) throw new Error(`[apply-patches] required patch missing: ${file}`);
     console.warn(`[apply-patches] skip ${file}: patch file not found`);
     continue;
   }
   if (!fs.existsSync(targetDir)) {
+    if (required) throw new Error(`[apply-patches] required dependency missing: ${dir}`);
     console.warn(`[apply-patches] skip ${file}: ${dir} not found`);
+    continue;
+  }
+  if (required) {
+    // An install must fail if the runtime-lifetime fix cannot be verified.
+    // Check the entire patch before mutating files; tolerate repeat postinstall.
+    const options = { cwd: targetDir, stdio: 'pipe' };
+    const args = ['-p1', '--batch', '-i', patchPath];
+    let alreadyApplied = false;
+    try {
+      execFileSync('patch', [...args, '--dry-run', '--forward'], options);
+    } catch {
+      execFileSync('patch', [...args, '--dry-run', '--reverse', '--force'], options);
+      alreadyApplied = true;
+    }
+    if (!alreadyApplied) execFileSync('patch', [...args, '--forward'], options);
+    console.log(`[apply-patches] ${alreadyApplied ? 'verified' : 'applied'} ${file}`);
     continue;
   }
   try {

@@ -286,7 +286,7 @@ export default function MediaViewer({
   const pinchScale = React.useRef(new Animated.Value(1)).current;
   const baseScale = React.useRef(new Animated.Value(1)).current;
   const lastScale = React.useRef(1);
-  const scale = Animated.multiply(baseScale, pinchScale);
+  const scale = React.useMemo(() => Animated.multiply(baseScale, pinchScale), [baseScale, pinchScale]);
   const [scaleNumber, setScaleNumber] = React.useState(1);
 
   // Pan (to inspect corners when zoomed)
@@ -542,9 +542,11 @@ export default function MediaViewer({
 
   React.useEffect(() => {
     if (!visible || !isAlbum || displayUris.length === 0) return;
-    const prefetchable = displayUris.filter((u) => /^https?:\/\//i.test(u));
-    if (prefetchable.length > 0) void prefetchImages(prefetchable);
-  }, [visible, isAlbum, displayUris]);
+    const n = displayUris.length;
+    const prefetchable = [...new Set([-1, 0, 1].map(offset => displayUris[(activeIndex + offset + n) % n]))]
+      .filter((u) => /^https?:\/\//i.test(u));
+    if (prefetchable.length > 0) void prefetchImages(prefetchable, { diskOnly: true });
+  }, [visible, isAlbum, displayUris, activeIndex]);
 
   React.useEffect(() => {
     if (!isAlbum) return;
@@ -858,6 +860,11 @@ export default function MediaViewer({
 
   const renderAlbumSlide = React.useCallback(
     ({ item, index }: { item: string; index: number }) => {
+      // VirtualizedList may retain its initial cells; keep native image owners
+      // only around the current page, including the loop's sentinel neighbours.
+      if (Math.abs(index - loopedAlbumIndex(activeIndex, displayUris.length)) > 1) {
+        return <View style={{ width: pageWidth, height: pageHeight }} />;
+      }
       // Только текущий (видимый) слайд — увеличиваемый (pinch/pan); структура дерева
       // при этом одна и та же для всех слайдов (см. ZoomableAlbumSlide) — без мигания при свайпе.
       const isActiveSlide = !cropMode && index === loopedAlbumIndex(activeIndex, displayUris.length);
@@ -996,9 +1003,9 @@ export default function MediaViewer({
                 overScrollMode="never"
                 style={{ width: pageWidth, height: pageHeight }}
                 initialScrollIndex={albumPagerInitialIndex}
-                initialNumToRender={loopedUris.length}
-                maxToRenderPerBatch={loopedUris.length}
-                windowSize={loopedUris.length}
+                initialNumToRender={3}
+                maxToRenderPerBatch={3}
+                windowSize={3}
                 removeClippedSubviews={false}
                 keyExtractor={(_, index) => `album-${index}`}
                 getItemLayout={(_, index) => ({

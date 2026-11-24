@@ -1,0 +1,813 @@
+{
+  "date": "2026-11-24",
+  "variant": "com.kolt12max.livi.dev, Metro/Hermes",
+  "tests": {
+    "frontend_suites": 189,
+    "frontend_tests": 1753,
+    "typecheck": "PASS",
+    "eslint": "PASS",
+    "diff_check": "PASS",
+    "required_patch_installation_tests": 3,
+    "debug_build": "PASS (ordinary build, native audit source restored)"
+  },
+  "limits": {
+    "photo_warm": 6,
+    "album_image_owners": 3,
+    "message_cache_chats": 8,
+    "message_cache_estimated_bytes": 4194304,
+    "protected_ready_entries": 128,
+    "protected_pending": 24,
+    "protected_native_active": 3,
+    "request_timeout_ms": 45000,
+    "voice_warm": 3,
+    "voice_ready_entries": 64
+  },
+  "devices": [
+    {
+      "model": "SM-A356E",
+      "serial": "RFCX306PWLE",
+      "audio_before_observed_in_initial_cdp_run": {
+        "created": 2,
+        "loaded": [
+          false,
+          true
+        ],
+        "owner": "audio:qa-b"
+      },
+      "audio_after": {
+        "stopStarted": true,
+        "secondDone": true,
+        "created": 1,
+        "loaded": [
+          false
+        ],
+        "owner": null
+      },
+      "album_components_before": 23,
+      "album_components_after": 3,
+      "cycles": 18,
+      "native_display_median_ms": 640.5,
+      "native_display_range_ms": [
+        625,
+        888
+      ],
+      "swipes": [
+        1,
+        21,
+        0,
+        1,
+        21,
+        0
+      ],
+      "zoom_handler": true,
+      "memory": [
+        {
+          "cycle": 0,
+          "pss_kib": 987721,
+          "native_kib": 455900,
+          "graphics_kib": 224114,
+          "js_used_bytes": null
+        },
+        {
+          "cycle": 3,
+          "pss_kib": 1014718,
+          "native_kib": 478692,
+          "graphics_kib": 218058,
+          "js_used_bytes": 30266120
+        },
+        {
+          "cycle": 6,
+          "pss_kib": 1017508,
+          "native_kib": 480676,
+          "graphics_kib": 223578,
+          "js_used_bytes": 34252920
+        },
+        {
+          "cycle": 9,
+          "pss_kib": 1004505,
+          "native_kib": 480200,
+          "graphics_kib": 222862,
+          "js_used_bytes": 33780304
+        },
+        {
+          "cycle": 12,
+          "pss_kib": 1001310,
+          "native_kib": 478880,
+          "graphics_kib": 222862,
+          "js_used_bytes": 30340792
+        },
+        {
+          "cycle": 15,
+          "pss_kib": 999701,
+          "native_kib": 478404,
+          "graphics_kib": 222862,
+          "js_used_bytes": 30386944
+        },
+        {
+          "cycle": 18,
+          "pss_kib": 996469,
+          "native_kib": 478496,
+          "graphics_kib": 217874,
+          "js_used_bytes": 30457296
+        }
+      ],
+      "after_trim_kib": {
+        "TOTAL PSS": 921906,
+        "Native Heap": 455820,
+        "Graphics": 192906,
+        "Java Heap": 33344
+      },
+      "pid_stable": true,
+      "exit_info_unchanged_in_clean_run": true,
+      "protected": {
+        "ok": true,
+        "value": {
+          "active": 0,
+          "decryptedMatches": true,
+          "downloads": 160,
+          "peak": 3,
+          "pending": 0,
+          "ready": 128
+        }
+      },
+      "disk_reuse": {
+        "ok": true,
+        "value": {
+          "downloadsAfter": 160,
+          "downloadsBefore": 160,
+          "filesExist": true
+        }
+      },
+      "timeout_shortened_for_test": {
+        "ok": true,
+        "value": {
+          "error": "media_request_timeout",
+          "ms": 266,
+          "pending": 0,
+          "ready": false
+        }
+      },
+      "queue_after_timeout": {
+        "active": 0,
+        "nativeActive": 0,
+        "pending": 0,
+        "queue": 0
+      },
+      "history_cache": {
+        "bounded": 3,
+        "cleared": 0
+      },
+      "latest_audio_after": {
+        "stopStarted": true,
+        "secondDone": true,
+        "created": 1,
+        "loaded": [
+          false
+        ],
+        "owner": null
+      }
+    },
+    {
+      "model": "SM-S938B",
+      "serial": "R5GL550T4TB",
+      "audio_before_observed_in_initial_cdp_run": {
+        "created": 2,
+        "loaded": [
+          false,
+          true
+        ],
+        "owner": "audio:qa-b"
+      },
+      "audio_after": {
+        "stopStarted": true,
+        "secondDone": true,
+        "created": 1,
+        "loaded": [
+          false
+        ],
+        "owner": null
+      },
+      "album_components_before": 23,
+      "album_components_after": 3,
+      "cycles": 18,
+      "native_display_median_ms": 196.0,
+      "native_display_range_ms": [
+        160,
+        271
+      ],
+      "swipes": [
+        1,
+        21,
+        0,
+        1,
+        21,
+        0
+      ],
+      "zoom_handler": true,
+      "memory": [
+        {
+          "cycle": 0,
+          "pss_kib": 1234983,
+          "native_kib": 445832,
+          "graphics_kib": 405388,
+          "js_used_bytes": null
+        },
+        {
+          "cycle": 3,
+          "pss_kib": 1294683,
+          "native_kib": 483108,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31018808
+        },
+        {
+          "cycle": 6,
+          "pss_kib": 1291289,
+          "native_kib": 482964,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31022584
+        },
+        {
+          "cycle": 9,
+          "pss_kib": 1275926,
+          "native_kib": 481944,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31206560
+        },
+        {
+          "cycle": 12,
+          "pss_kib": 1275099,
+          "native_kib": 482280,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31158048
+        },
+        {
+          "cycle": 15,
+          "pss_kib": 1275634,
+          "native_kib": 482012,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31190744
+        },
+        {
+          "cycle": 18,
+          "pss_kib": 1274378,
+          "native_kib": 481972,
+          "graphics_kib": 405632,
+          "js_used_bytes": 31230184
+        }
+      ],
+      "after_trim_kib": {
+        "TOTAL PSS": 1208831,
+        "Native Heap": 448752,
+        "Graphics": 405632,
+        "Java Heap": 36912
+      },
+      "pid_stable": true,
+      "exit_info_unchanged_in_clean_run": true,
+      "protected": {
+        "ok": true,
+        "value": {
+          "active": 0,
+          "decryptedMatches": true,
+          "downloads": 160,
+          "peak": 3,
+          "pending": 0,
+          "ready": 128
+        }
+      },
+      "disk_reuse": {
+        "ok": true,
+        "value": {
+          "downloadsAfter": 160,
+          "downloadsBefore": 160,
+          "filesExist": true
+        }
+      },
+      "timeout_shortened_for_test": {
+        "ok": true,
+        "value": {
+          "error": "media_request_timeout",
+          "ms": 288,
+          "pending": 0,
+          "ready": false
+        }
+      },
+      "queue_after_timeout": {
+        "active": 0,
+        "nativeActive": 0,
+        "pending": 0,
+        "queue": 0
+      },
+      "history_cache": {
+        "bounded": 3,
+        "cleared": 0
+      },
+      "latest_audio_after": {
+        "stopStarted": true,
+        "secondDone": true,
+        "created": 1,
+        "loaded": [
+          false
+        ],
+        "owner": null
+      }
+    }
+  ],
+  "unresolved": [
+    "Active local history still loads as one complete JSON document; in-place normalization reduces copies but is not pagination.",
+    "Native dev-runtime reload crashes occurred during source reload; clean measured runs preserved PID.",
+    "Absolute absence of all leaks is not claimed; small VM/DevTools buffer changes remain.",
+    "Release artifact not rebuilt; remote API/VPN media routing and human audibility not covered by this focused test."
+  ],
+  "heap_audit": {
+    "explicit_local_snapshot_consent": true,
+    "method": "temporary local native JSI instrumentation; original native source restored",
+    "devices": [
+      {
+        "model": "SM-A356E",
+        "cycles": 15,
+        "before_fixes": {
+          "node_count": {
+            "before": 877540,
+            "after": 953367,
+            "strongReachable": 953159
+          },
+          "sum_self_size": {
+            "before": 106170668,
+            "after": 109867004
+          },
+          "tracked_objects": [
+            {
+              "type": "object:Environment",
+              "before": {
+                "count": 34849,
+                "bytes": 2634064
+              },
+              "after": {
+                "count": 38582,
+                "bytes": 3222704
+              }
+            },
+            {
+              "type": "object:FiberNode",
+              "before": {
+                "count": 10334,
+                "bytes": 413360
+              },
+              "after": {
+                "count": 10345,
+                "bytes": 413800
+              }
+            },
+            {
+              "type": "object:AnimatedProps",
+              "before": {
+                "count": 650,
+                "bytes": 26000
+              },
+              "after": {
+                "count": 1086,
+                "bytes": 43440
+              }
+            },
+            {
+              "type": "object:AnimatedMultiplication",
+              "before": {
+                "count": 360,
+                "bytes": 14400
+              },
+              "after": {
+                "count": 837,
+                "bytes": 33480
+              }
+            }
+          ],
+          "largest_increases": [
+            {
+              "type": "object:Environment",
+              "count": 3733,
+              "bytes": 588640
+            },
+            {
+              "type": "array:ArrayStorageSmall",
+              "count": 14300,
+              "bytes": 531680
+            },
+            {
+              "type": "object:JSArray",
+              "count": 11479,
+              "bytes": 459160
+            },
+            {
+              "type": "string:string",
+              "count": 2207,
+              "bytes": 370992
+            },
+            {
+              "type": "array:SegmentedArraySmall",
+              "count": 9071,
+              "bytes": 323856
+            },
+            {
+              "type": "object:JSObject(validated)",
+              "count": 3858,
+              "bytes": 154320
+            }
+          ],
+          "snapshots": [
+            {
+              "phase": "before",
+              "bytes": 116701041,
+              "sha256": "c5dd7751cb4d8ba89b055f6ad10c703197f981cb834fc012ca3860fa3593037a"
+            },
+            {
+              "phase": "after",
+              "bytes": 129432963,
+              "sha256": "dd37a17a0788e6e44227b5ac3cd5a6233a9dca93aec54cdaa23368b55d1c204d"
+            }
+          ]
+        },
+        "after_fixes": {
+          "node_count": {
+            "before": 804947,
+            "after": 807028,
+            "strongReachable": 806762
+          },
+          "sum_self_size": {
+            "before": 103278658,
+            "after": 103624308
+          },
+          "tracked_objects": [
+            {
+              "type": "object:Environment",
+              "before": {
+                "count": 31439,
+                "bytes": 2184032
+              },
+              "after": {
+                "count": 31460,
+                "bytes": 2186304
+              }
+            },
+            {
+              "type": "object:FiberNode",
+              "before": {
+                "count": 10320,
+                "bytes": 412800
+              },
+              "after": {
+                "count": 10345,
+                "bytes": 413800
+              }
+            },
+            {
+              "type": "object:AnimatedProps",
+              "before": {
+                "count": 260,
+                "bytes": 10400
+              },
+              "after": {
+                "count": 264,
+                "bytes": 10560
+              }
+            },
+            {
+              "type": "object:AnimatedMultiplication",
+              "before": {
+                "count": 92,
+                "bytes": 3680
+              },
+              "after": {
+                "count": 87,
+                "bytes": 3480
+              }
+            }
+          ],
+          "largest_increases": [
+            {
+              "type": "array:SegmentedArraySmall",
+              "count": 640,
+              "bytes": 172496
+            },
+            {
+              "type": "native:hermes::ManagedChunkedList<WeakRefSlot>",
+              "count": 0,
+              "bytes": 126464
+            },
+            {
+              "type": "object:JSArray",
+              "count": 629,
+              "bytes": 25160
+            },
+            {
+              "type": "native:OldGen",
+              "count": 0,
+              "bytes": 12880
+            },
+            {
+              "type": "object:DictPropertyMap",
+              "count": -12,
+              "bytes": 12848
+            },
+            {
+              "type": "native:CodeBlock",
+              "count": 19,
+              "bytes": 5200
+            }
+          ],
+          "snapshots": [
+            {
+              "phase": "before",
+              "bytes": 105890566,
+              "sha256": "59e6850e22b19392ed886980e30c8bcfcad82abc165819bcea931adbea310bcb"
+            },
+            {
+              "phase": "after",
+              "bytes": 107358048,
+              "sha256": "56eadc5a40e2b3657a161e57f16027b9698634b6140f12b30b82e8722b885429"
+            }
+          ]
+        }
+      },
+      {
+        "model": "SM-S938B",
+        "cycles": 15,
+        "before_fixes": {
+          "node_count": {
+            "before": 856350,
+            "after": 934102,
+            "strongReachable": 933971
+          },
+          "sum_self_size": {
+            "before": 105426109,
+            "after": 109207933
+          },
+          "tracked_objects": [
+            {
+              "type": "object:Environment",
+              "before": {
+                "count": 33808,
+                "bytes": 2554616
+              },
+              "after": {
+                "count": 37580,
+                "bytes": 3163592
+              }
+            },
+            {
+              "type": "object:AnimatedProps",
+              "before": {
+                "count": 517,
+                "bytes": 20680
+              },
+              "after": {
+                "count": 953,
+                "bytes": 38120
+              }
+            },
+            {
+              "type": "object:FiberNode",
+              "before": {
+                "count": 11060,
+                "bytes": 442400
+              },
+              "after": {
+                "count": 11060,
+                "bytes": 442400
+              }
+            },
+            {
+              "type": "object:AnimatedMultiplication",
+              "before": {
+                "count": 193,
+                "bytes": 7720
+              },
+              "after": {
+                "count": 640,
+                "bytes": 25600
+              }
+            }
+          ],
+          "largest_increases": [
+            {
+              "type": "object:Environment",
+              "count": 3772,
+              "bytes": 608976
+            },
+            {
+              "type": "array:ArrayStorageSmall",
+              "count": 14293,
+              "bytes": 500896
+            },
+            {
+              "type": "object:JSArray",
+              "count": 11647,
+              "bytes": 465880
+            },
+            {
+              "type": "string:string",
+              "count": 2116,
+              "bytes": 399000
+            },
+            {
+              "type": "array:SegmentedArraySmall",
+              "count": 9282,
+              "bytes": 323336
+            },
+            {
+              "type": "object:JSObject(validated)",
+              "count": 3978,
+              "bytes": 159120
+            }
+          ],
+          "snapshots": [
+            {
+              "phase": "before",
+              "bytes": 114457649,
+              "sha256": "0ea5f27b56d52d19914e713aa08f7750c2bcf251c413119d9d2593b1fcf47e4f"
+            },
+            {
+              "phase": "after",
+              "bytes": 127693503,
+              "sha256": "039526e84f2e7416a637b18e1f4e55c8644b070f0d6f7f9d11dd0f91c5caf390"
+            }
+          ]
+        },
+        "after_fixes": {
+          "node_count": {
+            "before": 818998,
+            "after": 820928,
+            "strongReachable": 820788
+          },
+          "sum_self_size": {
+            "before": 103750858,
+            "after": 104073094
+          },
+          "tracked_objects": [
+            {
+              "type": "object:Environment",
+              "before": {
+                "count": 31953,
+                "bytes": 2298144
+              },
+              "after": {
+                "count": 31912,
+                "bytes": 2296144
+              }
+            },
+            {
+              "type": "object:FiberNode",
+              "before": {
+                "count": 11037,
+                "bytes": 441480
+              },
+              "after": {
+                "count": 11051,
+                "bytes": 442040
+              }
+            },
+            {
+              "type": "object:AnimatedMultiplication",
+              "before": {
+                "count": 83,
+                "bytes": 3320
+              },
+              "after": {
+                "count": 83,
+                "bytes": 3320
+              }
+            },
+            {
+              "type": "object:AnimatedProps",
+              "before": {
+                "count": 252,
+                "bytes": 10080
+              },
+              "after": {
+                "count": 252,
+                "bytes": 10080
+              }
+            }
+          ],
+          "largest_increases": [
+            {
+              "type": "array:SegmentedArraySmall",
+              "count": 550,
+              "bytes": 175008
+            },
+            {
+              "type": "native:hermes::ManagedChunkedList<WeakRefSlot>",
+              "count": 0,
+              "bytes": 81152
+            },
+            {
+              "type": "object:JSArray",
+              "count": 550,
+              "bytes": 22000
+            },
+            {
+              "type": "native:OldGen",
+              "count": 0,
+              "bytes": 19320
+            },
+            {
+              "type": "object:DictPropertyMap",
+              "count": -9,
+              "bytes": 17488
+            },
+            {
+              "type": "string:string",
+              "count": 410,
+              "bytes": 15744
+            }
+          ],
+          "snapshots": [
+            {
+              "phase": "before",
+              "bytes": 108738089,
+              "sha256": "cd64a9474c64e0f5960db28a9c2f1175720b57bbf41d6e728f3fbbfaa909bc15"
+            },
+            {
+              "phase": "after",
+              "bytes": 110173319,
+              "sha256": "577151763346be6543bcf04b73f607d78a854503f5d3f36397c06be303b389e4"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "react_native_version": "0.79.6",
+  "cleanup": {
+    "apkSha256": "f57baa87ab410d1d9bbeef1a5bb7d7461848c734df911b0bb3ceba25d25efe76",
+    "devices": [
+      {
+        "device": {
+          "model": "SM-A356E",
+          "s": "RFCX306PWLE"
+        },
+        "noAuditHook": true,
+        "reopen": {
+          "slides": 3,
+          "uri": "file:///data/user/0/com.kolt12max.livi.dev/cache/chat-memory-photo-20.jpg",
+          "viewers": 1,
+          "visible": true
+        },
+        "closed": {
+          "slides": 0,
+          "uri": null,
+          "viewers": 0,
+          "visible": false
+        },
+        "playbackOwner": null,
+        "cleanup": {
+          "done": true,
+          "removed": 44
+        },
+        "apkSha256": "f57baa87ab410d1d9bbeef1a5bb7d7461848c734df911b0bb3ceba25d25efe76",
+        "final": {
+          "chatScreens": 0,
+          "messageCache": 0,
+          "playback": null,
+          "viewers": 0
+        },
+        "pass": true
+      },
+      {
+        "device": {
+          "model": "SM-S938B",
+          "s": "R5GL550T4TB"
+        },
+        "noAuditHook": true,
+        "reopen": {
+          "slides": 3,
+          "uri": "file:///data/user/0/com.kolt12max.livi.dev/cache/chat-memory-photo-20.jpg",
+          "viewers": 1,
+          "visible": true
+        },
+        "closed": {
+          "slides": 0,
+          "uri": null,
+          "viewers": 0,
+          "visible": false
+        },
+        "playbackOwner": null,
+        "cleanup": {
+          "done": true,
+          "removed": 44
+        },
+        "apkSha256": "f57baa87ab410d1d9bbeef1a5bb7d7461848c734df911b0bb3ceba25d25efe76",
+        "final": {
+          "chatScreens": 0,
+          "messageCache": 0,
+          "playback": null,
+          "viewers": 0
+        },
+        "pass": true
+      }
+    ],
+    "local_snapshots_deleted": {
+      "files": 12,
+      "bytes": 1365860458
+    }
+  }
+}

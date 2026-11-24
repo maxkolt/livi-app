@@ -1,0 +1,92 @@
+{
+  "date": "2026-11-24",
+  "frontendTests": {
+    "success": true,
+    "suites": 192,
+    "tests": 1776,
+    "failed": 0
+  },
+  "typecheck": "PASS",
+  "targetedEslint": "PASS",
+  "device": {
+    "device": "Samsung A35 / RFCX306PWLE",
+    "pidBefore": "1674",
+    "stayOnBefore": "0",
+    "setup": {
+      "currentSource": true
+    },
+    "stress": {
+      "active": 2,
+      "avatarsPerCycle": 300,
+      "callAvatars": 128,
+      "callNicks": 128,
+      "cycles": 3,
+      "decoded": 48,
+      "nativeLoads": 900,
+      "nativePeak": 2,
+      "peakPending": 32,
+      "peakSourceBytes": 41712,
+      "pending": 5,
+      "resolved": 256
+    },
+    "storage": {
+      "deletedDisk": true,
+      "deletedRam": true,
+      "diskReloadMatches": true,
+      "retained": 24
+    },
+    "pressure": {
+      "callAvatars": 0,
+      "decoded": 0,
+      "diskFiles": 300,
+      "full": 0,
+      "locksAfter": 0,
+      "locksBefore": 128,
+      "resolved": 0
+    },
+    "nativeTimeout": {
+      "active": 2,
+      "ms": 15024,
+      "newNativeLoads": 2,
+      "pending": 0,
+      "queued": 0,
+      "sourceBytes": 1140
+    },
+    "late": {
+      "active": 0,
+      "latePublicationAbsent": true,
+      "queued": 0,
+      "retryDecoded": true,
+      "retryNativeLoads": 1,
+      "sourceBytes": 0
+    },
+    "pidAfter": "1674",
+    "pass": true,
+    "cleanup": {
+      "queueActive": 0,
+      "queuePending": 0,
+      "remainingFiles": 0,
+      "removedFiles": 300
+    },
+    "stayOnAfter": "0"
+  },
+  "sourceSha256": {
+    "frontend/utils/avatarCache.ts": "d9fbb8ecafe760f5b51711578d3fe83c4f3c143841556c20fb388fd61e1a9cab",
+    "frontend/utils/callAvatarPrime.ts": "5716342d5358b125ab592b3aeaf377220e815f30daec69dcb12c695fa3e84cb1",
+    "frontend/utils/dataUriToFileUri.ts": "fa1a289731132aa4ff7938f4628fd579f02fccae28982fcdb1ecbd280a9d5fc3",
+    "frontend/utils/avatarFileCache.ts": "11ce7e6c2afe238fa03c7ecc012b59eb30e6f983cfccca22f38699a687373679",
+    "frontend/utils/avatarCacheInvalidation.ts": "3507e878941e3139e167b4f9a80ea22e82ae44c906d553f4d0f66d041d96ca9e",
+    "frontend/utils/imageOptimization.ts": "282c0fd1168de19f728f9f8ca23d5d4892860c1fa24b70dd32d1fef2a504148d",
+    "frontend/utils/mediaRequestQueue.ts": "278a2d721167582387742c28770cda3806224c31f5a002b4000f0c7887bc99a9",
+    "frontend/components/AvatarImage.tsx": "11fa9e64a5b0553c7648d47aff67f812027155a0ba894edae083011eb1c2f2bb"
+  },
+  "finalCleanup": {
+    "imageFunctionRestored": true,
+    "queueFunctionRestored": true,
+    "remainingOldFixtures": 0,
+    "removedOldFixtures": 0,
+    "testGlobalRemoved": true,
+    "pid": "1674"
+  },
+  "diffCheck": "PASS"
+}

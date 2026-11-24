@@ -1,0 +1,612 @@
+--- a/android/cpp/jni/JniPlatformContext.cpp
++++ b/android/cpp/jni/JniPlatformContext.cpp
+@@ -96,38 +96,45 @@
+ }
+
+ sk_sp<SkImage> JniPlatformContext::takeScreenshotFromViewTag(size_t tag) {
+-  // Call the java method for creating a view screenshot as a bitmap:
+-  auto env = jni::Environment::current();
+-  static auto method = javaPart_->getClass()->getMethod<jobject(int)>(
+-      "takeScreenshotFromViewTag");
++  jni::ThreadScope scope;
++  auto *env = jni::Environment::current();
++  try {
++    static auto method = javaPart_->getClass()->getMethod<jobject(int)>(
++        "takeScreenshotFromViewTag");
++    // Keep the local reference owned, including on all early returns.
++    auto bitmap = method(javaPart_.get(), tag);
++    if (!bitmap) return nullptr;
+
+-  auto bitmap = method(javaPart_.get(), tag).release();
++    AndroidBitmapInfo info{};
++    if (AndroidBitmap_getInfo(env, bitmap.get(), &info) !=
++            ANDROID_BITMAP_RESULT_SUCCESS ||
++        info.width == 0 || info.height == 0) {
++      if (env->ExceptionCheck()) env->ExceptionClear();
++      return nullptr;
++    }
++    void *pixels = nullptr;
++    if (AndroidBitmap_lockPixels(env, bitmap.get(), &pixels) !=
++        ANDROID_BITMAP_RESULT_SUCCESS) {
++      if (env->ExceptionCheck()) env->ExceptionClear();
++      return nullptr;
++    }
++    struct PixelLock {
++      JNIEnv *env;
++      jobject bitmap;
++      ~PixelLock() { AndroidBitmap_unlockPixels(env, bitmap); }
++    } lock{env, bitmap.get()};
++    if (!pixels) return nullptr;
+
+-  // Let's convert to a native bitmap and get some info about the bitmap
+-  AndroidBitmapInfo bmi;
+-  AndroidBitmap_getInfo(env, bitmap, &bmi);
+-
+-  // Convert android bitmap info to a Skia bitmap info
+-  auto colorType = color_type(bmi.format);
+-  auto alphaType = alpha_type(bmi.flags);
+-
+-  auto skInfo = SkImageInfo::Make(SkISize::Make(bmi.width, bmi.height),
+-                                  colorType, alphaType);
+-
+-  // Lock pixels
+-  void *pixels;
+-  AndroidBitmap_lockPixels(env, bitmap, &pixels);
+-
+-  // Create pixmap from pixels and make a copy of it so that
+-  // the SkImage owns its own pixels
+-  SkPixmap pm(skInfo, pixels, bmi.stride);
+-  auto skImage = SkImages::RasterFromPixmapCopy(pm);
+-
+-  // Unlock pixels
+-  AndroidBitmap_unlockPixels(env, bitmap);
+-
+-  // Return our newly created SkImage!
+-  return skImage;
++    auto skInfo = SkImageInfo::Make(SkISize::Make(info.width, info.height),
++                                    color_type(info.format), alpha_type(info.flags));
++    SkPixmap pixmap(skInfo, pixels, info.stride);
++    return SkImages::RasterFromPixmapCopy(pixmap);
++  } catch (...) {
++    // Bitmap creation/rendering may throw a Java exception. It must not escape
++    // the main-thread callback: null is rejected by the owning JS Promise.
++    if (env->ExceptionCheck()) env->ExceptionClear();
++    return nullptr;
++  }
+ }
+
+ void JniPlatformContext::performStreamOperation(
+@@ -136,53 +143,49 @@
+   static auto method = javaPart_->getClass()->getMethod<jbyteArray(jstring)>(
+       "getJniStreamFromSource");
+
+-  auto loader = [=]() -> void {
+-    jni::ThreadScope ts;
+-    jstring jstr =
+-        (*jni::Environment::current()).NewStringUTF(sourceUri.c_str());
+-
+-    // Get the array with data from input stream from Java
+-    auto array = method(javaPart_.get(), jstr);
+-
+-    if (array == nullptr) {
+-      printf("Calling getJniStreamFromSource failed\n");
+-      return;
++  // Own the Java peer, never a raw `this`, while a detached task is running.
++  auto loader = [javaPart = jni::make_global(javaPart_), sourceUri,
++                 operation = op]() mutable {
++    jni::ThreadScope scope;
++    // Destroy both the global Java owner and callback captures before detaching
++    // this thread. The thread's own closure is left with moved-from handles.
++    auto javaOwner = std::move(javaPart);
++    auto callback = std::move(operation);
++    std::unique_ptr<SkStreamAsset> stream;
++    try {
++      auto source = jni::make_jstring(sourceUri);
++      auto array = method(javaOwner.get(), source.get());
++      auto *env = jni::Environment::current();
++      if (array) {
++        auto size = env->GetArrayLength(array.get());
++        if (size > 0) {
++          auto data = SkData::MakeUninitialized(static_cast<size_t>(size));
++          if (data) {
++            // Region copying needs neither a pinned array nor a malloc buffer.
++            env->GetByteArrayRegion(array.get(), 0, size,
++                                   static_cast<jbyte *>(data->writable_data()));
++            if (env->ExceptionCheck()) {
++              env->ExceptionClear();
++            } else {
++              stream = SkMemoryStream::Make(data);
++            }
++          }
++        }
++      }
++    } catch (...) {
++      // Java exceptions are translated by fbjni. All failures reach the one
++      // completion below as a null stream, including empty data/allocation.
++      stream.reset();
+     }
+-
+-    // Allocate buffer for java byte array
+-    jsize num_bytes = jni::Environment::current()->GetArrayLength(array.get());
+-    char *buffer = reinterpret_cast<char *>(malloc(num_bytes + 1));
+-
+-    if (!buffer) {
+-      printf("Buff Fail\n");
+-      return;
+-    }
+-
+-    jbyte *elements =
+-        jni::Environment::current()->GetByteArrayElements(array.get(), nullptr);
+-    if (!elements) {
+-      printf("Element Fail\n");
+-      free(buffer);
+-      return;
+-    }
+-
+-    // Copy data from java array to buffer
+-    memcpy(buffer, elements, num_bytes);
+-    buffer[num_bytes] = 0;
+-
+-    jni::Environment::current()->ReleaseByteArrayElements(array.get(), elements,
+-                                                          JNI_ABORT);
+-
+-    // Copy malloced data and give ownership to SkData
+-    auto data = SkData::MakeFromMalloc(buffer, num_bytes);
+-    auto skStream = SkMemoryStream::Make(data);
+-
+-    // Perform operation
+-    op(std::move(skStream));
++    callback(std::move(stream));
+   };
+
+-  // Fire and forget the thread - will be resolved on completion
+-  std::thread(loader).detach();
++  try {
++    std::thread(std::move(loader)).detach();
++  } catch (...) {
++    // A thread that could not start must still complete its request.
++    op(nullptr);
++  }
+ }
+
+ void JniPlatformContext::raiseError(const std::exception &err) {
+--- a/android/src/main/java/com/shopify/reactnative/skia/PlatformContext.java
++++ b/android/src/main/java/com/shopify/reactnative/skia/PlatformContext.java
+@@ -11,10 +11,8 @@
+ import java.io.ByteArrayOutputStream;
+ import java.io.IOException;
+ import java.io.InputStream;
+-import java.net.MalformedURLException;
++import java.net.HttpURLConnection;
+ import java.net.URI;
+-import java.net.URISyntaxException;
+-import java.net.URL;
+ import java.net.URLConnection;
+
+ public class PlatformContext {
+@@ -37,14 +35,27 @@
+         return new RNSkVideo(mContext, url);
+     }
+
+-    private byte[] getStreamAsBytes(InputStream is) throws IOException {
+-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+-        int nRead;
+-        byte[] data = new byte[4 * 0x400];
+-        while ((nRead = is.read(data, 0, data.length)) != -1) {
+-            buffer.write(data, 0, nRead);
++    private static final int CONNECT_TIMEOUT_MS = 15000;
++    private static final int READ_TIMEOUT_MS = 15000;
++    private static final long LOAD_TIMEOUT_NS = 30000L * 1000000L;
++
++    private byte[] getStreamAsBytes(InputStream input) throws IOException {
++        long deadline = System.nanoTime() + LOAD_TIMEOUT_NS;
++        try (InputStream stream = input;
++             ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
++            int count;
++            byte[] data = new byte[8192];
++            while ((count = stream.read(data)) != -1) {
++                if (System.nanoTime() > deadline) {
++                    throw new IOException("Skia stream read timed out");
++                }
++                buffer.write(data, 0, count);
++            }
++            if (buffer.size() == 0) {
++                throw new IOException("Empty Skia stream");
++            }
++            return buffer.toByteArray();
+         }
+-        return buffer.toByteArray();
+     }
+
+     @DoNotStrip
+@@ -54,49 +65,33 @@
+
+     @DoNotStrip
+     public byte[] getJniStreamFromSource(String sourceUri) throws IOException {
+-        // First try loading the input as a resource directly
+         int resourceId = mContext.getResources().getIdentifier(sourceUri, "drawable", mContext.getPackageName());
+-
+-        // Test to see if we have a raw resource (for SVG)
+         if (resourceId == 0) {
+             resourceId = mContext.getResources().getIdentifier(sourceUri, "raw", mContext.getPackageName());
+         }
+-
+         if (resourceId != 0) {
+-            // We can just return the input stream directly
+             return getStreamAsBytes(mContext.getResources().openRawResource(resourceId));
+         }
+
+-        // We should try to open a connection and return a stream to download this
+-        // object
+-        URI uri = null;
++        URLConnection connection = null;
+         try {
+-            uri = new URI(sourceUri);
+-
+-            String scheme = uri.getScheme();
+-
+-            if (scheme == null)
+-                throw new Exception("Invalid URI scheme");
+-
+-            // TODO: Base64??
+-
+-            URL url = uri.toURL();
+-            URLConnection connection = url.openConnection();
+-            connection.connect();
+-
+-            BufferedInputStream b = new BufferedInputStream(url.openStream(), 8192);
+-            return getStreamAsBytes(b);
+-
+-        } catch (URISyntaxException e) {
+-            e.printStackTrace();
+-        } catch (MalformedURLException e) {
+-            e.printStackTrace();
+-        } catch (IOException e) {
+-            e.printStackTrace();
+-        } catch (Exception e) {
+-            e.printStackTrace();
++            URI uri = new URI(sourceUri);
++            if (uri.getScheme() == null) {
++                throw new IOException("Invalid Skia URI scheme");
++            }
++            connection = uri.toURL().openConnection();
++            connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
++            connection.setReadTimeout(READ_TIMEOUT_MS);
++            // Read from this connection: URL.openStream() would open a second
++            // connection without the timeouts configured above.
++            return getStreamAsBytes(new BufferedInputStream(connection.getInputStream(), 8192));
++        } catch (Exception error) {
++            throw new IOException("Failed to load Skia URI", error);
++        } finally {
++            if (connection instanceof HttpURLConnection) {
++                ((HttpURLConnection) connection).disconnect();
++            }
+         }
+-        return null;
+     }
+
+     @Override
+--- a/android/src/main/java/com/shopify/reactnative/skia/ViewScreenshotService.java
++++ b/android/src/main/java/com/shopify/reactnative/skia/ViewScreenshotService.java
+@@ -30,12 +30,22 @@
+     private static final String TAG = "SkiaScreenshot";
+
+     public static Bitmap makeViewScreenshotFromTag(ReactContext context, int tag) {
++        try {
++            return makeViewScreenshot(context, tag);
++        } catch (RuntimeException error) {
++            Log.w(TAG, "Failed to render view screenshot", error);
++            return null;
++        }
++    }
++
++    private static Bitmap makeViewScreenshot(ReactContext context, int tag) {
+         UIManager uiManager = UIManagerHelper.getUIManagerForReactTag(context, tag);
++        if (uiManager == null) return null;
+         View view = null;
+         try {
+             view = uiManager.resolveView(tag);
+         } catch (RuntimeException e) {
+-            context.handleException(e);
++            Log.w(TAG, "Screenshot view is no longer available", e);
+         }
+         if (view == null) {
+             return null;
+--- a/cpp/api/JsiSkDataFactory.h
++++ b/cpp/api/JsiSkDataFactory.h
+@@ -22,25 +22,26 @@
+     return RNJsi::JsiPromises::createPromiseAsJSIValue(
+         runtime,
+         [context = std::move(context), localUri = std::move(localUri)](
+-            jsi::Runtime &runtime,
+             std::shared_ptr<RNJsi::JsiPromises::Promise> promise) -> void {
+           // Create a stream operation - this will be run in a
+           // separate thread
+           context->performStreamOperation(
+               localUri,
+-              [&runtime, context = std::move(context),
+-               promise = std::move(promise)](
++              [context, promise](
+                   std::unique_ptr<SkStreamAsset> stream) -> void {
+-                // Schedule drawCallback on the Javascript thread
+-                auto result =
+-                    SkData::MakeFromStream(stream.get(), stream->getLength());
+-                context->runOnJavascriptThread([&runtime,
+-                                                context = std::move(context),
+-                                                promise = std::move(promise),
++                auto result = stream && stream->getLength() > 0
++                    ? SkData::MakeFromStream(stream.get(), stream->getLength())
++                    : nullptr;
++                context->runOnJavascriptThread([context, promise,
+                                                 result = std::move(result)]() {
+-                  promise->resolve(jsi::Object::createFromHostObject(
+-                      runtime, std::make_shared<JsiSkData>(std::move(context),
+-                                                           std::move(result))));
++                  if (!result || result->isEmpty()) {
++                    promise->reject("Failed to load non-empty Skia data from URI");
++                    return;
++                  }
++                  promise->resolve([context, result](jsi::Runtime &runtime) {
++                    return jsi::Object::createFromHostObject(
++                        runtime, std::make_shared<JsiSkData>(context, result));
++                  });
+                 });
+               });
+         });
+--- a/cpp/api/JsiSkImageFactory.h
++++ b/cpp/api/JsiSkImageFactory.h
+@@ -62,22 +62,19 @@
+     return RNJsi::JsiPromises::createPromiseAsJSIValue(
+         runtime,
+         [context = std::move(context), viewTag](
+-            jsi::Runtime &runtime,
+             std::shared_ptr<RNJsi::JsiPromises::Promise> promise) -> void {
+           context->makeViewScreenshot(
+-              viewTag, [&runtime, context = std::move(context),
+-                        promise = std::move(promise)](sk_sp<SkImage> image) {
+-                context->runOnJavascriptThread([&runtime,
+-                                                context = std::move(context),
+-                                                promise = std::move(promise),
++              viewTag, [context, promise](sk_sp<SkImage> image) {
++                context->runOnJavascriptThread([context, promise,
+                                                 result = std::move(image)]() {
+                   if (result == nullptr) {
+                     promise->reject("Failed to create image from view tag");
+                     return;
+                   }
+-                  promise->resolve(jsi::Object::createFromHostObject(
+-                      runtime, std::make_shared<JsiSkImage>(
+-                                   std::move(context), std::move(result))));
++                  promise->resolve([context, result](jsi::Runtime &runtime) {
++                    return jsi::Object::createFromHostObject(
++                        runtime, std::make_shared<JsiSkImage>(context, result));
++                  });
+                 });
+               });
+         });
+--- a/cpp/jsi/JsiPromises.cpp
++++ b/cpp/jsi/JsiPromises.cpp
+@@ -1,39 +1,96 @@
+ #include "JsiPromises.h"
++
++#include <unordered_map>
++#include <utility>
+
+ namespace RNJsi {
+
+-JsiPromises::Promise::Promise(jsi::Runtime &rt, jsi::Function resolve,
+-                              jsi::Function reject)
+-    : runtime_(rt), resolve_(std::move(resolve)), reject_(std::move(reject)) {}
++// The runtime's global is the sole long-lived owner of JSI callbacks. Its host
++// object's destructor releases them during runtime teardown, as required by JSI.
++// Worker handles hold only weak references and can be destroyed on any thread.
++class RuntimePromises : public jsi::HostObject {
++public:
++  struct Callbacks {
++    jsi::Function resolve;
++    jsi::Function reject;
++  };
+
+-void JsiPromises::Promise::resolve(const jsi::Value &result) {
+-  resolve_.call(runtime_, result);
++  explicit RuntimePromises(jsi::Runtime &rt) : runtime(rt) {}
++
++  jsi::Runtime &runtime;
++  size_t nextId = 0;
++  std::unordered_map<size_t, Callbacks> pending;
++
++  static std::shared_ptr<RuntimePromises> get(jsi::Runtime &rt) {
++    constexpr auto key = "__rnskiaNativePromiseRegistry";
++    auto global = rt.global();
++    auto existing = global.getProperty(rt, key);
++    if (existing.isObject()) {
++      auto object = existing.asObject(rt);
++      if (object.isHostObject<RuntimePromises>(rt)) {
++        return object.getHostObject<RuntimePromises>(rt);
++      }
++    }
++    auto owner = std::make_shared<RuntimePromises>(rt);
++    global.setProperty(rt, key, jsi::Object::createFromHostObject(rt, owner));
++    return owner;
++  }
++};
++
++JsiPromises::Promise::Promise(std::weak_ptr<RuntimePromises> owner, size_t id)
++    : owner_(std::move(owner)), id_(id) {}
++
++void JsiPromises::Promise::resolve(ResultFactory factory) {
++  auto owner = owner_.lock();
++  if (!owner) return;
++  auto found = owner->pending.find(id_);
++  if (found == owner->pending.end()) return;
++  auto callbacks = std::move(found->second);
++  owner->pending.erase(found); // A request is consumed before any JS is called.
++  auto &rt = owner->runtime;
++  try {
++    callbacks.resolve.call(rt, factory(rt));
++  } catch (const std::exception &error) {
++    callbacks.reject.call(rt, jsi::JSError(rt, error.what()).value());
++  } catch (...) {
++    callbacks.reject.call(rt, jsi::JSError(rt, "Native Skia operation failed").value());
++  }
+ }
+
+ void JsiPromises::Promise::reject(const std::string &message) {
+-  jsi::Object error(runtime_);
+-  error.setProperty(runtime_, "message",
+-                    jsi::String::createFromUtf8(runtime_, message));
+-  reject_.call(runtime_, error);
++  auto owner = owner_.lock();
++  if (!owner) return;
++  auto found = owner->pending.find(id_);
++  if (found == owner->pending.end()) return;
++  auto callbacks = std::move(found->second);
++  owner->pending.erase(found);
++  auto &rt = owner->runtime;
++  callbacks.reject.call(rt, jsi::JSError(rt, message).value());
+ }
+
+-jsi::Value
+-JsiPromises::createPromiseAsJSIValue(jsi::Runtime &rt,
+-                                     PromiseSetupFunctionType &&func) {
+-  jsi::Function JSPromise = rt.global().getPropertyAsFunction(rt, "Promise");
+-  jsi::Function fn = jsi::Function::createFromHostFunction(
+-      rt, jsi::PropNameID::forAscii(rt, "fn"), 2,
+-      [func = std::move(func)](jsi::Runtime &rt2, const jsi::Value &thisVal,
+-                               const jsi::Value *args, size_t count) {
+-        jsi::Function resolve = args[0].getObject(rt2).getFunction(rt2);
+-        jsi::Function reject = args[1].getObject(rt2).getFunction(rt2);
+-        auto wrapper = std::make_shared<Promise>(rt2, std::move(resolve),
+-                                                 std::move(reject));
+-        func(rt2, wrapper);
++jsi::Value JsiPromises::createPromiseAsJSIValue(
++    jsi::Runtime &rt, PromiseSetupFunctionType &&func) {
++  auto constructor = rt.global().getPropertyAsFunction(rt, "Promise");
++  auto executor = jsi::Function::createFromHostFunction(
++      rt, jsi::PropNameID::forAscii(rt, "SkiaPromise"), 2,
++      [func = std::move(func)](jsi::Runtime &rt2, const jsi::Value &,
++                               const jsi::Value *args, size_t) {
++        auto owner = RuntimePromises::get(rt2);
++        auto id = owner->nextId++;
++        owner->pending.emplace(id, RuntimePromises::Callbacks{
++            args[0].asObject(rt2).asFunction(rt2),
++            args[1].asObject(rt2).asFunction(rt2)});
++        auto handle = std::make_shared<Promise>(owner, id);
++        try {
++          func(handle);
++        } catch (const std::exception &error) {
++          handle->reject(error.what());
++        } catch (...) {
++          handle->reject("Failed to start native Skia operation");
++        }
+         return jsi::Value::undefined();
+       });
+-
+-  return JSPromise.callAsConstructor(rt, fn);
++  return constructor.callAsConstructor(rt, executor);
+ }
+
+ } // namespace RNJsi
+--- a/cpp/jsi/JsiPromises.h
++++ b/cpp/jsi/JsiPromises.h
+@@ -1,50 +1,36 @@
+ #pragma once
+
++#include <functional>
+ #include <memory>
+ #include <string>
+-#include <utility>
+
+ #include <jsi/jsi.h>
+-
+-#include "third_party/base64.h"
+
+ namespace RNJsi {
+ namespace jsi = facebook::jsi;
+
+-/**
+- These classes are taken from ReactCommon TurboModuleUtils. It is no longer (RN
+- 0.72) possible to include and uses TurboModulesUtils without a lot of trouble
+- when use_frameworks are true in POD file. Instead we're now just including the
+- implementations ourselves.
+- */
+-
+-class LongLivedObject {
+-public:
+-  void allowRelease();
+-
+-protected:
+-  LongLivedObject() = default;
+-  virtual ~LongLivedObject() = default;
+-};
++class RuntimePromises;
+
+ class JsiPromises {
+ public:
+-  struct Promise : public LongLivedObject {
+-    Promise(jsi::Runtime &rt, jsi::Function resolve, jsi::Function reject);
+-
+-    void resolve(const jsi::Value &result);
++  // Native tasks may own this handle, but never a Runtime or JSI value. Only
++  // call resolve/reject on the originating JS queue. The factory is evaluated
++  // there only if that runtime and request are still alive.
++  struct Promise {
++    using ResultFactory = std::function<jsi::Value(jsi::Runtime &)>;
++    Promise(std::weak_ptr<RuntimePromises> owner, size_t id);
++    void resolve(ResultFactory factory);
+     void reject(const std::string &error);
+
+-    jsi::Runtime &runtime_;
+-    jsi::Function resolve_;
+-    jsi::Function reject_;
++  private:
++    std::weak_ptr<RuntimePromises> owner_;
++    size_t id_;
+   };
+
+-  using PromiseSetupFunctionType =
+-      std::function<void(jsi::Runtime &rt, std::shared_ptr<Promise>)>;
++  using PromiseSetupFunctionType = std::function<void(std::shared_ptr<Promise>)>;
+
+   static jsi::Value createPromiseAsJSIValue(jsi::Runtime &rt,
+-                                            PromiseSetupFunctionType &&func);
++                                           PromiseSetupFunctionType &&func);
+ };
+
+ } // namespace RNJsi
+--- a/cpp/rnskia/RNSkJsiViewApi.h
++++ b/cpp/rnskia/RNSkJsiViewApi.h
+@@ -210,23 +210,24 @@
+             : nullptr;
+     return RNJsi::JsiPromises::createPromiseAsJSIValue(
+         runtime, [context = std::move(context), view, bounds](
+-                     jsi::Runtime &runtime,
+                      std::shared_ptr<RNJsi::JsiPromises::Promise> promise) {
+-          context->runOnMainThread([&runtime, view = std::move(view),
+-                                    promise = std::move(promise),
+-                                    context = std::move(context), bounds]() {
++          if (!view) {
++            promise->reject("No Skia View currently available.");
++            return;
++          }
++          context->runOnMainThread([view, promise, context, bounds]() {
+             auto image = view->makeImageSnapshot(
+                 bounds == nullptr ? nullptr : bounds.get());
+             context->runOnJavascriptThread(
+-                [&runtime, context = std::move(context),
+-                 promise = std::move(promise), image = std::move(image)]() {
++                [context, promise, image = std::move(image)]() {
+                   if (image == nullptr) {
+                     promise->reject("Failed to make snapshot from view.");
+                     return;
+                   }
+-                  promise->resolve(jsi::Object::createFromHostObject(
+-                      runtime, std::make_shared<JsiSkImage>(std::move(context),
+-                                                            std::move(image))));
++                  promise->resolve([context, image](jsi::Runtime &runtime) {
++                    return jsi::Object::createFromHostObject(
++                        runtime, std::make_shared<JsiSkImage>(context, image));
++                  });
+                 });
+           });
+         });

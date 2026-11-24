@@ -344,3 +344,47 @@ it('keeps the same snapshot and avoids wallpaper refresh when server cosmetics h
   const second = await cosmetics.loadCosmetics(true);
   expect(second).toBe(first);
 });
+
+it('bounds frame hints and their persisted snapshot while preserving purchased ownership and wallet', async () => {
+  const own = { purchasedFrameIds: ['fire'], activeFrameId: 'fire', purchasedBackgroundIds: ['poetry'], activeBackgroundId: 'poetry',
+    rewards: { balance: 20, invitedCount: 2, feedbackSubmitted: false, feedbackGiftAvailable: false, invitePoints: 10, prices: { background: 50, frame: 100 } } };
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own })); mockFetch.mockRejectedValue(new Error('offline'));
+  boot(); await flush();
+  for (let i = 0; i < 300; i++) cosmetics.applyRemoteFrameChange(`peer-${i}`, 'diamond');
+  await jest.advanceTimersByTimeAsync(401);
+  const saved = JSON.parse(mockSetItem.mock.calls.at(-1)![1] as string);
+  expect(Object.keys(saved.frames)).toHaveLength(256); expect(saved.own).toMatchObject(own);
+  expect(mount('peer-0', 'evicted')).toBe(''); expect(mount('peer-299', 'newest')).toBe('diamond');
+  expect(mount('me', 'self')).toBe('fire'); expect(ReadCosmetics()).toMatchObject(own);
+});
+
+it('keeps a mounted frame and own purchases after idle hint expiry, and restores a new mount from the server', async () => {
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own: { purchasedFrameIds: ['fire'], activeFrameId: 'fire' } }));
+  mockFetch.mockRejectedValue(new Error('offline'));
+  boot(); await flush(); cosmetics.applyRemoteFrameChange('peer', 'fire');
+  expect(mount()).toBe('fire'); await flush();
+  await jest.advanceTimersByTimeAsync(30 * 60_000 + 1);
+  expect(mount()).toBe('fire'); expect(mount('me', 'self')).toBe('fire');
+  unmount('avatar'); mockFetch.mockResolvedValue(response('diamond'));
+  expect(mount('peer', 'reopened')).toBe(''); await flush();
+  expect(mount('peer', 'reopened')).toBe('diamond');
+});
+
+it('rewrites an oversized legacy hints snapshot with bounded frames and preserves own selection', async () => {
+  const frames = Object.fromEntries(Array.from({ length: 1000 }, (_, i) => [`peer-${i}`, 'frost']));
+  mockGetItem.mockResolvedValue(JSON.stringify({ ownId: 'me', own: { purchasedFrameIds: ['fire'], activeFrameId: 'fire' }, frames }));
+  mockFetch.mockRejectedValue(new Error('offline')); boot(); await flush();
+  await jest.advanceTimersByTimeAsync(401);
+  const saved = JSON.parse(mockSetItem.mock.calls.at(-1)![1] as string);
+  expect(Object.keys(saved.frames)).toHaveLength(256);
+  expect(saved.own).toMatchObject({ activeFrameId: 'fire', purchasedFrameIds: ['fire'] });
+  expect(mount('peer-999', 'newest')).toBe('frost'); expect(mount('me', 'self')).toBe('fire');
+});
+
+it('does not retain oversized frame hints but still delivers them to a mounted consumer', async () => {
+  mockFetch.mockRejectedValue(new Error('offline')); boot(); mount(); await flush();
+  const value = 'x'.repeat(40_000); cosmetics.applyRemoteFrameChange('peer', value);
+  expect(mount()).toBe(value); await jest.advanceTimersByTimeAsync(401);
+  const saved = JSON.parse(mockSetItem.mock.calls.at(-1)![1] as string);
+  expect(saved.frames.peer).toBeUndefined();
+});

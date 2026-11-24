@@ -14,6 +14,7 @@ import { getCosmeticBackground } from './cosmeticCatalog';
 import { DEFAULT_DARK_WALLPAPER_ID, setChatWallpaperId } from './chatWallpaper';
 import { UserFrameRefresh } from './userFrameRefresh';
 import { restoreHttpInstallAuth } from './restoreHttpInstallAuth';
+import { ExpiringLruCache } from './expiringLruCache';
 
 export type CosmeticKind = 'frame' | 'background';
 
@@ -75,7 +76,12 @@ let activeWrites = 0;
 let loadSequence = 0;
 let writeTail: Promise<unknown> = Promise.resolve();
 const listeners = new Set<(value: CosmeticEntitlements) => void>();
-const userFrameCache = new Map<string, { frameId: string; loadedAt: number }>();
+// Only first-frame hints are evicted. Ownership/wallet and mounted hook state
+// remain separate, so expiration cannot remove a purchased or visible frame.
+const userFrameCache = new ExpiringLruCache<string, { frameId: string; loadedAt: number }>({
+  maxEntries: 256, maxCost: 64 * 1024, ttlMs: 30 * 60_000,
+  cost: (value, key) => (key.length + value.frameId.length) * 2 + 16,
+});
 const userFrameListeners = new Map<string, Set<(frameId: string) => void>>();
 const userFrameRefreshers = new Map<string, UserFrameRefresh>();
 let stopFrameNetworkWatch: (() => void) | null = null;
@@ -197,6 +203,8 @@ function hydrateCosmetics(): Promise<void> {
         listeners.forEach((listener) => listener(cached));
         notifyUserFrame(ownId, cached.activeFrameId);
       }
+      // Replace a legacy unbounded hints snapshot without touching ownership.
+      if (Object.keys(saved?.frames || {}).length > 256) schedulePersist();
     })
     .catch(() => {})
     .finally(() => {

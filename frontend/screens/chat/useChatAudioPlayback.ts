@@ -7,6 +7,7 @@ import {
   ensureVoiceCachedToLocalFile as ensureVoiceCachedToLocalFileHelper,
 } from "./chatVoiceCache";
 import { claimChatPlayback, releaseChatPlayback } from "./chatPlaybackCoordinator";
+import { ExpiringLruCache } from '../../utils/expiringLruCache';
 
 type Options = {
   messages: ChatMessage[];
@@ -17,8 +18,11 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
   const audioSoundRef = React.useRef<Audio.Sound | null>(null);
   const audioPlaybackOwnerRef = React.useRef<string | null>(null);
   const audioPlayGenerationRef = React.useRef(0);
+  const mountedRef = React.useRef(true);
   const [playingAudioId, setPlayingAudioId] = React.useState<string | null>(null);
-  const voiceAudioCacheRef = React.useRef<Map<string, string>>(new Map());
+  const voiceAudioCacheRef = React.useRef(new ExpiringLruCache<string, string>({
+    maxEntries: 64, maxCost: 128 * 1024, ttlMs: 5 * 60 * 1000, cost: (value, key) => (value.length + key.length) * 2 + 128,
+  }));
   const voiceAudioDownloadRef = React.useRef<Map<string, Promise<string>>>(new Map());
   const [playingAudioState, setPlayingAudioState] = React.useState<{
     id: string;
@@ -30,6 +34,7 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
     return ensureVoiceCachedToLocalFileHelper(resolvedUri, {
       pathByUrl: voiceAudioCacheRef.current,
       inflightByUrl: voiceAudioDownloadRef.current,
+      isCurrent: () => mountedRef.current,
     });
   }, []);
 
@@ -40,11 +45,13 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
     if (owner) releaseChatPlayback(owner);
     const prev = audioSoundRef.current;
     audioSoundRef.current = null;
-    setPlayingAudioId(null);
-    setPlayingAudioState(null);
+    if (mountedRef.current) {
+      setPlayingAudioId(null);
+      setPlayingAudioState(null);
+    }
     if (prev) {
-      await prev.stopAsync().catch(() => {});
-      void prev.unloadAsync().catch(() => {});
+      try { await prev.stopAsync(); } catch {}
+      finally { await prev.unloadAsync().catch(() => {}); }
     }
   }, []);
 
@@ -55,16 +62,20 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
         const mid = String(m?.id || "").trim();
         const rawUri = String(m?.uri || "").trim();
         const uri = rawUri ? resolveMediaUri(rawUri) : "";
-        if (!mid || !uri) return;
+        if (!mid || !uri || !mountedRef.current) return;
 
         if (playingAudioId === mid) {
           await stopAudioPlayback();
           return;
         }
 
-        await stopAudioPlayback();
-
-        playGen = ++audioPlayGenerationRef.current;
+        // stop invalidates synchronously. Never allocate a newer generation AFTER
+        // awaiting it: unmount/another tap may have cancelled this request meanwhile.
+        const stopping = stopAudioPlayback();
+        playGen = audioPlayGenerationRef.current;
+        const isCurrent = () => mountedRef.current && playGen === audioPlayGenerationRef.current;
+        await stopping;
+        if (!isCurrent()) return;
         const playbackOwner = `audio:${mid}`;
         audioPlaybackOwnerRef.current = playbackOwner;
         claimChatPlayback(playbackOwner, stopAudioPlayback);
@@ -72,13 +83,14 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
         setPlayingAudioState({ id: mid, durationMs: fallbackDurationMs, positionMs: 0 });
         setPlayingAudioId(mid);
 
-        void Audio.setAudioModeAsync({
+        await Audio.setAudioModeAsync({
           playsInSilentModeIOS: true,
           allowsRecordingIOS: false,
           staysActiveInBackground: false,
           shouldDuckAndroid: false,
           playThroughEarpieceAndroid: false,
         }).catch(() => {});
+        if (!isCurrent()) return;
 
         let playUri = uri;
         if (/^https?:\/\//i.test(uri)) {
@@ -88,11 +100,13 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
             playUri = uri;
           }
         }
+        if (!isCurrent()) return;
 
         const { sound } = await Audio.Sound.createAsync(
           { uri: playUri },
-          { shouldPlay: true },
+          { shouldPlay: false },
           (status) => {
+            if (!isCurrent()) return;
             // Failed/unloaded statuses omit these fields. Keep the existing optional reads.
             const s: Partial<Pick<AVPlaybackStatusSuccess, 'positionMillis' | 'durationMillis' | 'didJustFinish'>> & { isLoaded: boolean } = status;
             if (s && typeof s.positionMillis === "number") {
@@ -113,18 +127,15 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
             }
           },
         );
-        if (playGen !== audioPlayGenerationRef.current) {
+        if (!isCurrent()) {
           await sound.unloadAsync().catch(() => {});
           return;
         }
         audioSoundRef.current = sound;
+        await sound.playAsync();
       } catch {
         if (playGen !== 0 && playGen === audioPlayGenerationRef.current) {
-          const owner = audioPlaybackOwnerRef.current;
-          audioPlaybackOwnerRef.current = null;
-          if (owner) releaseChatPlayback(owner);
-          setPlayingAudioId(null);
-          setPlayingAudioState(null);
+          await stopAudioPlayback();
         }
       }
     },
@@ -132,19 +143,25 @@ export function useChatAudioPlayback({ messages, resolveMediaUri }: Options) {
   );
 
   React.useEffect(() => {
-    const tail = messages.length > 30 ? messages.slice(-30) : messages;
-    for (const m of tail) {
+    let warmed = 0;
+    for (let i = messages.length - 1; i >= Math.max(0, messages.length - 30); i--) {
+      const m = messages[i];
       if (String(m?.type || "") !== "audio") continue;
       const raw = String(m?.uri || "").trim();
       if (!raw) continue;
       const resolved = resolveMediaUri(raw);
       if (!resolved || !/^https?:\/\//i.test(resolved)) continue;
       void ensureVoiceCachedToLocalFile(resolved).catch(() => {});
+      if (++warmed === 3) break;
     }
   }, [messages, resolveMediaUri, ensureVoiceCachedToLocalFile]);
 
   React.useEffect(() => {
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      voiceAudioCacheRef.current.clear();
+      voiceAudioDownloadRef.current.clear();
       try {
         void stopAudioPlayback();
       } catch {}

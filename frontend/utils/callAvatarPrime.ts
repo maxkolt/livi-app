@@ -12,19 +12,32 @@
  * Это НЕ источник правды — только «горячий» ускоритель первого кадра. Реактивный
  * список friends всё равно перезапишет значение, когда придёт с сервера.
  */
-import { Platform } from 'react-native';
 import { buildFriendAvatarUri, type FriendSource } from '../screens/home/friendHelpers';
-import { resolveDataUriForAndroid } from './dataUriToFileUri';
+import { warmAndroidAvatarFile } from './imageOptimization';
+import { ExpiringLruCache } from './expiringLruCache';
+import { subscribeMemoryPressure } from './memoryPressure';
+import { subscribeAvatarCacheInvalidation } from './avatarCacheInvalidation';
 
-const avatarByUserId = new Map<string, string>();
-const nickByUserId = new Map<string, string>();
+const avatarByUserId = new ExpiringLruCache<string, string>({
+  maxEntries: 128, maxCost: 4 * 1024 * 1024, ttlMs: 15 * 60 * 1000,
+  cost: (value, key) => (value.length + key.length) * 2,
+});
+const nickByUserId = new ExpiringLruCache<string, string>({
+  maxEntries: 128, maxCost: 64 * 1024, ttlMs: 15 * 60 * 1000,
+  cost: (value, key) => (value.length + key.length) * 2,
+});
 
-function warmAndroidResolve(uri: string): void {
-  if (Platform.OS !== 'android') return;
-  if (typeof uri !== 'string' || !uri.trim().toLowerCase().startsWith('data:')) return;
-  // fire-and-forget: запишет file: в кэш resolvedCache, peek станет синхронным
-  void resolveDataUriForAndroid(uri).catch(() => {});
+export function clearCallAvatarCache(userId?: string): void {
+  if (userId !== undefined) {
+    avatarByUserId.delete(userId);
+    nickByUserId.delete(userId);
+  } else {
+    avatarByUserId.clear();
+    nickByUserId.clear();
+  }
 }
+subscribeMemoryPressure(() => clearCallAvatarCache());
+subscribeAvatarCacheInvalidation(clearCallAvatarCache);
 
 /** Прямая запись userId → готовый avatar URI. */
 function primeCallAvatar(userId: unknown, uri: unknown): void {
@@ -33,7 +46,7 @@ function primeCallAvatar(userId: unknown, uri: unknown): void {
     const value = typeof uri === 'string' ? uri.trim() : '';
     if (!id || !value) return;
     avatarByUserId.set(id, value);
-    warmAndroidResolve(value);
+    warmAndroidAvatarFile(value);
   } catch {}
 }
 
@@ -57,8 +70,10 @@ function primeCallAvatarFromFriend(partner: AvatarFriend | null | undefined): vo
     if (!id) return;
     const uri = buildFriendAvatarUri(partner);
     if (uri) primeCallAvatar(id, uri);
+    else avatarByUserId.delete(id);
     const nick = String(partner.name || partner.nick || '').trim();
     if (nick) primeCallNick(id, nick);
+    else nickByUserId.delete(id);
   } catch {}
 }
 

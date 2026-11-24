@@ -1,6 +1,9 @@
 import { sha256 } from '@noble/hashes/sha2';
 import { NativeModules } from 'react-native';
 import { fromBase64, toBase64, utf8Encode } from '../sockets/modules/e2eCrypto';
+import { ExpiringLruCache } from './expiringLruCache';
+import { MediaRequestQueue } from './mediaRequestQueue';
+import { subscribeMemoryPressure } from './memoryPressure';
 
 const apiBase = () => (require('../sockets/modules/constants') as typeof import('../sockets/modules/constants')).API_BASE;
 const currentOwner = () => (require('../sockets/modules/authState') as typeof import('../sockets/modules/authState')).getCurrentUserId();
@@ -31,8 +34,12 @@ export function mediaWireUrl(uri: string): string {
   return uri.split('#')[0];
 }
 
-const ready = new Map<string, string>();
-const pending = new Map<string, Promise<string>>();
+const ready = new ExpiringLruCache<string, string>({
+  maxEntries: 128, maxCost: 256 * 1024, ttlMs: 5 * 60 * 1000,
+  cost: (value, key) => (value.length + key.length) * 2 + 128,
+});
+const requests = new MediaRequestQueue();
+subscribeMemoryPressure(() => ready.clear());
 export const protectedMediaCacheKey = (uri: string) => `${currentOwner() || ''}:${uri}`;
 const cacheKey = protectedMediaCacheKey;
 export function peekProtectedMedia(uri: string): string | undefined { return ready.get(cacheKey(uri)); }
@@ -45,33 +52,56 @@ export async function resolveProtectedMedia(uri: string): Promise<string> {
   const owner = currentOwner();
   if (!owner) throw new Error('unauthorized');
   const identityKey = cacheKey(uri);
-  if (pending.has(identityKey)) return pending.get(identityKey)!;
-  const task = (async () => {
+  return requests.run(identityKey, async (isCurrent, onExpire) => {
     const cached = ready.get(identityKey);
-    if (cached && (await FileSystem.getInfoAsync(cached)).exists) return cached;
+    if (cached && (await FileSystem.getInfoAsync(cached)).exists) {
+      if (currentOwner() !== owner || !isCurrent()) throw new Error('media_request_cancelled');
+      return cached;
+    }
     const key = parseMediaKey(uri);
     if (uri.includes(MARKER) && !key) throw new Error('invalid_encrypted_media');
     if (!FileSystem.cacheDirectory) throw new Error('media_cache_unavailable');
     const hash = Array.from(sha256(utf8Encode(identityKey))).map(v => v.toString(16).padStart(2, '0')).join('');
     const extension = new URL(uri, apiBase()).pathname.split('.').pop() || '';
-    const destination = FileSystem.cacheDirectory + 'private-' + hash + (key ? '.livi' : /^[a-z0-9]{1,8}$/.test(extension) ? '.' + extension : '.media');
+    const localFile = FileSystem.cacheDirectory + 'private-' + hash + '.' + (key?.e || (/^[a-z0-9]{1,8}$/.test(extension) ? extension : 'media'));
+    // Deterministic owner/key-specific disk files survive RAM eviction and avoid
+    // repeatedly downloading/decrypting the same attachment after cache expiry.
+    if ((await FileSystem.getInfoAsync(localFile)).exists) {
+      if (currentOwner() !== owner || !isCurrent()) throw new Error('media_request_cancelled');
+      ready.set(identityKey, localFile);
+      return localFile;
+    }
+    const destination = localFile + '.download';
+    let decrypted: string | undefined;
     try {
       const headers = await getInstallAuthHeaders();
-      const result = await FileSystem.downloadAsync(new URL(mediaWireUrl(uri), apiBase()).toString(), destination, { headers });
+      if (currentOwner() !== owner || !isCurrent()) throw new Error('media_request_cancelled');
+      const download = FileSystem.createDownloadResumable(new URL(mediaWireUrl(uri), apiBase()).toString(), destination, { headers });
+      onExpire(() => { void download.cancelAsync().catch(() => {}); });
+      const result = await download.downloadAsync();
+      if (!result) throw new Error('media_request_cancelled');
       if (result.status !== 200) throw new Error('media_access_denied');
+      if (!isCurrent()) throw new Error('media_request_timeout');
       const resolved: string = key
         ? await NativeModules.LiviCrypto.decryptMedia(result.uri, key.k, key.e)
         : result.uri;
-      if (currentOwner() !== owner) {
+      if (key) decrypted = resolved;
+      if (currentOwner() !== owner || !isCurrent()) {
         await FileSystem.deleteAsync(resolved, { idempotent: true }).catch(() => {});
-        throw new Error('identity_changed');
+        throw new Error(currentOwner() !== owner ? 'identity_changed' : 'media_request_timeout');
       }
-      ready.set(identityKey, resolved);
-      return resolved;
-    } finally { if (key) await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {}); }
-  })().finally(() => pending.delete(identityKey));
-  pending.set(identityKey, task);
-  return task;
+      await FileSystem.moveAsync({ from: resolved, to: localFile });
+      if (currentOwner() !== owner || !isCurrent()) {
+        await FileSystem.deleteAsync(localFile, { idempotent: true }).catch(() => {});
+        throw new Error('media_request_cancelled');
+      }
+      ready.set(identityKey, localFile);
+      return localFile;
+    } finally {
+      await FileSystem.deleteAsync(destination, { idempotent: true }).catch(() => {});
+      if (decrypted) await FileSystem.deleteAsync(decrypted, { idempotent: true }).catch(() => {});
+    }
+  });
 }
 
 export async function encryptMediaForUpload(uri: string, type: 'image' | 'audio' | 'video'): Promise<{ uri: string; key: MediaKey }> {

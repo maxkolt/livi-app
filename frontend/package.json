@@ -28,7 +28,8 @@
     "ios": "NODE_ENV=development expo run:ios",
     "web": "NODE_ENV=development expo start --web",
     "test": "NODE_ENV=test jest",
-    "test:ci": "NODE_ENV=test jest --ci --runInBand --watchman=false"
+    "test:ci": "NODE_ENV=test jest --ci --runInBand --watchman=false",
+    "test:skia:native": "python3 scripts/verify-skia-patch.py && python3 scripts/verify-skia-promises.py && python3 scripts/verify-skia-android-loader.py"
   },
   "dependencies": {
     "@babel/runtime": "^7.28.3",

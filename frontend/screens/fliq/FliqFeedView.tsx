@@ -640,17 +640,17 @@ export function FliqFeedView({
     [ambientX, ambientY, boxW, cardH],
   );
   const ambientItem = items[ambientLead ?? activeIndex] ?? items[activeIndex];
-  const ambientUrl = !savedOpen && status === 'ready' && ambientItem ? youtubeThumbUrl(ambientItem.id) : null;
+  const ambientUrl = active && !savedOpen && status === 'ready' && ambientItem ? youtubeThumbUrl(ambientItem.id) : null;
   // Превью для света — заранее у соседей: при перелистывании свет не ждёт загрузки.
   useEffect(() => {
-    if (status !== 'ready') return;
+    if (!active || savedOpen || status !== 'ready') return;
     prefetchFliqAmbient(
       [activeIndex, activeIndex + 1, activeIndex - 1, activeIndex + 2]
         .map((i) => items[i])
         .filter((it): it is FliqItem => !!it)
         .map((it) => youtubeThumbUrl(it.id)),
     );
-  }, [activeIndex, items, status]);
+  }, [active, savedOpen, activeIndex, items, status]);
   // Свет — от ролика, который въезжает в рамку по ходу ленты (пальцем или сама): вперёд —
   // следующий, как только он занял AMBIENT_SWITCH_AT рамки; назад — так же предыдущий. Вернули
   // ленту — свет вернётся. Лента и так шлёт прокрутку в JS (виртуализация), обработчик лёгкий:

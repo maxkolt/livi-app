@@ -1,0 +1,85 @@
+{
+  "date": "2026-11-24",
+  "frontendTests": {
+    "success": true,
+    "suites": 194,
+    "tests": 1793,
+    "failed": 0
+  },
+  "typecheck": "PASS",
+  "targetedEslint": "PASS",
+  "diffCheck": "PASS",
+  "device": {
+    "device": "Samsung A35",
+    "serial": "RFCX306PWLE",
+    "pidBefore": "10115",
+    "stayOnBefore": "0",
+    "backup": {
+      "backupComplete": true
+    },
+    "burst": {
+      "fulfilled": 24,
+      "nativePeak": 4,
+      "pendingPeak": 24,
+      "rejected": 76
+    },
+    "metadata": {
+      "afterPressure": 0,
+      "diskReloadMatches": true,
+      "networkAfter": 300,
+      "networkBefore": 300,
+      "retained": 128,
+      "sourceBytes": 94
+    },
+    "redirect": {
+      "evictedExtraRequests": 1,
+      "evictedMatches": true,
+      "hotExtraRequests": 0,
+      "hotMatches": true,
+      "pendingPeak": 4
+    },
+    "frames": {
+      "bytes": 16894,
+      "hintExpired": true,
+      "ownUnchanged": true,
+      "persistedFrames": 256,
+      "retained": 256
+    },
+    "ttl": {
+      "expired": true,
+      "extraRequests": 1,
+      "refreshed": true
+    },
+    "timeout": {
+      "active": 1,
+      "error": "media_request_timeout",
+      "ms": 15008,
+      "pending": 0
+    },
+    "late": {
+      "active": 1,
+      "latePublicationAbsent": true,
+      "pending": 0,
+      "retrySucceeded": true
+    },
+    "pidAfter": "10115",
+    "pass": true,
+    "cleanup": {
+      "diskRestored": true,
+      "frameHintsRestored": true,
+      "metadataActive": 0,
+      "metadataPending": 0,
+      "redirectActive": 0,
+      "redirectPending": 0
+    },
+    "stayOnAfter": "0"
+  },
+  "sourceSha256": {
+    "frontend/screens/fliq/fliqLinks.ts": "74e8bb43b13a0259249bacbeb388ccd5fff8fc3ad9795ae3a671d5383333bc5a",
+    "frontend/screens/fliq/FliqLinkCard.tsx": "270c344a36029d66bcd8f75b60a9f106c2d2f3456865152b0ad13da47bc0735c",
+    "frontend/utils/cosmetics.ts": "379390a2d69e46ceedcca3c3a4a0b919eaa7f9edb78e489af045d768897ef689",
+    "frontend/screens/fliq/fliqLinkCache.test.ts": "0105f8498f608e0b120749a9d6fb80b0e73935c35f2eedc6d216ce99ad88525d",
+    "frontend/screens/fliq/FliqLinkCard.test.tsx": "0137d9c52a6ac289712fbd8edd7307e298cc0893d2265b4730ca9871a9f6f49d",
+    "frontend/utils/cosmetics.test.ts": "716fa37be7100614d40bb6c770e15173c3be2a81e03d2352983ef4e7541383d8"
+  }
+}

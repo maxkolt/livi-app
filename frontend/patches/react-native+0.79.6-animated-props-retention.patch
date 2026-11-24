@@ -1,0 +1,27 @@
+--- a/src/private/animated/createAnimatedPropsHook.js
++++ b/src/private/animated/createAnimatedPropsHook.js
+@@ -59,7 +59,7 @@
+     const timerRef = useRef<TimeoutID | null>(null);
+
+     const node = useAnimatedPropsMemo(
+-      () => new AnimatedProps(props, () => onUpdateRef.current?.(), allowlist),
++      () => new AnimatedProps(props, createAnimatedPropsUpdateCallback(onUpdateRef), allowlist),
+       props,
+     );
+
+@@ -216,6 +216,15 @@
+   };
+ }
+
++// Keep the node callback outside the render closure. In the state-based memo
++// path, that closure can hold the previous node and retain the entire history
++// of AnimatedProps (including React children) through shared environments.
++function createAnimatedPropsUpdateCallback(
++  onUpdateRef: {current: UpdateCallback | null},
++): UpdateCallback {
++  return () => onUpdateRef.current?.();
++}
++
+ function reduceAnimatedProps<TProps>(
+   node: AnimatedProps,
+   props: TProps,

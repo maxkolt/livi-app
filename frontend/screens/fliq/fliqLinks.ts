@@ -1,6 +1,9 @@
 // Ссылки на короткие ролики (YouTube, TikTok, Instagram): разбор из текста сообщения,
 // адреса встраиваемых плееров и подписи для карточки (oEmbed, кэш в памяти и на диске).
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { ExpiringLruCache } from '../../utils/expiringLruCache';
+import { MediaRequestQueue } from '../../utils/mediaRequestQueue';
+import { subscribeMemoryPressure } from '../../utils/memoryPressure';
 
 export type FliqSource = 'youtube' | 'tiktok' | 'instagram';
 
@@ -123,28 +126,42 @@ export function fliqEmbedUrl(link: FliqLink): string {
   return `https://www.youtube.com/embed/${link.id}`;
 }
 
-const resolved = new Map<string, FliqLink | null>();
+const RAM_TTL_MS = 30 * 60_000;
+const RETRY_TTL_MS = 30_000;
+const resolved = new ExpiringLruCache<string, { link: FliqLink | null; until: number }>({
+  maxEntries: 128, maxCost: 128 * 1024, ttlMs: RAM_TTL_MS,
+  cost: (value, key) => (key.length + (value.link?.url.length || 0) + (value.link?.id.length || 0)) * 2 + 32,
+  expiresAt: value => value.until,
+});
+const redirects = new MediaRequestQueue<FliqLink | null>({
+  concurrency: 2, maxPending: 8, maxCost: 64 * 1024, timeoutMs: 15_000,
+});
+let cacheGeneration = 0;
 
 /** Короткая ссылка TikTok → полная (с id ролика): идём по редиректу. */
 export async function resolveFliqLink(link: FliqLink): Promise<FliqLink | null> {
   if (!link.short) return link;
-  if (resolved.has(link.url)) return resolved.get(link.url) ?? null;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 8000);
-  try {
-    const res = await fetch(/^https?:\/\//i.test(link.url) ? link.url : `https://${link.url}`, {
-      method: 'GET',
-      signal: controller.signal,
-    });
-    const full = parseFliqLink(res.url || '');
-    const out = full && !full.short ? full : null;
-    resolved.set(link.url, out);
-    return out;
-  } catch {
-    return null;
-  } finally {
-    clearTimeout(timer);
-  }
+  const cached = resolved.get(link.url);
+  if (cached) return cached.link;
+  const generation = cacheGeneration;
+  return redirects.run(link.url, async (current, onExpire) => {
+    const controller = new AbortController();
+    onExpire(() => controller.abort());
+    const timer = setTimeout(() => controller.abort(), 8000);
+    try {
+      const res = await fetch(/^https?:\/\//i.test(link.url) ? link.url : `https://${link.url}`, {
+        method: 'GET', signal: controller.signal,
+      });
+      if (!current() || controller.signal.aborted) return null;
+      const full = parseFliqLink(res.url || '');
+      const out = full && !full.short ? full : null;
+      if (generation === cacheGeneration) {
+        resolved.set(link.url, { link: out, until: Date.now() + (out ? RAM_TTL_MS : RETRY_TTL_MS) });
+      }
+      return out;
+    } catch { return null; }
+    finally { clearTimeout(timer); }
+  }, link.url.length * 2).catch(() => null);
 }
 
 const META_PREFIX = 'fliq_meta_v1:';
@@ -154,26 +171,48 @@ const META_TTL_MS: Record<FliqSource, number> = {
   tiktok: 12 * 3_600_000,
   instagram: 7 * 86_400_000,
 };
-const metaMemory = new Map<string, FliqMeta>();
-const metaInflight = new Map<string, Promise<FliqMeta>>();
+type CachedMeta = { meta: FliqMeta; until: number };
+const metaCost = (value: FliqMeta, key: string) =>
+  (key.length + (value.title?.length || 0) + (value.author?.length || 0) + (value.thumb?.length || 0)) * 2 + 32;
+const metaMemory = new ExpiringLruCache<string, CachedMeta>({
+  maxEntries: 128, maxCost: 512 * 1024, ttlMs: RAM_TTL_MS,
+  cost: (value, key) => metaCost(value.meta, key), expiresAt: value => value.until,
+});
+const metadata = new MediaRequestQueue<FliqMeta>({
+  concurrency: 4, maxPending: 24, maxCost: 64 * 1024, timeoutMs: 15_000,
+});
+subscribeMemoryPressure(() => {
+  cacheGeneration++;
+  resolved.clear(); metaMemory.clear();
+  // Keep bounded in-flight consumers: mounted cards can still use their result.
+});
 
 function metaKey(link: FliqLink): string {
   return `${link.source}:${link.id || link.url}`;
 }
 
 export function peekFliqMeta(link: FliqLink): FliqMeta | undefined {
-  return metaMemory.get(metaKey(link));
+  return metaMemory.get(metaKey(link))?.meta;
+}
+
+function normalizeMeta(value: FliqMeta): FliqMeta {
+  return {
+    ...(typeof value?.title === 'string' ? { title: value.title } : {}),
+    ...(typeof value?.author === 'string' ? { author: value.author } : {}),
+    ...(typeof value?.thumb === 'string' ? { thumb: value.thumb } : {}),
+  };
 }
 
 type OEmbedMetadata = { title?: string; author_name?: string; thumbnail_url?: string };
 
-async function fetchJson(url: string, timeoutMs: number): Promise<OEmbedMetadata | null> {
-  const controller = new AbortController();
+async function fetchJson(url: string, controller: AbortController, timeoutMs: number): Promise<OEmbedMetadata | null> {
+  if (controller.signal.aborted) return null;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
-    if (!res.ok) return null;
-    return await res.json();
+    if (!res.ok || controller.signal.aborted) return null;
+    const json = await res.json();
+    return controller.signal.aborted ? null : json;
   } catch {
     return null;
   } finally {
@@ -188,35 +227,44 @@ async function fetchJson(url: string, timeoutMs: number): Promise<OEmbedMetadata
 export function fetchFliqMeta(link: FliqLink): Promise<FliqMeta> {
   const key = metaKey(link);
   const cached = metaMemory.get(key);
-  if (cached) return Promise.resolve(cached);
-  const inflight = metaInflight.get(key);
-  if (inflight) return inflight;
-
-  const run = (async (): Promise<FliqMeta> => {
+  if (cached) return Promise.resolve(cached.meta);
+  const generation = cacheGeneration;
+  return metadata.run(key, async (current, onExpire) => {
+    const controller = new AbortController();
+    onExpire(() => controller.abort());
     try {
       const raw = await AsyncStorage.getItem(META_PREFIX + key);
       const saved = raw ? JSON.parse(raw) : null;
-      if (saved?.meta && Date.now() - Number(saved.at || 0) < META_TTL_MS[link.source]) {
-        metaMemory.set(key, saved.meta);
-        return saved.meta as FliqMeta;
+      if (!current()) return {};
+      const at = Number(saved?.at || 0);
+      const until = at + META_TTL_MS[link.source];
+      if (saved?.meta && at > 0 && at <= Date.now() && until > Date.now()) {
+        const meta = normalizeMeta(saved.meta);
+        if (generation === cacheGeneration) {
+          metaMemory.set(key, { meta, until: Math.min(until, Date.now() + RAM_TTL_MS) });
+        }
+        return meta;
       }
     } catch {}
+    if (!current()) return {};
 
     let meta: FliqMeta = {};
     if (link.source === 'youtube') {
       const watch = encodeURIComponent(`https://www.youtube.com/watch?v=${link.id}`);
-      const json = await fetchJson(`https://www.youtube.com/oembed?url=${watch}&format=json`, 8000);
+      const json = await fetchJson(`https://www.youtube.com/oembed?url=${watch}&format=json`, controller, 8000);
       meta = { title: json?.title, author: json?.author_name, thumb: youtubeThumbUrl(link.id) };
     } else if (link.source === 'tiktok') {
-      const json = await fetchJson(`https://www.tiktok.com/oembed?url=${encodeURIComponent(link.url)}`, 8000);
+      const json = await fetchJson(`https://www.tiktok.com/oembed?url=${encodeURIComponent(link.url)}`, controller, 8000);
       meta = { title: json?.title, author: json?.author_name, thumb: json?.thumbnail_url };
     }
-    metaMemory.set(key, meta);
-    if (meta.title) {
+    meta = normalizeMeta(meta);
+    if (!current() || controller.signal.aborted) return meta;
+    if (generation === cacheGeneration) {
+      metaMemory.set(key, { meta, until: Date.now() + (meta.title ? RAM_TTL_MS : RETRY_TTL_MS) });
+    }
+    if (meta.title && metaCost(meta, key) <= 512 * 1024) {
       AsyncStorage.setItem(META_PREFIX + key, JSON.stringify({ at: Date.now(), meta })).catch(() => {});
     }
     return meta;
-  })().finally(() => metaInflight.delete(key));
-  metaInflight.set(key, run);
-  return run;
+  }, (key.length + link.url.length) * 2);
 }

@@ -1,5 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { logger } from './logger';
+import { ExpiringLruCache } from './expiringLruCache';
+import { subscribeMemoryPressure } from './memoryPressure';
+import { invalidateAvatarCaches, subscribeAvatarCacheInvalidation } from './avatarCacheInvalidation';
 
 const FULL = (id: string, v: number) => `avatar:${id}:ver:${v}`;
 const THUMB = (id: string, v: number) => `avatarThumb:${id}:ver:${v}`;
@@ -8,16 +11,20 @@ const THUMB = (id: string, v: number) => `avatarThumb:${id}:ver:${v}`;
  * Полные аватары, уже прочитанные в этой сессии: экран (шапка чата) берёт их сразу,
  * без асинхронного чтения и лишней перерисовки при открытии. Небольшой — последние N.
  */
-const FULL_MEM_LIMIT = 24;
-const fullMem = new Map<string, string>();
+const fullMem = new ExpiringLruCache<string, string>({
+  maxEntries: 24, maxCost: 8 * 1024 * 1024, ttlMs: 5 * 60 * 1000,
+  cost: (value, key) => (value.length + key.length) * 2,
+});
+let cacheGeneration = 0;
+let clearingAll = 0;
+const clearingUsers = new Map<string, number>();
+subscribeMemoryPressure(() => {
+  cacheGeneration++;
+  fullMem.clear();
+});
 
 function rememberFull(key: string, dataUri: string) {
-  fullMem.delete(key);
   fullMem.set(key, dataUri);
-  if (fullMem.size > FULL_MEM_LIMIT) {
-    const oldest = fullMem.keys().next().value;
-    if (oldest != null) fullMem.delete(oldest);
-  }
 }
 
 /**
@@ -32,12 +39,24 @@ export async function putFull(id: string, v: number, dataUri: string) {
  * Получить полный аватар (data URI)
  */
 export async function getFull(id: string, v: number) {
+  if (clearingAll || clearingUsers.has(id)) return null;
   const key = FULL(id, v);
   const mem = fullMem.get(key);
   if (mem) return mem;
-  const stored = await AsyncStorage.getItem(key);
-  if (stored) rememberFull(key, stored);
-  return stored;
+  const generation = cacheGeneration;
+  let deleted = false;
+  const unsubscribe = subscribeAvatarCacheInvalidation(userId => {
+    if (userId === undefined || userId === id) deleted = true;
+  });
+  try {
+    const stored = await AsyncStorage.getItem(key);
+    // A read begun before deletion must not bring the removed photo back.
+    if (deleted) return fullMem.get(key) ?? null;
+    const current = fullMem.get(key);
+    if (current) return current;
+    if (stored && generation === cacheGeneration) rememberFull(key, stored);
+    return stored;
+  } finally { unsubscribe(); }
 }
 
 /** Полный аватар, если он уже в памяти этой сессии, — синхронно; иначе null. */
@@ -57,6 +76,7 @@ export async function putThumb(id: string, v: number, dataUri: string) {
  * Получить миниатюру аватара (data URI)
  */
 async function getThumb(id: string, v: number) {
+  if (clearingAll || clearingUsers.has(id)) return null;
   return AsyncStorage.getItem(THUMB(id, v));
 }
 
@@ -64,9 +84,19 @@ async function getThumb(id: string, v: number) {
  * Очистка старых версий аватаров для конкретного пользователя
  */
 export async function clearAvatarCacheFor(id: string) {
-  const keys = await AsyncStorage.getAllKeys();
-  const mine = keys.filter(k => k.includes(`avatar:${id}:`) || k.includes(`avatarThumb:${id}:`));
-  if (mine.length) await AsyncStorage.multiRemove(mine);
+  clearingUsers.set(id, (clearingUsers.get(id) ?? 0) + 1);
+  cacheGeneration++;
+  for (const key of fullMem.keys()) if (key.startsWith(`avatar:${id}:`)) fullMem.delete(key);
+  invalidateAvatarCaches(id);
+  try {
+    const keys = await AsyncStorage.getAllKeys();
+    const mine = keys.filter(k => k.startsWith(`avatar:${id}:`) || k.startsWith(`avatarThumb:${id}:`));
+    if (mine.length) await AsyncStorage.multiRemove(mine);
+  } finally {
+    const remaining = (clearingUsers.get(id) ?? 1) - 1;
+    if (remaining) clearingUsers.set(id, remaining);
+    else clearingUsers.delete(id);
+  }
 }
 
 /**
@@ -109,6 +139,10 @@ export async function warmAvatar(userId: string, ver = 0) {
  * Очистить весь кэш аватаров
  */
 export async function clearAvatarCache() {
+  clearingAll++;
+  cacheGeneration++;
+  fullMem.clear();
+  invalidateAvatarCaches();
   try {
     const keys = await AsyncStorage.getAllKeys();
     const avatarKeys = keys.filter(k => k.startsWith('avatar:') || k.startsWith('avatarThumb:'));
@@ -117,5 +151,5 @@ export async function clearAvatarCache() {
     }
   } catch (e) {
     logger.warn('clearAvatarCache error:', e);
-  }
+  } finally { clearingAll--; }
 }
