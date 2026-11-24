@@ -122,6 +122,8 @@ const CUBE_BUBBLE_SWAP = [
 ];
 const ELEMENT_OFFSETS = {
   mic: [0, 312],
+  // Камера чуть левее, с прежними глубиной, размером и наклоном.
+  camera: [-20, 0],
   // Верхний правый куб частично уходит за кнопку короны.
   'cube-top': [176, -52],
   'cube-bottom': [-CUBE_BUBBLE_SWAP[0] - 32, -CUBE_BUBBLE_SWAP[1]],
