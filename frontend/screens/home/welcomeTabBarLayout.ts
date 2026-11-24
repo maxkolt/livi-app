@@ -10,6 +10,15 @@ export function welcomeTabBarBottomGap(insetBottom: number, _tabletLayout: boole
   return Math.max(controlInset, Platform.OS === 'android' ? 6 : 2) + floatGap;
 }
 
+/** Move only the visible dock: keep screen content at its established coordinates. */
+export function welcomeTabBarDockGap(insetBottom: number, reservedGap: number) {
+  if (Platform.OS !== 'android') return reservedGap;
+  const bottom = Math.max(0, insetBottom);
+  // Gesture areas are short; leave more room above the handle. A full button
+  // bar already supplies its own clearance, so the dock sits immediately above it.
+  return bottom + (bottom <= 24 ? 28 : 0);
+}
+
 /** Fixed geometry shared with HomeScreen, without a later layout correction. */
 export function welcomeTabBarContentHeight(tabletLayout: boolean, compactLandscape: boolean) {
   return tabletLayout ? 76 : compactLandscape ? 50.5 : 66.5;

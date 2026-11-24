@@ -7,7 +7,7 @@ import type { EdgeInsets } from 'react-native-safe-area-context';
 import { useHomeLayout } from './HomeLayoutContext';
 import { usesLargePhoneAvatar } from './phoneAvatarLayout';
 import { useStableSafeAreaInsets } from './useStableSafeAreaInsets';
-import { welcomeTabBarContentHeight, welcomeTabBarMetrics } from './welcomeTabBarLayout';
+import { welcomeTabBarContentHeight, welcomeTabBarMetrics, welcomeTabBarDockGap } from './welcomeTabBarLayout';
 export { welcomeTabBarBottomGap, welcomeTabBarContentHeight } from './welcomeTabBarLayout';
 import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { logger } from '../../utils/logger';
@@ -248,6 +248,7 @@ function HomeWelcomeTabBarInner({
   const compactLandscape =
     !tabletLayout && width > 0 && height > 0 && width / height > 1.05;
   const { bottomGap, contentHeight, smallPhonePortrait } = welcomeTabBarMetrics(width, height, insets.bottom);
+  const dockBottomGap = welcomeTabBarDockGap(insets.bottom, bottomGap);
   const rowOffsetY = smallPhonePortrait
     ? (contentHeight - welcomeTabBarContentHeight(tabletLayout, compactLandscape)) / 2 : 0;
   const iconSize = tabletLayout ? 29 : compactLandscape ? 24 : 26;
@@ -368,7 +369,7 @@ function HomeWelcomeTabBarInner({
         styles.shell,
         compactLandscape ? styles.shellLandscape : null,
         tabletLayout ? styles.shellTablet : null,
-        { marginHorizontal: shellMargin, marginBottom: bottomGap },
+        { marginHorizontal: shellMargin, marginBottom: dockBottomGap },
       ]}
       pointerEvents="box-none"
     >

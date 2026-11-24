@@ -10,7 +10,7 @@ jest.mock('./shared', () => ({ shared: {
 
 import { shared } from './shared';
 import { emitAck } from './emit';
-import { emitReauthDeduped, ensureReauthBeforePrivilegedSocketOp } from './reauth';
+import { emitReauthDeduped, ensureReauthBeforePrivilegedSocketOp, hasFreshPrivilegedSocketProof, hasPrivilegedSocketOwnershipProof } from './reauth';
 
 beforeEach(() => {
   mockSocket.connected = true; mockSocket.id = 'connection-1';
@@ -70,4 +70,32 @@ it('never reports a disconnected socket authenticated', async () => {
   mockSocket.connected = false;
   expect(await ensureReauthBeforePrivilegedSocketOp()).toBe(false);
   expect(emitAck).not.toHaveBeenCalled();
+});
+
+it('fresh proof is synchronously scoped to the live socket, user and expiry', async () => {
+  await ensureReauthBeforePrivilegedSocketOp();
+  expect(hasFreshPrivilegedSocketProof()).toBe(true);
+  shared.currentUserId = 'another-owner';
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+  shared.currentUserId = 'owner'; mockSocket.id = 'connection-2';
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+  mockSocket.id = 'connection-1'; shared.lastSuccessfulReauthAt = Date.now() - 6001;
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+  shared.lastSuccessfulReauthAt = Date.now() + 1000;
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+  shared.lastSuccessfulReauthAt = Date.now(); mockSocket.connected = false;
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+});
+
+it('keeps a live socket ownership binding after the freshness window, but never across reconnect/user change', async () => {
+  await ensureReauthBeforePrivilegedSocketOp();
+  shared.lastSuccessfulReauthAt = Date.now() - 30_000;
+  expect(hasFreshPrivilegedSocketProof()).toBe(false);
+  expect(hasPrivilegedSocketOwnershipProof()).toBe(true);
+  mockSocket.id = 'connection-2';
+  expect(hasPrivilegedSocketOwnershipProof()).toBe(false);
+  mockSocket.id = 'connection-1'; shared.currentUserId = 'another-owner';
+  expect(hasPrivilegedSocketOwnershipProof()).toBe(false);
+  shared.currentUserId = 'owner'; mockSocket.connected = false;
+  expect(hasPrivilegedSocketOwnershipProof()).toBe(false);
 });

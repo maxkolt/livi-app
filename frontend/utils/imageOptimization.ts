@@ -3,6 +3,7 @@ import { Image as ExpoImage, type ImageRef } from 'expo-image';
 import { Platform } from 'react-native';
 import { logger } from './logger';
 import { resolveDataUriForAndroid } from './dataUriToFileUri';
+import { subscribeMemoryPressure } from './memoryPressure';
 
 // Keep decoded, content-addressed avatar files available for a newly mounted row.
 // A raw picker file may be overwritten, so only our full-hash filenames are reusable.
@@ -12,6 +13,13 @@ const localWarmups = new Map<string, Promise<void>>();
 const localWaiters: Array<() => void> = [];
 let localLoads = 0;
 let cacheGeneration = 0;
+subscribeMemoryPressure(() => {
+  cacheGeneration++;
+  decodedAvatars.clear();
+  decodedAvatarPixels = 0;
+  // Keep disk files and visible image references. Only evict reconstructible RAM caches.
+  void ExpoImage.clearMemoryCache().catch(() => {});
+});
 
 async function decodeLocalImage(uri: string): Promise<void> {
   const generation = cacheGeneration;

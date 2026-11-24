@@ -5,8 +5,8 @@ interface IInstall {
   _id: Types.ObjectId;
   installId: string;
   user: Types.ObjectId;
-  /** HMAC hash of the installation secret. Legacy rows require cryptographic
-   * ownership proof before enrollment; an identifier alone cannot set a secret. */
+  /** HMAC hash set for a new installation. Existing rows are read as stored;
+   * an identifier alone cannot replace their secret or enroll an old record. */
   installSecretHash?: string;
   /** Когда секрет был перепривязан после переустановки приложения (см. isDeviceBoundInstallId). */
   secretRotatedAt?: Date;

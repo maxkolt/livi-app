@@ -375,21 +375,21 @@ export function clearIncomingAnswerNativeCover(): void {
 }
 
 /**
- * Снять нативную крышку accept, как только «Соединение…» нарисовано. Старая нативная
+ * Снять нативную крышку accept, как только настоящий VideoCall нарисован. Старая нативная
  * сборка метода не знает — тогда крышка просто живёт до VideoCall.onLayout, как раньше.
  */
-export function clearIncomingAnswerNativeCoverWhenContentDrawn(): void {
+export function clearIncomingAnswerNativeCoverWhenContentDrawn(callId?: string | null): void {
   if (Platform.OS !== 'android') return;
   try {
-    NativeModules.LiviAppModule?.clearIncomingAnswerNativeCoverWhenContentDrawn?.();
+    NativeModules.LiviAppModule?.clearIncomingAnswerNativeCoverWhenContentDrawn?.(callId || null);
   } catch {}
 }
 
 /** Показать нативную крышку accept без подъёма Main. */
-export function showIncomingAnswerNativeCover(): void {
+export function showIncomingAnswerNativeCover(callId?: string | null): void {
   if (Platform.OS !== 'android') return;
   try {
-    NativeModules.LiviAppModule?.showIncomingAnswerNativeCover?.();
+    NativeModules.LiviAppModule?.showIncomingAnswerNativeCover?.(callId || null);
   } catch {}
 }
 

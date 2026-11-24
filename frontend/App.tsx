@@ -8,9 +8,9 @@ import SplashLoader from "./components/SplashLoader";
 import { isIncomingAnswerUiReady, subscribeIncomingAnswerUiReady } from './utils/incomingAnswerUiReady';
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Provider as PaperProvider } from "react-native-paper";
-import { Platform } from "react-native";
+import { Platform, unstable_batchedUpdates } from "react-native";
 import { SystemBars } from 'react-native-edge-to-edge';
-import { SafeAreaProvider, initialWindowMetrics, useSafeAreaInsets } from "react-native-safe-area-context";
+import { SafeAreaProvider, initialWindowMetrics } from "react-native-safe-area-context";
 import { KeyboardProvider } from "react-native-keyboard-controller";
 import * as NavigationBar from "expo-navigation-bar";
 import { NavigationContainer, createNavigationContainerRef, CommonActions, DefaultTheme } from "@react-navigation/native";
@@ -36,8 +36,7 @@ import InCallManager from 'react-native-incall-manager';
 import { stopIncomingCallAlert } from './utils/incomingCallAlert';
 import HomeScreen, { markHomeScreenBootedForSession } from "./screens/HomeScreen";
 import { WELCOME_NAV_ACTIVE_ICON, WELCOME_STAGE_BG } from "./screens/home/constants";
-import { IncomingAnswerConnectingCover } from "./components/VideoChat/shared/IncomingAnswerConnectingCover";
-import { peekCallAvatar, peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
+import { peekCallNick, primeCallNick } from "./utils/callAvatarPrime";
 import IncomingShareHost from "./components/IncomingShareHost";
 import FliqViewerHost from "./screens/fliq/FliqViewerHost";
 import { AppDialogModal } from "./components/AppDialog";
@@ -194,7 +193,7 @@ import {
   navigateToVideoCallScreen,
 } from './utils/appNavigationGuard';
 import { readRootCurrentRouteName } from './utils/safeRootNavigation';
-import { prepareIncomingCallE2ee } from './sockets/modules/callE2ee';
+import { prepareIncomingCallAccept } from './sockets/modules/calls';
 import { ensureCallKeepAliveRunning } from './utils/callKeepAlive';
 
 // Импорт expo-keep-awake с безопасной загрузкой
@@ -484,7 +483,6 @@ function AppContent() {
   const pip = usePiP();
   const lang = useLang((s) => s.lang);
   const hydrateLang = useLang((s) => s.hydrate);
-  const insets = useSafeAreaInsets();
   React.useEffect(() => {
     installAppNavigationGuard();
     installActiveCallBackgroundAudioHandlers();
@@ -498,14 +496,10 @@ function AppContent() {
   /**
    * Полноэкранная крышка на время accept → VideoCall.
    * Иначе при bringMainActivityToFront / navigate мелькает предыдущий экран (Home/Chat).
-   * JS-слой = chrome «Соединение»; native solid снимается после paint контента.
+   * Native solid скрывает предыдущий экран только до paint настоящего VideoCall.
+   * Отдельного JS-экрана с заблокированными кнопками здесь нет.
    */
   const [incomingAnswerCover, setIncomingAnswerCover] = React.useState(false);
-  const [incomingAnswerCoverMeta, setIncomingAnswerCoverMeta] = React.useState<{
-    partnerName: string;
-    partnerUserId?: string;
-    partnerAvatarUri?: string;
-  } | null>(null);
   const incomingAnswerCoverClearTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const incomingAnswerCoverDisarmTimersRef = React.useRef<ReturnType<typeof setTimeout>[]>([]);
   const incomingAnswerCoverShownRef = React.useRef(false);
@@ -516,48 +510,13 @@ function AppContent() {
   const incomingAnswerCoverCallIdRef = React.useRef<string | null>(null);
   const incomingAnswerCoverFlushScheduledRef = React.useRef(false);
   const incomingAnswerNativeClearedForContentRef = React.useRef(false);
-  /** Звонящий: Main уже на экране — native solid снимаем, как только нарисовано «Соединение…». */
+  /** Native снимает фон после paint настоящего VideoCall. */
   const incomingAnswerCoverRevealEarlyRef = React.useRef(false);
   const incomingAnswerCoverGenRef = React.useRef(0);
   const incomingAnswerTransitionTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const returnFromNotifRetryTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
-  const resolveIncomingAnswerCoverMeta = React.useCallback(
-    (opts?: { partnerName?: string; peerUserId?: string }) => {
-      const peerUserId = String(
-        opts?.peerUserId ||
-          (global as AppRuntimeGlobals).__incomingAnswerPeerUserIdRef?.current ||
-          (global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerId ||
-          '',
-      ).trim();
-      let partnerName = String(opts?.partnerName || '').trim();
-      if (!partnerName) {
-        try {
-          partnerName =
-            String((global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerName || '').trim() ||
-            String((global as AppRuntimeGlobals).__outgoingCallPeerNickRef?.current || '').trim() ||
-            peekCallNick(peerUserId) ||
-            '';
-        } catch {
-          partnerName = peekCallNick(peerUserId) || '';
-        }
-      }
-      let partnerAvatarUri: string | undefined;
-      try {
-        partnerAvatarUri =
-          peekCallAvatar(peerUserId) ||
-          String((global as AppRuntimeGlobals).__currentCallPiPParamsRef?.current?.partnerAvatarUrl || '').trim() ||
-          undefined;
-      } catch {
-        partnerAvatarUri = peekCallAvatar(peerUserId);
-      }
-      return {
-        partnerName: partnerName || '—',
-        partnerAvatarUri: partnerAvatarUri || undefined,
-      };
-    },
-    [],
-  );
   const clearIncomingAnswerCover = React.useCallback(() => {
+    const readyCallId = incomingAnswerCoverUiReadyRef.current ? incomingAnswerCoverCallIdRef.current : null;
     if (incomingAnswerCoverClearTimerRef.current) {
       clearTimeout(incomingAnswerCoverClearTimerRef.current);
       incomingAnswerCoverClearTimerRef.current = null;
@@ -570,14 +529,15 @@ function AppContent() {
     // Идемпотентно: второй clear (remount onLayout) не должен снова бить native/perf.
     if (!incomingAnswerCoverShownRef.current) {
       setIncomingAnswerCover(false);
-      setIncomingAnswerCoverMeta(null);
       return;
     }
     incomingAnswerCoverShownRef.current = false;
     incomingAnswerNativeClearedForContentRef.current = false;
     setIncomingAnswerCover(false);
-    setIncomingAnswerCoverMeta(null);
-    try { clearIncomingAnswerNativeCover(); } catch {}
+    try {
+      if (readyCallId) clearIncomingAnswerNativeCoverWhenContentDrawn(readyCallId);
+      else clearIncomingAnswerNativeCover();
+    } catch {}
     try { markCallPerf('answer_cover_clear'); } catch {}
     // Audio UI готов: снять accept-guard и снова разрешить Home→system PiP.
     try {
@@ -592,8 +552,8 @@ function AppContent() {
     } catch {}
   }, []);
   /**
-   * После подъёма Main показываем уже нарисованное «Соединение…» обоим участникам.
-   * Native ждёт два кадра по nativeID; JS-крышка остаётся до layout самого VideoCall.
+   * После подъёма Main native ждёт paint настоящего VideoCall по call-scoped nativeID.
+   * Готовность соединения/медиа для показа интерфейса не требуется.
    * Проверки active + bringMain защищают принимающего от вспышки Home при смене задач.
    */
   const tryRevealIncomingAnswerConnectingCover = React.useCallback(() => {
@@ -601,7 +561,7 @@ function AppContent() {
     if (!incomingAnswerCoverBringMainDoneRef.current || AppState.currentState !== 'active') return;
     if (incomingAnswerNativeClearedForContentRef.current) return;
     incomingAnswerNativeClearedForContentRef.current = true;
-    try { clearIncomingAnswerNativeCoverWhenContentDrawn(); } catch {}
+    try { clearIncomingAnswerNativeCoverWhenContentDrawn(incomingAnswerCoverCallIdRef.current); } catch {}
     try { markCallPerf('answer_cover_native_clear_when_drawn'); } catch {}
   }, []);
   /**
@@ -629,14 +589,9 @@ function AppContent() {
       if (!incomingAnswerCoverShownRef.current) return;
       clearIncomingAnswerCover();
     };
-    // Два кадра после active+layout: первый кадр Main ещё может быть Home под крышкой.
-    if (typeof requestAnimationFrame === 'function') {
-      requestAnimationFrame(() => {
-        requestAnimationFrame(finish);
-      });
-    } else {
-      setTimeout(finish, 32);
-    }
+    // Native checks the real VideoCall view on its own frame loop. Do not wait
+    // for two more JS animation frames after its layout (media work can delay them).
+    void Promise.resolve().then(finish);
   }, [clearIncomingAnswerCover]);
   const markIncomingAnswerCoverBringMainDone = React.useCallback(() => {
     incomingAnswerCoverBringMainDoneRef.current = true;
@@ -670,10 +625,9 @@ function AppContent() {
     callId?: string;
     /** Android incoming: не снимать крышку до bringMain. */
     awaitBringMain?: boolean;
-    /** Показывать «Соединение…» после native paint, не ожидая VideoCall.onLayout. */
+    /** Разрешить native наблюдать paint VideoCall до доставки JS onLayout. */
     revealConnectingEarly?: boolean;
   }) => {
-    const meta = resolveIncomingAnswerCoverMeta(opts);
     if (opts?.peerUserId) {
       try {
         const g = global as AppRuntimeGlobals;
@@ -693,12 +647,11 @@ function AppContent() {
       try { clearTimeout(t); } catch {}
     }
     incomingAnswerCoverDisarmTimersRef.current = [];
-    setIncomingAnswerCoverMeta({ ...meta, partnerUserId: opts?.peerUserId });
     setIncomingAnswerCover(true);
     // Android: нативный фон сцены поверх RN до VideoCall.onLayout.
     // Раньше clear/disarm здесь снимал native до paint → вспышка Home/чатов.
     if (Platform.OS === 'android') {
-      try { showIncomingAnswerNativeCover(); } catch {}
+      try { showIncomingAnswerNativeCover(opts?.callId); } catch {}
     } else {
       try { clearIncomingAnswerNativeCover(); } catch {}
     }
@@ -724,11 +677,10 @@ function AppContent() {
       incomingAnswerNativeClearedForContentRef.current = false;
       incomingAnswerCoverRevealEarlyRef.current = false;
       setIncomingAnswerCover(false);
-      setIncomingAnswerCoverMeta(null);
       try { clearIncomingAnswerNativeCover(); } catch {}
       try { markCallPerf('answer_cover_timeout_clear', { timeoutMs: 8000 }); } catch {}
     }, 8000);
-  }, [resolveIncomingAnswerCoverMeta]);
+  }, []);
   React.useEffect(() => {
     return () => {
       if (incomingAnswerCoverClearTimerRef.current) {
@@ -1094,7 +1046,7 @@ function AppContent() {
       logger.warn('[App] Completing incoming answer ignored: empty callId', { from });
       return;
     }
-    return runAndroidIncomingAnswerInFlight(cid, async () => {
+    return runAndroidIncomingAnswerInFlight(cid, () => unstable_batchedUpdates(async () => {
       logger.info('[App] Completing incoming answer', { callId: cid, from, fromNick: fromNick || null });
       // Ответ нажат — звонок принят уже сейчас, до монтирования экрана и accept сессии.
       callLifecycle.accepted(cid, from, 'callee');
@@ -1209,7 +1161,7 @@ function AppContent() {
         }
         // JS-крышка снимается по сохранённому layout-сигналу конкретного VideoCall.
       }
-    });
+    }));
   }, [
     rememberExpectedCallAccepted,
     setIncomingAnswerTransitionGuard,
@@ -3113,7 +3065,7 @@ function AppContent() {
     }
     lastProcessedIncomingRef.current = callId ? { callId, at: now } : null;
     warmCallSignaling();
-    prepareIncomingCallE2ee(callId);
+    prepareIncomingCallAccept(callId);
 
     // КРИТИЧНО: Используем актуальное значение навигации напрямую, а не routeName (который обновляется асинхронно)
     // Fallback: если навигация не готова, разрешаем показать модалку (лучше показать, чем пропустить)
@@ -3955,7 +3907,7 @@ function AppContent() {
       } catch {}
     });
     // Если пришло accepted (ответили), синхронно открываем VideoCall у обоих
-    const onAccepted = onCallAccepted?.((data) => {
+    const onAccepted = onCallAccepted?.((data) => unstable_batchedUpdates(() => {
       logger.info('[App] 📥 call:accepted received in App.tsx', {
         callId: data?.callId,
         from: data?.from,
@@ -4212,27 +4164,6 @@ function AppContent() {
         markCallPerf('caller_outgoing_js_shell_closed_early', { callId });
       }
 
-      prefetchDirectCallIce(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
-      // Mic prewarm и для video: connect быстрее с уже живым track.
-      if (Platform.OS === 'android') {
-        prewarmDirectCallAudioCapture(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
-      }
-
-      if (hasLivekitAcceptPayload && callId) {
-        try {
-          bootstrapEarlyDirectCallSession({
-            callId,
-            peerUserId: peerUserId || null,
-            isCaller,
-            partnerNick: callerPartnerNickEarly,
-          });
-        } catch (earlyErr) {
-          logger.warn('[App] earlyDirectCallSession bootstrap failed', {
-            callId,
-            error: (earlyErr as Error)?.message || String(earlyErr),
-          });
-        }
-      }
       
       try { setIncomingCallScreenVisible(false); } catch {}
       stopIncomingCallAlert();
@@ -4523,7 +4454,31 @@ function AppContent() {
         });
         try { bringMainActivityToFront(); } catch {}
       }
-    });
+      // Dispatch the accepted-call UI before prewarming routes/tracks or creating
+      // an early media session. Room connection must not hold the outgoing shell.
+      prefetchDirectCallIce(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
+      // Mic prewarm и для video: connect быстрее с уже живым track.
+      if (Platform.OS === 'android') {
+        prewarmDirectCallAudioCapture(isCaller ? 'app:call-accepted:caller' : 'app:call-accepted:callee');
+      }
+
+      if (hasLivekitAcceptPayload && callId) {
+        try {
+          bootstrapEarlyDirectCallSession({
+            callId,
+            peerUserId: peerUserId || null,
+            isCaller,
+            partnerNick: callerPartnerNickEarly,
+          });
+        } catch (earlyErr) {
+          logger.warn('[App] earlyDirectCallSession bootstrap failed', {
+            callId,
+            error: (earlyErr as Error)?.message || String(earlyErr),
+          });
+        }
+      }
+
+    }));
     // Обработчик таймаута
     const offTimeout = onCallTimeout?.(async (d) => {
       const callId = String((d)?.callId || '');
@@ -4729,30 +4684,6 @@ function AppContent() {
             </NotificationAwareStack>
           </NavigationContainer>
         </BlurListSource>
-
-          {/* Accept → VideoCall: chrome «Соединение» вместо пустой шторки; native solid до paint. */}
-          {incomingAnswerCover ? (
-            <IncomingAnswerConnectingCover
-              partnerName={incomingAnswerCoverMeta?.partnerName || '—'}
-              partnerUserId={incomingAnswerCoverMeta?.partnerUserId}
-              partnerAvatarUri={incomingAnswerCoverMeta?.partnerAvatarUri}
-              statusLine={t('audioCallConnecting', lang)}
-              moreLabel={t('tabMore', lang)}
-              cameraLabel={t('callCamera', lang)}
-              micLabel={t('microphone', lang)}
-              endLabel={t('endCall', lang)}
-              speakerLabel={t('callSpeakerOn', lang)}
-              topInset={insets.top}
-              bottomInset={insets.bottom}
-              leftInset={insets.left}
-              rightInset={insets.right}
-              // Не снимаем native здесь: ConnectingCover может быть готов пока Main ещё
-              // в background / под Incoming — тогда clear → вспышка предыдущего экрана.
-              onContentReady={() => {
-                tryFlushIncomingAnswerCover();
-              }}
-            />
-          ) : null}
 
           {/* In-app PiP не показывается на экране видеозвонка (VideoCall/RandomChat) — только на Home и др. */}
           <PiPOverlay currentRouteName={routeName} />

@@ -69,6 +69,7 @@ function VideoNoteRecorderLayer({
   useEffect(() => {
     handleRef.current = {
       stop: () => {
+        if (stoppedRef.current || finishedRef.current) return;
         stoppedRef.current = true;
         if (startedRef.current) {
           try {
@@ -84,7 +85,8 @@ function VideoNoteRecorderLayer({
     return () => {
       handleRef.current = null;
       // Слой убрали посреди записи — камера остановится сама, файл не нужен.
-      if (startedRef.current && !finishedRef.current) {
+      if (startedRef.current && !finishedRef.current && !stoppedRef.current) {
+        stoppedRef.current = true;
         try {
           cameraRef.current?.stopRecording();
         } catch {}

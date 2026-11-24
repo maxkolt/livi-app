@@ -15,6 +15,9 @@
 //
 // Фон — «эмбиент» (FliqAmbient): свет от ролика вокруг карточки и тон всего экрана.
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from 'react';
+import { FliqThumbnail } from './FliqThumbnail';
+import { useMemoryPressureRevision } from '../../utils/memoryPressure';
+import { appendFliqWindow, FLIQ_KEEP_PLAYERS_MS, FLIQ_PREWARM_TTL_MS, shouldMountFliqPlayer } from './fliqResourcePolicy';
 import {
   ActivityIndicator,
   Animated,
@@ -30,7 +33,6 @@ import {
   type NativeSyntheticEvent,
   type ViewToken,
 } from 'react-native';
-import { Image as ExpoImage } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Path, Rect } from 'react-native-svg';
 import type { Lang } from '../../utils/i18n';
@@ -83,9 +85,9 @@ import { FliqSavedView } from './FliqSavedView';
 import { useFliqSaved } from './fliqSaved';
 
 /** Сколько держать плееры после ухода с вкладки (вернулся быстро — ролик на месте). */
-const KEEP_PLAYERS_MS = 30_000;
+const KEEP_PLAYERS_MS = FLIQ_KEEP_PLAYERS_MS;
 /** Человек сам остановил ролик — кадр держим дольше, чтобы вернуться ровно к нему. */
-const KEEP_HELD_PLAYERS_MS = 10 * 60_000;
+const KEEP_HELD_PLAYERS_MS = FLIQ_KEEP_PLAYERS_MS;
 const PAGE_SIZE = 10;
 const CARD_RADIUS = 22;
 /** Свет вокруг рамки перетекает к въезжающему ролику, когда тот занял эту долю рамки. */
@@ -175,6 +177,12 @@ export function FliqFeedView({
   // prewarming одноразовый: после первого реального входа обычные правила паузы/выгрузки
   // снова действуют и скрытая вкладка не держит WebView бесконечно.
   const [prewarming, setPrewarming] = useState(prewarm && !active);
+  const memoryPressure = useMemoryPressureRevision();
+  const [constrained, setConstrained] = useState(false);
+  const activePaneRef = useRef(active);
+  activePaneRef.current = active;
+  const cardHeightRef = useRef(0);
+  const rebasingRef = useRef(false);
   const prewarmingRef = useRef(prewarming);
   prewarmingRef.current = prewarming;
   const prewarmSettledRef = useRef(false);
@@ -237,6 +245,25 @@ export function FliqFeedView({
   useEffect(() => {
     if (active && prewarming) setPrewarming(false);
   }, [active, prewarming]);
+
+  useEffect(() => {
+    if (!memoryPressure) return;
+    setConstrained(true);
+    setPrewarming(false);
+    if (!activePaneRef.current) setKeepPlayers(false);
+  }, [memoryPressure]);
+
+  useEffect(() => {
+    // A fresh visit may prebuffer one neighbour again. Background trimming must
+    // not permanently disable smooth swiping for the rest of the session.
+    if (active) setConstrained(false);
+  }, [active]);
+
+  useEffect(() => {
+    if (!prewarming) return;
+    const timer = setTimeout(() => setPrewarming(false), FLIQ_PREWARM_TTL_MS);
+    return () => clearTimeout(timer);
+  }, [prewarming]);
 
   useEffect(() => {
     if (!prewarming) return;
@@ -313,10 +340,22 @@ export function FliqFeedView({
         applyFirstPage(res.items);
         return;
       }
-      setItems((prev) => {
-        const have = new Set(prev.map((it) => it.id));
-        return prev.concat(res.items.filter((it) => !have.has(it.id)));
-      });
+      const next = appendFliqWindow(itemsRef.current, res.items, activeIndexRef.current);
+      itemsRef.current = next.items;
+      activeIndexRef.current = next.index;
+      setItems(next.items);
+      if (next.dropped) {
+        rebasingRef.current = true;
+        setActiveIndex(next.index);
+        const ids = new Set(next.items.map(item => item.id));
+        for (const id of positionRef.current.keys()) if (!ids.has(id)) positionRef.current.delete(id);
+        for (const id of watchRef.current.keys()) if (!ids.has(id)) watchRef.current.delete(id);
+        setBufferedIds(prev => new Set([...prev].filter(id => ids.has(id))));
+        requestAnimationFrame(() => {
+          listRef.current?.scrollToOffset({ offset: next.index * cardHeightRef.current, animated: false });
+          requestAnimationFrame(() => { rebasingRef.current = false; });
+        });
+      }
     },
     [lang, topics, applyFirstPage],
   );
@@ -367,6 +406,7 @@ export function FliqFeedView({
   );
 
   const onViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: ViewToken[] }) => {
+    if (rebasingRef.current) return;
     const first = viewableItems.find((v) => v.isViewable && typeof v.index === 'number');
     if (!first || first.index == null || first.index === activeIndexRef.current) return;
     const prevId = itemsRef.current[activeIndexRef.current]?.id;
@@ -576,6 +616,7 @@ export function FliqFeedView({
   const cardHpx = wide ? cardMaxHpx : Math.floor((cardWpx * 16) / 9);
   const cardW = cardWpx / px;
   const cardH = cardHpx / px;
+  cardHeightRef.current = cardH;
   // Поворот меняет высоту карточки (шаг ленты), а смещение ленты остаётся старым — ролик
   // съезжал между страницами. Возвращаем ленту ровно на текущий ролик.
   useEffect(() => {
@@ -640,7 +681,6 @@ export function FliqFeedView({
       const mode: FliqPlayMode =
         !playbackOn || offset !== 0 ? 'pause' : heldId === item.id ? 'hold' : 'play';
       const activeId = items[activeIndex]?.id;
-      const nextId = items[activeIndex + 1]?.id;
       const mayPrebuffer = playbackOn && !!activeId && heldId !== activeId && runningId === activeId;
       const prewarmCurrent = prewarming && offset === 0 && startedId == null;
       return (
@@ -657,12 +697,12 @@ export function FliqFeedView({
             keepPlayers &&
             (prewarming
               ? offset === 0
-              : offset === 0 || (neighborsOn && offset >= -1 && offset <= 2))
+              : shouldMountFliqPlayer(offset, false, neighborsOn, constrained))
           }
           mode={mode}
           prebuffer={
             prewarmCurrent ||
-            (mayPrebuffer && (offset === 1 || (offset === 2 && !!nextId && bufferedIds.has(nextId))))
+            (mayPrebuffer && offset === 1)
           }
           // Для первого входа достаточно секунды реального потока: WebView/API — основная
           // задержка, а короткий медиазапас уже убирает ожидание кадра после тапа.
@@ -691,6 +731,7 @@ export function FliqFeedView({
       markChainReady,
       bufferedIds,
       neighborsOn,
+      constrained,
       prewarming,
       startedId,
       runningId,
@@ -950,8 +991,8 @@ const FliqUnderDeck = memo(function FliqUnderDeck({
         <View style={{ position: 'absolute', left: 0, top: from * cardH, width, height: (to - from + 1) * cardH }}>
           {items.slice(from, to + 1).map((it, k) => (
             <View key={it.id} style={[styles.underDeckCard, { top: k * cardH, width, height: cardH }]}>
-              <ExpoImage
-                source={{ uri: youtubeThumbUrl(it.id) }}
+              <FliqThumbnail
+                uri={youtubeThumbUrl(it.id)}
                 style={StyleSheet.absoluteFill}
                 contentFit="cover"
                 cachePolicy="memory-disk"
@@ -1032,6 +1073,7 @@ const FliqSlide = memo(function FliqSlide({
   const [primed, setPrimed] = useState(false);
   const [retryKey, setRetryKey] = useState(0);
   const coverOpacity = useRef(new Animated.Value(1)).current;
+  useEffect(() => () => coverOpacity.stopAnimation(), [coverOpacity]);
   // Замеры: от появления плеера до готовности, подгрузки и первого кадра.
   const timingRef = useRef({ mountAt: 0, readyMs: 0, bufferedMs: 0, playAt: 0 });
   const playing = mode === 'play';
@@ -1152,8 +1194,8 @@ const FliqSlide = memo(function FliqSlide({
     <View style={[{ width: boxW, height: cardH }, wide && styles.cardWide]}>
       {wide ? (
         <>
-          <ExpoImage
-            source={{ uri: youtubeThumbUrl(item.id) }}
+          <FliqThumbnail
+            uri={youtubeThumbUrl(item.id)}
             style={StyleSheet.absoluteFill}
             contentFit="cover"
             cachePolicy="memory-disk"
@@ -1164,8 +1206,8 @@ const FliqSlide = memo(function FliqSlide({
         </>
       ) : null}
       <View style={wide ? { width: cardW, height: cardH } : StyleSheet.absoluteFill}>
-        <ExpoImage
-          source={{ uri: youtubeThumbUrl(item.id) }}
+        <FliqThumbnail
+          uri={youtubeThumbUrl(item.id)}
           style={StyleSheet.absoluteFill}
           contentFit="cover"
           cachePolicy="memory-disk"
@@ -1206,8 +1248,8 @@ const FliqSlide = memo(function FliqSlide({
             идущего ролика. */}
         <View pointerEvents="none" style={[StyleSheet.absoluteFill, { opacity: warmOnScreen ? 0 : 1 }]}>
           <Animated.View style={[StyleSheet.absoluteFill, { opacity: coverOpacity }]}>
-            <ExpoImage
-              source={{ uri: youtubeThumbUrl(item.id) }}
+            <FliqThumbnail
+              uri={youtubeThumbUrl(item.id)}
               style={StyleSheet.absoluteFill}
               contentFit="cover"
               cachePolicy="memory-disk"

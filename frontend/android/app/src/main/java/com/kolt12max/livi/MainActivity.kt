@@ -282,9 +282,15 @@ class MainActivity : ReactActivity() {
    * Нужна при подъёме Main раньше JS ConnectingCover.
    */
   private var incomingAnswerCoverView: View? = null
+  private var incomingAnswerCallId: String? = null
+  private var incomingAnswerCoverGeneration = 0
+  private var incomingAnswerRevealScheduled = false
 
-  fun showIncomingAnswerCover() {
+  fun showIncomingAnswerCover(callId: String? = null) {
     try {
+      if (!callId.isNullOrBlank()) incomingAnswerCallId = callId.trim()
+      incomingAnswerCoverGeneration++
+      incomingAnswerRevealScheduled = false
       armIncomingAnswerCover = true
       // Incoming/Outgoing is another task. Its handoff is not a Home gesture.
       if (!isInPictureInPictureMode) {
@@ -292,7 +298,6 @@ class MainActivity : ReactActivity() {
         hideSystemPiPBackdropForCapture()
         syncSystemPiPAutoEnterParams(false)
       }
-      ReactFindViewUtil.removeViewListener(answerContentListener)
       val decor = window?.decorView as? ViewGroup ?: return
       val cover = incomingAnswerCoverView ?: run {
         val frame = android.widget.FrameLayout(this).apply {
@@ -311,9 +316,13 @@ class MainActivity : ReactActivity() {
         incomingAnswerCoverView = frame
         frame
       }
+      cover.animate().cancel()
+      cover.alpha = 1f
+      cover.isClickable = true
       cover.visibility = View.VISIBLE
       cover.bringToFront()
       decor.requestLayout()
+      hideIncomingAnswerCoverWhenContentDrawn()
       try {
         overridePendingTransition(0, 0)
       } catch (_: Exception) {}
@@ -324,53 +333,51 @@ class MainActivity : ReactActivity() {
 
   fun hideIncomingAnswerCover() {
     try {
+      incomingAnswerCoverGeneration++
+      incomingAnswerRevealScheduled = false
       armIncomingAnswerCover = false
-      ReactFindViewUtil.removeViewListener(answerContentListener)
+      incomingAnswerCoverView?.animate()?.cancel()
       incomingAnswerCoverView?.visibility = View.GONE
+      incomingAnswerCoverView?.alpha = 1f
     } catch (e: Exception) {
       android.util.Log.w("MainActivity", "hideIncomingAnswerCover failed", e)
     }
   }
 
-  /**
-   * Звонящий: крышку снимаем, как только «Соединение…» (nativeID в IncomingAnswerConnectingCover)
-   * реально нарисовано, — не дожидаясь JS: он ещё ~3 с занят подключением, а по commit из JS
-   * рано — UI-поток ещё создаёт VideoCall, и под снятой крышкой мелькал прошлый экран.
-   */
-  private val answerContentListener = object : ReactFindViewUtil.OnViewFoundListener {
-    override fun getNativeId(): String = ANSWER_CONTENT_NATIVE_ID
-    override fun onViewFound(view: View) {
-      hideIncomingAnswerCoverWhenDrawn(view, 0, 0)
+  /** Only the real subtree draw on the top native-stack screen may reveal the call. */
+  private fun revealDrawnCallContent(callId: String?, view: CallContentView) {
+    val cover = incomingAnswerCoverView ?: return
+    if (callId.isNullOrBlank() || callId != incomingAnswerCallId ||
+        cover.visibility != View.VISIBLE || incomingAnswerRevealScheduled ||
+        !isInForeground || !view.isTopCallContent()) return
+    val generation = incomingAnswerCoverGeneration
+    incomingAnswerRevealScheduled = true
+    // dispatchDraw has finished; reveal on the next native frame, independent of JS/media.
+    view.postOnAnimation {
+      if (generation != incomingAnswerCoverGeneration) return@postOnAnimation
+      if (!isInForeground || !view.isTopCallContent() || callId != view.callId || callId != incomingAnswerCallId) {
+        incomingAnswerRevealScheduled = false
+        view.invalidate()
+        return@postOnAnimation
+      }
+      android.util.Log.i("MainActivity", "answer_cover_real_content_drawn callId=$callId generation=$generation")
+      cover.isClickable = false
+      cover.animate().alpha(0f).setDuration(140L).withEndAction {
+        if (generation == incomingAnswerCoverGeneration) hideIncomingAnswerCover()
+      }.start()
     }
   }
 
-  private fun hideIncomingAnswerCoverWhenDrawn(view: View, readyFrames: Int, waited: Int) {
-    if (incomingAnswerCoverView?.visibility != View.VISIBLE) return
-    android.view.Choreographer.getInstance().postFrameCallback {
-      val ready = view.isAttachedToWindow && view.isShown && view.width > 0 && view.height > 0
-      val nextReady = if (ready) readyFrames + 1 else 0
-      // Два кадра подряд на экране: «Соединение…» уже нарисовано под крышкой.
-      if (nextReady >= 2) {
-        hideIncomingAnswerCover()
-      } else if (waited < 180) {
-        hideIncomingAnswerCoverWhenDrawn(view, nextReady, waited + 1)
-      }
+  fun hideIncomingAnswerCoverWhenContentDrawn(callId: String? = null) {
+    if (!callId.isNullOrBlank() && callId.trim() != incomingAnswerCallId) {
+      incomingAnswerCallId = callId.trim()
+      incomingAnswerCoverGeneration++
+      incomingAnswerRevealScheduled = false
     }
-  }
-
-  fun hideIncomingAnswerCoverWhenContentDrawn() {
-    try {
-      val decor = window?.decorView as? ViewGroup ?: return
-      ReactFindViewUtil.removeViewListener(answerContentListener)
-      val existing = ReactFindViewUtil.findView(decor, ANSWER_CONTENT_NATIVE_ID)
-      if (existing != null) {
-        hideIncomingAnswerCoverWhenDrawn(existing, 0, 0)
-      } else {
-        ReactFindViewUtil.addViewListener(answerContentListener)
-      }
-    } catch (e: Exception) {
-      android.util.Log.w("MainActivity", "hideIncomingAnswerCoverWhenContentDrawn failed", e)
-    }
+    val id = incomingAnswerCallId ?: return
+    val decor = window?.decorView as? ViewGroup ?: return
+    // Never hide from geometry alone. Ask the actual draw boundary for a new frame.
+    ReactFindViewUtil.findView(decor, "$ANSWER_CONTENT_NATIVE_ID-$id")?.invalidate()
   }
 
   /**
@@ -1617,6 +1624,7 @@ class MainActivity : ReactActivity() {
   }
 
   override fun onDestroy() {
+    incomingAnswerCoverGeneration++
     notificationLaunchReady = true
     removeNotificationSystemSplash?.invoke()
     removeNotificationSystemSplash = null
@@ -1940,11 +1948,11 @@ class MainActivity : ReactActivity() {
     var armIncomingAnswerCover: Boolean = false
 
     @JvmStatic
-    fun showIncomingAnswerCoverOnMainIfPossible() {
+    fun showIncomingAnswerCoverOnMainIfPossible(callId: String? = null) {
       armIncomingAnswerCover = true
-      val act = lastResumedInstance
+      val act = liveInstance ?: lastResumedInstance
       if (act != null && !act.isFinishing && !act.isDestroyed) {
-        act.runOnUiThread { act.showIncomingAnswerCover() }
+        act.runOnUiThread { act.showIncomingAnswerCover(callId) }
       }
     }
 
@@ -1961,14 +1969,25 @@ class MainActivity : ReactActivity() {
       }
     }
 
-    /** nativeID корня «Соединение…» (IncomingAnswerConnectingCover). */
-    private const val ANSWER_CONTENT_NATIVE_ID = "incoming-answer-connecting-cover"
+    internal fun onIncomingCallContentDrawn(callId: String?, view: CallContentView) {
+      val act = liveInstance ?: return
+      act.revealDrawnCallContent(callId, view)
+    }
+
+    internal fun isWaitingForIncomingCallContent(callId: String?): Boolean {
+      val act = liveInstance ?: return false
+      return !callId.isNullOrBlank() && callId == act.incomingAnswerCallId &&
+        act.incomingAnswerCoverView?.visibility == View.VISIBLE && !act.incomingAnswerRevealScheduled
+    }
+
+    /** Actual VideoCall native view, suffixed with its call ID. */
+    private const val ANSWER_CONTENT_NATIVE_ID = "incoming-answer-call-content"
 
     @JvmStatic
-    fun hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible() {
-      val act = lastResumedInstance
+    fun hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible(callId: String? = null) {
+      val act = liveInstance ?: lastResumedInstance
       if (act != null && !act.isFinishing && !act.isDestroyed) {
-        act.runOnUiThread { act.hideIncomingAnswerCoverWhenContentDrawn() }
+        act.runOnUiThread { act.hideIncomingAnswerCoverWhenContentDrawn(callId) }
       }
     }
 

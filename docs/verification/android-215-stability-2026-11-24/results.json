@@ -1,0 +1,435 @@
+{
+  "versionCode": 215,
+  "versionName": "1.1.24",
+  "published": false,
+  "artifacts": {
+    "aab": {
+      "path": "frontend/android/app/build/outputs/bundle/release/app-release.aab",
+      "sha256": "8acf443e3af7f6b680231c266f44da506e671e8b7671a1885f92628e8939e0c4",
+      "bytes": 127453186
+    },
+    "releaseApk": {
+      "path": "frontend/android/app/build/outputs/apk/release/app-release.apk",
+      "sha256": "a5382dfc04ed1e92b2f3f5d132d601c0272e00b786f2661f33ec8bdf3ff066ae",
+      "bytes": 102476169
+    },
+    "devApk": {
+      "path": "frontend/android/app/build/outputs/apk/debug/app-debug.apk",
+      "sha256": "91bb8d70415d5fc411e7b0c13462c0494d078787f1f4c9aa8375acd3a63d853e",
+      "bytes": 139819375
+    }
+  },
+  "releaseHermesSha256": "cba2330f8429eae398538da02945116d9a22d94dbe274487040893a17d57975e",
+  "releaseApkMatchesAab": true,
+  "checkedProjectSources": 419,
+  "sourceMapMismatches": [],
+  "frontend": {
+    "suites": 179,
+    "tests": 1710,
+    "skipped": 0,
+    "passed": true
+  },
+  "backend": {
+    "passedSuites": 42,
+    "passedTests": 308,
+    "skippedMongoSuites": 3,
+    "skippedMongoTests": 44,
+    "newDatabaseCreated": false
+  },
+  "kotlin": {
+    "suites": 7,
+    "tests": 23,
+    "failures": 0,
+    "errors": 0,
+    "skipped": 0
+  },
+  "typecheck": "frontend/backend passed",
+  "eslint": "frontend/backend passed",
+  "bundletoolValidate": "passed",
+  "manualAcceptance": "user accepted final call-transition UI and photo layout; memory, Skia teardown and full release matrix remain separately documented",
+  "memoryReductionVerified": false,
+  "devInstalled": [
+    "R5GL550T4TB",
+    "RFCX306PWLE"
+  ],
+  "captureDirectory": "/private/tmp/livi-215-fixes-20261124/dev-session-no-migration",
+  "elf16KiBLibraries": 48,
+  "uploadSignatureUnchanged": true,
+  "sourceHashesFile": "/private/tmp/livi-215-fixes-20261124/source-hashes-no-migration.json",
+  "diagnosticCollectorSelfcheck": "both devices passed",
+  "remainingStartupWarnings": [
+    "User reports VPN was disconnected; repeat Fliq/push acceptance with VPN"
+  ],
+  "legacyEnrollmentRemoved": true,
+  "friendshipMigrationRemoved": true,
+  "existingHashRewriteRemoved": true,
+  "backendSourcePrepared": true,
+  "backendProductionDeployed": false,
+  "serverDatabaseTouched": false,
+  "localTemporaryApplicationDatabasesRemoved": 17,
+  "stoppedTestEngineDirectoriesRemoved": 12,
+  "networkAcceptance": "user reports VPN was disconnected; retest with VPN",
+  "builtAt": "2026-11-24T15:46:46.485434+00:00",
+  "finalDevStartup": {
+    "R5GL550T4TB": {
+      "pid": "21701",
+      "versionCode": 215,
+      "at": "2026-11-24T13:20:22.160883+00:00",
+      "counts": {
+        "FATAL EXCEPTION": 0,
+        "SkiaScreenshot": 0,
+        "LegacySurfaceTexture": 0,
+        "EGLConsumer is not attached": 0,
+        "Invariant Violation": 0,
+        "identity/migration": 0
+      }
+    },
+    "RFCX306PWLE": {
+      "pid": "31046",
+      "versionCode": 215,
+      "at": "2026-11-24T13:20:26.935620+00:00",
+      "counts": {
+        "FATAL EXCEPTION": 0,
+        "SkiaScreenshot": 0,
+        "LegacySurfaceTexture": 0,
+        "EGLConsumer is not attached": 0,
+        "Invariant Violation": 0,
+        "identity/migration": 0
+      }
+    }
+  },
+  "navigationAdjustment": {
+    "gestureDockExtraGapDp": 28,
+    "systemButtonDockExtraGapDp": 0,
+    "systemButtonSearchCtaDropDp": 6,
+    "gestureSearchCtaDropDp": 18,
+    "smallBottomCubeRemoved": true,
+    "targetedSuites": 3,
+    "targetedTests": 26,
+    "passed": true
+  },
+  "observedDevNativeCrash": {
+    "device": "RFCX306PWLE",
+    "atLocal": "2026-11-24 16:26:12 Europe/Moscow",
+    "library": "librnskia.so",
+    "frame": "facebook::jsi::Pointer::~Pointer / RNJsi::JsiPromises::Promise::~Promise",
+    "causeConfirmed": true,
+    "releaseReproduced": false,
+    "evidence": "/private/tmp/livi-215-nav-lower-20261124/RFCX306PWLE-crash-buffer.txt",
+    "signalAtLocal": "2026-11-24 16:26:11.197 Europe/Moscow",
+    "cause": "fromURI detached loader retains Promise JSI functions past runtime destruction; failed load destroys stale Promise",
+    "trigger": "i.ytimg.com connection failure after dev runtime reload",
+    "matchingBuildId": "e1396a75ea0da6bfcbece82a0d52315eebc72d5e",
+    "symbolicatedSkiaFrames": 26,
+    "fixed": false,
+    "report": "docs/verification/android-215-stability-2026-11-24/skia-crash-analysis.md"
+  },
+  "profileBottomGap": {
+    "followsVisibleDock": true,
+    "usesSectionGap": true,
+    "targetedSuites": 4,
+    "targetedTests": 77,
+    "typecheckPassed": true,
+    "eslintPassed": true,
+    "deviceScreenshot": "/private/tmp/livi-215-nav-lower-20261124/RFCX306PWLE-profile-gap-current.png",
+    "verifiedDevice": "RFCX306PWLE",
+    "gapApproxDp": 14
+  },
+  "profileColdStart": {
+    "device": "R5GL550T4TB",
+    "coldStartRuns": {
+      "before": {
+        "pid": "12486",
+        "profileFrames": 16,
+        "firstFrameSeconds": 6.904144444444444,
+        "lastFrameSeconds": 37.99946666666666,
+        "cardTopVideoPx": [
+          381,
+          408
+        ],
+        "shiftScreenPx": 54
+      },
+      "after": {
+        "pid": "13579",
+        "profileFrames": 131,
+        "firstFrameSeconds": 9.777944444444444,
+        "lastFrameSeconds": 40.07361111111111,
+        "cardTopVideoPx": [
+          381
+        ],
+        "shiftScreenPx": 0
+      },
+      "after-repeat": {
+        "pid": "15173",
+        "profileFrames": 16,
+        "firstFrameSeconds": 6.7319,
+        "lastFrameSeconds": 38.484544444444445,
+        "cardTopVideoPx": [
+          381
+        ],
+        "shiftScreenPx": 0
+      }
+    },
+    "targetedSuites": 4,
+    "targetedTests": 77,
+    "typecheck": true,
+    "eslint": true,
+    "evidence": "/private/tmp/livi-215-profile-cold-20261124",
+    "devAccepted": true,
+    "releaseColdStartChecked": false
+  },
+  "finalManualSession": {
+    "collectorStopped": true,
+    "logErrors": [],
+    "captureSamples": {
+      "R5GL550T4TB": 160,
+      "RFCX306PWLE": 159
+    },
+    "devices": {
+      "R5GL550T4TB": {
+        "pid": 16367,
+        "samples": 25,
+        "counts": {
+          "FATAL EXCEPTION": 0,
+          "Fatal signal": 0,
+          "OutOfMemoryError": 0,
+          "Invariant Violation": 0,
+          "TypeError": 0,
+          "ReferenceError": 0,
+          "SkiaScreenshot": 0,
+          "LegacySurfaceTexture": 0,
+          "EGLConsumer is not attached": 0,
+          "MediaStreamTrack has been disposed": 0,
+          "CameraAccessException": 0
+        },
+        "peakPssKiB": 2024193,
+        "finalPssKiB": 1763483,
+        "audioMode": "mAudioModeOwner: AudioModeInfo: mMode=MODE_NORMAL, mPid=0, mUid=0",
+        "activeCallForegroundService": false,
+        "activeIncomingForegroundService": false,
+        "activeOutgoingForegroundService": false,
+        "cameraClientBlock": "Active Camera Clients:\n[]\nAllowed user IDs: 0\n\n== Camera service events log (most recent at top): ==\n  11-24 17:09:13 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 16367)\n  11-24 17:07:58 : CONNECT device 1 client for package com.kolt12max.livi.dev (PID 16367, priority 0)\n  11-24 17:06:21 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 16367)\n  11-24 17:06:12 : CONNECT device 1 client for package com.ko"
+      },
+      "RFCX306PWLE": {
+        "pid": 10276,
+        "samples": 24,
+        "counts": {
+          "FATAL EXCEPTION": 0,
+          "Fatal signal": 0,
+          "OutOfMemoryError": 0,
+          "Invariant Violation": 0,
+          "TypeError": 0,
+          "ReferenceError": 0,
+          "SkiaScreenshot": 0,
+          "LegacySurfaceTexture": 0,
+          "EGLConsumer is not attached": 0,
+          "MediaStreamTrack has been disposed": 0,
+          "CameraAccessException": 0
+        },
+        "peakPssKiB": 1316719,
+        "finalPssKiB": 1110542,
+        "audioMode": "mAudioModeOwner: AudioDeviceBroker$AudioModeInfo[mMode=0, mPid=0, mUid=0, mToken=null]",
+        "activeCallForegroundService": false,
+        "activeIncomingForegroundService": false,
+        "activeOutgoingForegroundService": false,
+        "cameraClientBlock": "Active Camera Clients:\n[]\nAllowed user IDs: 0\nActive Client listener PIDs: 1727, 2730, 2629, 4193, 10276, 10688\n\n== Camera service events log (most recent at top): ==\n  11-24 17:09:20 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 10276)\n  11-24 17:07:55 : CONNECT device 1 client for package com.kolt12max.livi.dev (PID 10276, priority 0)\n  11-24 17:05:15 : DISCONNECT device 1 client for package com.kolt12max.livi.dev (PID 10"
+      }
+    },
+    "report": "docs/verification/android-215-stability-2026-11-24/device-session-review.md"
+  },
+  "photoPreviewUpdate": {
+    "maxHeightDp": 300,
+    "viewportFraction": 0.4,
+    "frameWidth": "same as prior 480dp / 60 percent natural layout",
+    "keepsAspectRatio": true,
+    "contentFit": "cover",
+    "sourceFilesUnchanged": true,
+    "fullImageAvailableOnOpen": true,
+    "inlineDownscalingEnabled": true,
+    "userAccepted": true,
+    "targetedSuites": 4,
+    "tests": 84,
+    "passed": true
+  },
+  "answerHandoffUpdate": {
+    "skipAlreadyForegroundMain": true,
+    "piPReturnAllowed": true,
+    "checkOnMainThread": true,
+    "installedDevices": [
+      "R5GL550T4TB",
+      "RFCX306PWLE"
+    ],
+    "visualAcceptance": "user reported A35 previous-tab flash; superseded by callRevealFollowup",
+    "plainWindowBackgroundApi31Plus": true,
+    "systemSplashIconRetained": true,
+    "priorDuplicateHandoffFixInsufficientForFlash": true,
+    "flashVideoBefore": "/private/tmp/livi-215-final-session-20261124/answer-flash.mp4",
+    "flashVisibleApproxSeconds": 0.2,
+    "priorPlainWindowBackgroundFixInsufficientForFlash": true,
+    "globalIconPreferredRemovedApi33Plus": true,
+    "solidIncomingLaunchOptions": true,
+    "realCallViewNativePaintGate": true,
+    "callScopedNativeId": true,
+    "staleGenerationCallbacksIgnored": true,
+    "listenerRemovedOnDestroy": true,
+    "jsConnectingPlaceholderRemoved": true,
+    "waitForRoomConnectionToRevealUi": false,
+    "doubleJsAnimationFrameWaitRemoved": true,
+    "jsRegressionSuites": 8,
+    "jsRegressionTests": 68,
+    "typecheckPassed": true,
+    "eslintPassed": true,
+    "flashVideoAfterWindowBackgroundFix": "/private/tmp/livi-215-final-session-20261124/answer-flash-after.mp4",
+    "flashAfterWindowBackgroundFixFrame": 567,
+    "physicalColdNotificationRegression": "not rerun in this iteration",
+    "nativeTestSuites": 7,
+    "nativeTests": 23,
+    "buildPassed": true,
+    "bundleValidationPassed": true,
+    "bundleSignaturePassed": true,
+    "releaseApkSignaturePassed": true,
+    "releaseApk16KiBAlignmentPassed": true,
+    "installedDevApkVerifiedBySha": true,
+    "installedDeviceEvidence": "/private/tmp/livi-215-final-session-20261124/answer-ui-installed-devices.json",
+    "newVideoCaptureDirectory": "/private/tmp/livi-215-final-session-20261124/answer-ui-videos-ready",
+    "verificationAt": "2026-11-24T15:09:27.041645+00:00",
+    "preparationRunInterruptedByDevLinkReload": true,
+    "tabFlashReportNeedsCleanRetest": true,
+    "oldApkHotReloadArgumentMismatchAt": "2026-11-24 18:06:30 Moscow"
+  },
+  "nextManualSession": {
+    "directory": "/private/tmp/livi-215-fixes-20261124/dev-session-photo-answer",
+    "durationSeconds": 7200,
+    "intervalSeconds": 20,
+    "userPerformsScenarios": true,
+    "status": "recording"
+  },
+  "callerAcceptDelayUpdate": {
+    "beforeTimeline": [
+      {
+        "callId": "1795533228053_3qhroz",
+        "callee": "A35",
+        "caller": "S25",
+        "calleeAccept": "18:13:50.360",
+        "calleeAcceptBegin": "18:13:50.490",
+        "calleeAcceptEmit": "18:13:54.001",
+        "callerAcceptedEvent": "18:13:54.345",
+        "callerOutgoingHidden": "18:13:55.108",
+        "callerContentDrawn": "18:13:56.354"
+      },
+      {
+        "callId": "1795533250852_hdati9",
+        "callee": "S25",
+        "caller": "A35",
+        "calleeAccept": "18:14:12.936",
+        "calleeAcceptBegin": "18:14:12.973",
+        "calleeAcceptEmit": "18:14:14.464",
+        "callerAcceptedEvent": "18:14:17.944",
+        "callerOutgoingHidden": "18:14:19.943",
+        "callerContentDrawn": "18:14:22.532"
+      }
+    ],
+    "prepareAuthWhileRinging": true,
+    "synchronousAcceptWithFreshProofAndKey": true,
+    "proofTtlMs": 6000,
+    "uiNavigationBeforeMediaPrewarm": true,
+    "frontendSuites": 179,
+    "frontendTests": 1708,
+    "typecheckPassed": true,
+    "eslintPassed": true,
+    "physicalAcceptance": "user reported remaining delay; superseded by callRevealFollowup",
+    "networkVersusJsDeliveryDelayNotSeparated": true,
+    "bundleBuildPassed": true,
+    "bundleValidationPassed": true,
+    "releaseApkSignaturePassed": true,
+    "releaseApk16KiBAlignmentPassed": true,
+    "reviewedBeforeVideoTimeRangeSeconds": [
+      44,
+      80
+    ],
+    "reviewedBeforeVideoFps": 10,
+    "cameraLogoCandidatesInReviewedRange": 0,
+    "devNativeCodeUnchanged": true,
+    "installedDevApkVerifiedBySha": true,
+    "devApkSha256": "d6a269f4bdeedfd8fd3e53aae1005cf456a78a4bc3c581bd3be4f3ba7c2e74d2",
+    "devLoadedDevices": [
+      {
+        "serial": "R5GL550T4TB",
+        "pid": 19201,
+        "splashCompleteMoscow": "18:24:36.997"
+      },
+      {
+        "serial": "RFCX306PWLE",
+        "pid": 31422,
+        "splashCompleteMoscow": "18:24:46.963"
+      }
+    ],
+    "videoCaptureDirectory": "/private/tmp/livi-215-final-session-20261124/caller-delay-videos",
+    "updatedAt": "2026-11-24T15:25:17.469905+00:00"
+  },
+  "callRevealFollowup": {
+    "priorIterationUserRejected": true,
+    "a35TabFlashReported": true,
+    "tabFlashFrameNotLocalized": true,
+    "realNativeDrawBoundary": true,
+    "requiresTopNativeStackScreen": true,
+    "checksAncestorAlphaAndVisibility": true,
+    "nativeRevealDurationMs": 140,
+    "reactBatchedAcceptUpdates": true,
+    "sameLiveSocketOwnershipBindingForAccept": true,
+    "freshnessTtlOtherPrivilegedOpsMs": 6000,
+    "forcedReauthOnServerForbidden": true,
+    "physicalAcceptance": "user accepted final dev UI: да сейчас хорошо",
+    "evidenceDirectory": "/private/tmp/livi-215-final-session-20261124/tab-flash-recheck",
+    "frontendSuites": 179,
+    "frontendTests": 1710,
+    "typecheckPassed": true,
+    "eslintPassed": true,
+    "nativeSuites": 7,
+    "nativeTests": 23,
+    "debugBuildPassed": true,
+    "drawRetryOnlyWhileCurrentCallPending": true,
+    "postedCallbackChecksCurrentViewCallId": true,
+    "blocksTouchesToPreviousScreenUntilDraw": true,
+    "releaseBuildPassed": true,
+    "installedDevApkVerifiedBySha": true,
+    "installedDeviceEvidence": "/private/tmp/livi-215-final-session-20261124/tab-flash-recheck/installed-devices-final.json",
+    "videoCaptureDirectory": "/private/tmp/livi-215-final-session-20261124/call-reveal-videos",
+    "bundleValidationPassed": true,
+    "bundleSignaturePassed": true,
+    "releaseApkSignaturePassed": true,
+    "releaseApk16KiBAlignmentPassed": true,
+    "devicesLoaded": [
+      {
+        "serial": "R5GL550T4TB",
+        "pid": "28608",
+        "startupComplete": true,
+        "fatal": []
+      },
+      {
+        "serial": "RFCX306PWLE",
+        "pid": "5471",
+        "startupComplete": true,
+        "fatal": []
+      }
+    ],
+    "updatedAt": "2026-11-24T15:47:55.143652+00:00",
+    "userAccepted": true,
+    "userConfirmation": "да сейчас хорошо",
+    "userConfirmationScope": "latest Android call transition after manual retest; not a claim of all lifecycle/VPN scenarios"
+  },
+  "commitValidation": {
+    "eslintStagedFiles": 64,
+    "eslintPassed": true,
+    "backendUnitSuites": 42,
+    "backendUnitTests": 308,
+    "backendTypecheckPassed": true,
+    "mongoIntegrationsRun": false,
+    "newDatabaseCreated": false,
+    "skiaPatchFormatNormalized": true,
+    "skiaPatchTargetFilesByteIdentical": 3,
+    "skiaPatchReverseDryRunPassed": true,
+    "secretsFound": false,
+    "largeBuildArtifactsStaged": false
+  }
+}

@@ -1,12 +1,12 @@
 import mongoose from 'mongoose';
 
-const mockUser = { findById: jest.fn(), find: jest.fn() };
+const mockUser = { findById: jest.fn(), find: jest.fn(), findOne: jest.fn() };
 const mockEdge = { find: jest.fn(), bulkWrite: jest.fn() };
 jest.mock('../models/User', () => ({ __esModule: true, default: mockUser }));
 jest.mock('../models/FriendshipEdge', () => ({ __esModule: true, default: mockEdge }));
 jest.mock('../models/FriendshipMessages', () => ({ __esModule: true, default: {} }));
 
-import { getFriendIds, getFriendIdsForUsers } from './friendshipUtils';
+import { getFriendIds, getFriendIdsForUsers, areFriendsCached, clearFriendshipCache } from './friendshipUtils';
 
 type UserFixture = { _id: mongoose.Types.ObjectId; friends: mongoose.Types.ObjectId[] };
 type EdgeFixture = { userId: mongoose.Types.ObjectId; friendId: mongoose.Types.ObjectId };
@@ -20,6 +20,7 @@ beforeEach(() => {
   users = [];
   edges = [];
   jest.clearAllMocks();
+  clearFriendshipCache();
   mockUser.findById.mockImplementation((id: string) => query(users.find((u) => String(u._id) === String(id)) || null));
   mockUser.find.mockImplementation((filter: { $or?: unknown; friends?: mongoose.Types.ObjectId }) => query(
     filter.$or ? users : users.filter((u) => u.friends.some((id) => String(id) === String(filter.friends))),
@@ -49,12 +50,12 @@ it('does not rewrite complete friendships on repeated reads when legacy arrays a
   expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
 });
 
-it.each(['outgoing', 'incoming'])('repairs a missing reverse direction from an %s edge', async (direction) => {
+it.each(['outgoing', 'incoming'])('reads an asymmetric %s edge without rewriting it', async (direction) => {
   const { a, b, aid, bid } = pair();
   edges.push(direction === 'outgoing' ? { userId: a, friendId: b } : { userId: b, friendId: a });
   expect(await getFriendIds(aid)).toEqual([bid]);
-  expect(mockEdge.bulkWrite).toHaveBeenCalledTimes(1);
-  expect(edges).toHaveLength(2);
+  expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
+  expect(edges).toHaveLength(1);
   mockEdge.bulkWrite.mockClear();
   expect(await getFriendIds(aid)).toEqual([bid]);
   expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
@@ -69,42 +70,55 @@ it('does not write during batched presence reads of complete edge pairs', async 
   expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
 });
 
-it('repairs an asymmetric pair once even when both users are in the batch', async () => {
+it('reads an asymmetric pair for both users without creating a reverse edge', async () => {
   const { a, b, aid, bid } = pair();
   edges.push({ userId: a, friendId: b });
   const result = await getFriendIdsForUsers([aid, bid]);
   expect(result.get(aid)).toEqual([bid]);
   expect(result.get(bid)).toEqual([aid]);
-  expect(mockEdge.bulkWrite).toHaveBeenCalledTimes(1);
-  expect(mockEdge.bulkWrite.mock.calls[0][0]).toHaveLength(2);
+  expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
+  expect(edges).toHaveLength(1);
   mockEdge.bulkWrite.mockClear();
   await getFriendIdsForUsers([aid, bid]);
   expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
 });
 
-it('keeps reverse-only legacy friends visible and persists both missing edge directions', async () => {
-  const { a, b, aid, bid } = pair();
+it('keeps reverse-only legacy friends visible without copying them into new edges', async () => {
+  const { a, aid, bid } = pair();
   users[1].friends = [a];
   const result = await getFriendIdsForUsers([aid]);
   expect(result.get(aid)).toEqual([bid]);
   expect(result.has(bid)).toBe(false);
-  expect(edges).toEqual(expect.arrayContaining([{ userId: a, friendId: b }, { userId: b, friendId: a }]));
+  expect(edges).toHaveLength(0);
+  expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
 });
 
-it('shares concurrent migration attempts without caching the current friend list', async () => {
+it('keeps concurrent reads authoritative without any conversion writes', async () => {
   const { a, b, aid, bid } = pair();
   const results = await Promise.all(Array.from({ length: 20 }, () => getFriendIds(aid)));
   expect(results.every((ids) => ids.length === 0)).toBe(true);
-  expect(mockUser.findById).toHaveBeenCalledTimes(21); // one migration + 20 authoritative reads
+  expect(mockUser.findById).toHaveBeenCalledTimes(20);
+  expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
   edges.push({ userId: a, friendId: b }, { userId: b, friendId: a });
   expect(await getFriendIds(aid)).toEqual([bid]);
   edges.length = 0;
   expect(await getFriendIds(aid)).toEqual([]);
 });
 
-it('retries a failed migration instead of keeping its rejected promise', async () => {
+it('can read again after a temporary database error', async () => {
   const { aid } = pair();
   mockUser.findById.mockImplementationOnce(() => ({ select: () => ({ lean: async () => { throw new Error('temporary database outage'); } }) }));
   await expect(getFriendIds(aid)).rejects.toThrow('temporary database outage');
   await expect(getFriendIds(aid)).resolves.toEqual([]);
+});
+
+it('keeps historical arrays intact on a direct read and on an authorization check', async () => {
+  const { a, aid, bid } = pair(true);
+  const before = users.map(user => user.friends.map(String));
+  expect(await getFriendIds(aid)).toEqual([bid]);
+  mockUser.findOne.mockImplementation(() => query({ _id: a }));
+  expect(await areFriendsCached(aid, bid)).toBe(true);
+  expect(users.map(user => user.friends.map(String))).toEqual(before);
+  expect(edges).toHaveLength(0);
+  expect(mockEdge.bulkWrite).not.toHaveBeenCalled();
 });

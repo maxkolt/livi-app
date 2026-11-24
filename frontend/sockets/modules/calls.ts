@@ -260,7 +260,9 @@ export async function emitCallAcceptAck(
   const tryEmit = async () => {
     // Ключ обычно подготовлен ещё во время звонка (prepareIncomingCallE2ee) — тогда
     // call:accept уходит синхронно, в том же обработчике нажатия.
-    const e2ee = peekIncomingCallE2eeDeclaration(id) ?? (await getOrCreateIncomingCallE2eeDeclaration(id));
+    const cachedKey = peekIncomingCallE2eeDeclaration(id);
+    const e2ee = cachedKey ?? (await getOrCreateIncomingCallE2eeDeclaration(id));
+    markCallPerf("call_accept_key_ready", { cached: !!cachedKey });
     const emittedAt = Date.now();
     markCallPerf("call_accept_emit", { connected: socket.connected, reconnecting: shared.reconnecting });
     const resp = await emitAck<{ ok?: boolean; error?: string; duplicate?: boolean }>(
@@ -273,10 +275,16 @@ export async function emitCallAcceptAck(
     return resp;
   };
 
-  if (!await kickReauth()) return { ok: false, error: "unauthorized" };
+  // call:accept is checked against sock.data.userId on the server. An established
+  // binding on this exact live socket does not expire while the incoming UI rings.
+  // Reconnection/user change still requires reauth; server rejection forces a retry.
+  const { hasPrivilegedSocketOwnershipProof } = require("./reauth") as typeof import("./reauth");
+  const cachedAuth = hasPrivilegedSocketOwnershipProof();
+  if (!cachedAuth && !await kickReauth()) return { ok: false, error: "unauthorized" };
+  markCallPerf("call_accept_auth_ready", { cached: cachedAuth });
   try {
     const out = normalize(await tryEmit());
-    if (out.ok || !["unauthorized", "callee_socket_not_found"].includes(out.error || "")) return out;
+    if (out.ok || !["unauthorized", "forbidden", "callee_socket_not_found"].includes(out.error || "")) return out;
     if (!await kickReauth(true)) return out;
     return normalize(await tryEmit());
   } catch (e: unknown) {
@@ -407,10 +415,20 @@ export function requestCallAcceptedWithRetry(
   });
 }
 
+/** Prepare ownership proof and the per-call key while the native screen is ringing. */
+export function prepareIncomingCallAccept(callId: string): void {
+  const id = String(callId || "").trim();
+  if (!id) return;
+  prepareIncomingCallE2ee(id);
+  void import("./reauth")
+    .then(({ ensureReauthBeforePrivilegedSocketOp }) => ensureReauthBeforePrivilegedSocketOp())
+    .catch(() => {});
+}
+
 export function onCallIncoming(cb: (d: CallIncomingPayload) => void): () => void {
   const h = (d: Parameters<typeof cb>[0]) => {
     prewarmApiConnections("call_in", 3);
-    prepareIncomingCallE2ee(d?.callId);
+    prepareIncomingCallAccept(d?.callId);
     cb(d);
   };
   socket.on("call:incoming", h);

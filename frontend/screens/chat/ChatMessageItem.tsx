@@ -584,6 +584,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               </View>
             )}
             <ChatPhotoPreviewImage
+              fit="cover"
               source={{ uri: localImageUri || displayImageUri }}
               style={{
                 width: '100%',
@@ -593,7 +594,7 @@ export const ChatMessageItem = React.memo(({ item, currentUserId, readStatus, up
               cachePolicy="memory-disk"
               priority="high"
               recyclingKey={`message_image_${item.id}`}
-              allowDownscaling={false}
+              allowDownscaling
               placeholder={null}
               onError={(error: ImageLoadError) => {
                 // КРИТИЧНО: Детальное логирование ошибки для диагностики

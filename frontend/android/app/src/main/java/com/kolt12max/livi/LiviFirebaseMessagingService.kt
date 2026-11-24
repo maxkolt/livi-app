@@ -244,7 +244,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                     ).apply {
                         addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                     }
-                    startActivity(launchIntent)
+                    startActivity(launchIntent, incomingAnswerLaunchOptions())
                     activityLaunchOk = true
                     Log.i(TAG, "[INCOMING_CALL] startActivity OK callId=$callId")
                     vLog("[INCOMING_CALL] startActivity(IncomingCallActivity) on main OK callId=$callId")
@@ -704,7 +704,7 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 } catch (e2: Exception) {
                     Log.w(TAG, "direct full-screen notification fallback also failed; last resort startActivity", e2)
                     try {
-                        startActivity(activityIntent)
+                        startActivity(activityIntent, incomingAnswerLaunchOptions())
                     } catch (e3: Exception) {
                         Log.w(TAG, "startActivity last-resort fallback also failed", e3)
                     }
@@ -1449,7 +1449,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 context,
                 NOTIFICATION_ID_INCOMING_CALL,
                 fullScreenIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                incomingAnswerLaunchOptions(),
             )
             val title = if (fromNick.isNotEmpty()) fromNick else AppLocale.str(context, R.string.incoming_call_title)
             val subtitle = AppLocale.str(context, R.string.incoming_call_title)
@@ -1496,14 +1497,16 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 context,
                 NOTIFICATION_ID_INCOMING_CALL,
                 buildIncomingCallActivityIntent(context, callId, from, fromNick),
-                flags
+                flags,
+                incomingAnswerLaunchOptions(),
             )
             val answerPending = PendingIntent.getActivity(
                 context,
                 REQUEST_INCOMING_ANSWER,
                 buildIncomingCallActivityIntent(context, callId, from, fromNick)
                     .putExtra(IncomingCallActivity.EXTRA_AUTO_ANSWER, true),
-                flags
+                flags,
+                incomingAnswerLaunchOptions(),
             )
             val declinePending = PendingIntent.getBroadcast(
                 context,
@@ -1545,7 +1548,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 context,
                 NOTIFICATION_ID_INCOMING_CALL,
                 contentIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                incomingAnswerLaunchOptions(),
             )
 
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_VISUAL)
@@ -1575,7 +1579,8 @@ class LiviFirebaseMessagingService : ExpoFirebaseMessagingService() {
                 context,
                 NOTIFICATION_ID_INCOMING_CALL,
                 contentIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+                incomingAnswerLaunchOptions(),
             )
 
             return NotificationCompat.Builder(context, CHANNEL_ID_CALLS_SILENT)

@@ -10,15 +10,30 @@ beforeEach(() => { mockGetSize.mockReset(); });
 it.each([
   ['portrait', 900, 1600], ['landscape', 1600, 900], ['square', 1200, 1200],
   ['panorama', 6000, 1000], ['long screenshot', 1000, 9000],
-])('uses the %s natural ratio inside phone viewport limits', (_name, width, height) => {
+])('fits the %s preview frame inside phone viewport limits', (_name, width, height) => {
   for (const viewport of [{ width: 320, height: 720 }, { width: 360, height: 780 }, { width: 430, height: 932 }]) {
     const bounds = chatPhotoPreviewLayout(viewport.width, { width, height }, viewport.height);
-    expect(bounds.width / bounds.height).toBeCloseTo(width / height, 10);
     expect(bounds.width).toBeLessThanOrEqual(chatPhotoPreviewLayout(viewport.width).width);
-    expect(bounds.height).toBeLessThanOrEqual(Math.min(480, viewport.height * 0.6));
+    expect(bounds.height).toBeLessThanOrEqual(Math.min(300, viewport.height * 0.4));
     expect(bounds.width).toBeGreaterThan(0);
     expect(bounds.height).toBeGreaterThan(0);
   }
+});
+
+it('restores the previous narrow screenshot frame width while shortening its height', () => {
+  const bounds = chatPhotoPreviewLayout(430, { width: 1080, height: 6000 }, 932);
+  expect(bounds.height).toBe(300);
+  expect(bounds.width).toBeCloseTo(86.4);
+});
+
+it.each([
+  [900, 1600, 252, 300],
+  [1600, 900, 252, 141.75],
+  [1000, 9000, 52, 300],
+])('preserves established width for %s x %s photos', (width, height, frameWidth, frameHeight) => {
+  const bounds = chatPhotoPreviewLayout(360, { width, height }, 780);
+  expect(bounds.width).toBeCloseTo(frameWidth);
+  expect(bounds.height).toBeCloseTo(frameHeight);
 });
 
 it.each([[0, 100], [100, 0], [-1, 200], [NaN, 20], [20, Infinity], [32769, 20], ['100', 200], [null, 200]])(

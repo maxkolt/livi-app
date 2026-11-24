@@ -35,7 +35,7 @@ jest.mock('./shared', () => ({
 }));
 
 jest.mock('./socketCore', () => ({ socket: mockSocket }));
-jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(async () => true) }));
+jest.mock('./reauth', () => ({ ensureReauthBeforePrivilegedSocketOp: jest.fn(async () => true), hasPrivilegedSocketOwnershipProof: jest.fn(() => false) }));
 const mockBindOutgoingCallE2ee = jest.fn<Promise<boolean>, [string, string, { pk: string }]>(async () => true);
 jest.mock('./callE2ee', () => ({
   createOutgoingCallE2eeDeclaration: jest.fn(() => ({ pk: 'ephemeral-public-key' })),
@@ -43,11 +43,13 @@ jest.mock('./callE2ee', () => ({
     mockBindOutgoingCallE2ee(callId, peerUserId, declaration),
   getOrCreateIncomingCallE2eeDeclaration: jest.fn(async () => ({ pk: 'incoming-public-key' })),
   peekIncomingCallE2eeDeclaration: jest.fn(() => ({ pk: 'incoming-public-key' })),
+  prepareIncomingCallE2ee: jest.fn(),
 }));
 
-import { emitCallAcceptAck, startCall } from './calls';
+import { emitCallAcceptAck, prepareIncomingCallAccept, startCall } from './calls';
 import { emitAck } from './emit';
-import { ensureReauthBeforePrivilegedSocketOp } from './reauth';
+import { ensureReauthBeforePrivilegedSocketOp, hasPrivilegedSocketOwnershipProof } from './reauth';
+import { prepareIncomingCallE2ee } from './callE2ee';
 
 describe('startCall HTTP fallback', () => {
   beforeEach(() => {
@@ -55,6 +57,7 @@ describe('startCall HTTP fallback', () => {
     jest.restoreAllMocks();
     jest.mocked(emitAck).mockReset();
     jest.mocked(ensureReauthBeforePrivilegedSocketOp).mockReset().mockResolvedValue(true);
+    jest.mocked(hasPrivilegedSocketOwnershipProof).mockReset().mockReturnValue(false);
   });
 
   it('создаёт звонок через HTTP при недоступном Socket.IO', async () => {
@@ -117,6 +120,36 @@ describe('startCall HTTP fallback', () => {
     const fetchMock = jest.spyOn(global, 'fetch');
     await expect(startCall('507f191e810c19729de860ea')).resolves.toMatchObject({ ok: false, error: 'busy' });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('emits accept before yielding to UI work when this live socket already owns the user', async () => {
+    mockSocket.connected = true;
+    jest.mocked(hasPrivilegedSocketOwnershipProof).mockReturnValue(true);
+    jest.mocked(emitAck).mockResolvedValue({ ok: true });
+    const accept = emitCallAcceptAck('incoming-ready');
+    // No microtask or timer has run yet: a subsequent screen mount cannot delay emit.
+    expect(emitAck).toHaveBeenCalledWith('call:accept', expect.objectContaining({
+      callId: 'incoming-ready', e2ee: { pk: 'incoming-public-key' },
+    }), 7000, 1);
+    expect(ensureReauthBeforePrivilegedSocketOp).not.toHaveBeenCalled();
+    await expect(accept).resolves.toMatchObject({ ok: true });
+  });
+
+  it('prepares authentication and encryption while ringing without accepting the call', async () => {
+    prepareIncomingCallAccept('incoming-ringing');
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(prepareIncomingCallE2ee).toHaveBeenCalledWith('incoming-ringing');
+    expect(ensureReauthBeforePrivilegedSocketOp).toHaveBeenCalled();
+    expect(emitAck).not.toHaveBeenCalled();
+  });
+
+  it('forces reauthentication if the server rejects an existing socket binding', async () => {
+    mockSocket.connected = true;
+    jest.mocked(hasPrivilegedSocketOwnershipProof).mockReturnValue(true);
+    jest.mocked(emitAck).mockResolvedValueOnce({ ok: false, error: 'forbidden' }).mockResolvedValueOnce({ ok: true });
+    await expect(emitCallAcceptAck('incoming-server-rebind')).resolves.toMatchObject({ ok: true });
+    expect(ensureReauthBeforePrivilegedSocketOp).toHaveBeenCalledWith(true);
+    expect(emitAck).toHaveBeenCalledTimes(2);
   });
 
   it('waits for ownership proof before emitting accept', async () => {

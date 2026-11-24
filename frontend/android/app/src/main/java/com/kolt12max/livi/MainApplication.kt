@@ -6,6 +6,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.content.res.Configuration
+import android.content.ComponentCallbacks2
 import android.os.Build
 
 import com.oney.WebRTCModule.WebRTCModuleOptions
@@ -109,5 +110,19 @@ class MainApplication : Application(), ReactApplication {
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     ApplicationLifecycleDispatcher.onConfigurationChanged(this, newConfig)
+  }
+
+  override fun onTrimMemory(level: Int) {
+    super.onTrimMemory(level)
+    if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN || level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+      RenderCache.trimAll()
+      LiviAppModule.emitMemoryPressure()
+    }
+  }
+
+  override fun onLowMemory() {
+    super.onLowMemory()
+    RenderCache.trimAll()
+    LiviAppModule.emitMemoryPressure()
   }
 }

@@ -20,6 +20,7 @@ class LiviAppPackage : ReactPackage {
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> {
     return listOf(
+      CallContentViewManager(),
       StageBackgroundViewManager(),
       FloatShadowViewManager(),
       BlurSourceViewManager(),

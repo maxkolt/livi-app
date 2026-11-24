@@ -1,7 +1,7 @@
 /**
  * Сквозное шифрование целиком на клиенте: два пользователя и поддельный сервер,
  * который ведёт себя как backend/sockets/e2eKeys.ts. Ключ создаётся без пароля
- * и переживает переустановку в KeyVault; пароль нужен только для миграции старых копий.
+ * и переживает переустановку в KeyVault; пароль нужен только для восстановления существующего ключа.
  */
 
 const secure = new Map<string, string>();
@@ -162,7 +162,7 @@ async function enable(user: string) {
   expect(await refreshE2eState()).toBe('ready');
 }
 
-/** Создать копию прежней схемы для проверки миграции. */
+/** Подготовить прежний формат для проверки чтения и восстановления. */
 async function enableLegacy(user: string, password: string) {
   await enable(user);
   expect(await changeE2eBackupPassword(password)).toEqual({ ok: true });
@@ -325,7 +325,7 @@ describe('between two users with encryption on', () => {
   });
 });
 
-describe('migration from password-protected backups', () => {
+describe('recovery from existing password-protected key backups', () => {
   let oldWire: any;
 
   beforeEach(async () => {

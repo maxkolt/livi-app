@@ -4,6 +4,7 @@ import {
   Animated,
   Easing,
   NativeModules,
+  Platform,
   StyleSheet,
   View,
   type LayoutChangeEvent,
@@ -242,6 +243,7 @@ function HomeWelcomeViewInner({
    */
   const tabBar = welcomeTabBarMetrics(stageWidth, stageHeight, insets.bottom);
   const estimatedTabBar = tabBar.contentHeight + tabBar.bottomGap;
+  const androidCtaDrop = Platform.OS === 'android' ? (insets.bottom <= 24 ? 18 : 6) : 0;
   const expectedPaneH = Math.max(160, stageHeight - insets.top - estimatedTabBar);
   const viewHeight =
     measured.h > 0 && Math.abs(measured.h - expectedPaneH) < 2
@@ -645,7 +647,7 @@ function HomeWelcomeViewInner({
               {
                 paddingTop: ctaPadTop,
                 paddingBottom: space.ctaBottomPad,
-                transform: [{ translateY: ctaShiftY + (reducedBannerHeight && !splitStage ? 4 : 0) }],
+                transform: [{ translateY: ctaShiftY + (reducedBannerHeight && !splitStage ? 4 : 0) + androidCtaDrop }],
               },
             ]}
           >

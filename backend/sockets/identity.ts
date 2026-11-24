@@ -21,7 +21,7 @@ import { scheduleGlobalFriendPresenceEmit } from '../utils/friendOnlinePresence'
 import { bindWelcomeOnlinePresence } from '../utils/welcomeOnlinePresence';
 import { getFriendIds } from '../utils/friendshipUtils';
 import { hasVerifiedSocketInstall } from '../utils/socketInstallAuth';
-import { hashInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL, verifyInstallSecret, isPlausibleInstallSecret, needsInstallSecretRehash } from '../utils/installSecret';
+import { hashInstallSecret, allowLegacyInstallAuth, LEGACY_INSTALL_SEAL, verifyInstallSecret, isPlausibleInstallSecret } from '../utils/installSecret';
 import { collectUploadedMediaNames, deleteUnreferencedUploadedMedia } from '../utils/uploadedMedia';
 import { UPLOADS_MEDIA_DIR } from '../routes/upload';
 
@@ -192,7 +192,7 @@ export default function registerIdentitySockets(io: Server) {
     /* -------- identity:attach --------
        Привязка installId -> user + "мягкое" обновление профиля.
        ВАЖНО: апдейтим ТОЛЬКО поля, которые пришли в payload.profile. */
-    sock.on('identity:attach', async (payload: AttachPayload, ack?: IdentityAck<{ userId: string; legacyMigrationRequired?: boolean }>) => {
+    sock.on('identity:attach', async (payload: AttachPayload, ack?: IdentityAck<{ userId: string }>) => {
       const installId = String(payload?.installId || '').trim();
       const cacheKey = `${installId}_${sock.id}`;
 
@@ -231,12 +231,6 @@ export default function registerIdentitySockets(io: Server) {
             ack?.({ ok: false, error: inst.installSecretHash ? 'unauthorized' : 'account_recovery_required' });
             setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
             return;
-          }
-          if (inst.installSecretHash && needsInstallSecretRehash(inst.installSecretHash)) {
-            const upgraded = hashInstallSecret(payload!.installSecret as string);
-            const saved = await Install.updateOne({ _id: inst._id, installSecretHash: inst.installSecretHash }, { $set: { installSecretHash: upgraded } });
-            if (!saved.modifiedCount) return ack?.({ ok: false, error: 'unauthorized' });
-            inst.installSecretHash = upgraded;
           }
           sock.data.verifiedInstallId = installId;
           sock.data.verifiedInstallSecretHash = inst.installSecretHash || LEGACY_INSTALL_SEAL;
@@ -295,7 +289,7 @@ export default function registerIdentitySockets(io: Server) {
             broadcastProfileToFriends(io, userId).catch(() => {});
           }
           await bindUser(io, sock, userId);
-          ack?.({ ok: true, userId, legacyMigrationRequired: !inst.installSecretHash });
+          ack?.({ ok: true, userId });
           setTimeout(() => attachRequestCache.delete(cacheKey), 1000);
           return;
         }

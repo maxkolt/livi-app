@@ -12,7 +12,6 @@ import {
   TextInput,
   View,
   BackHandler,
-  type LayoutChangeEvent,
 } from 'react-native';
 import { useHomeLayout } from './HomeLayoutContext';
 import { usePaneReveal } from '../../utils/paneVisibility';
@@ -219,41 +218,6 @@ function resolveHubMetrics(
   return { ...preset, gapTop, rowHeight, listGap, scroll: false };
 }
 
-function estimateTabBarHeight(bottomInset: number, isTablet: boolean, isLandscape: boolean) {
-  // Совпадает с minHeight строки таб-бара в HomeWelcomeTabBar.
-  const base = isTablet ? 60 : isLandscape ? 40 : 52;
-  const floatGap = isLandscape && !isTablet ? 6 : isTablet ? 12 : 16;
-  return base + Math.max(bottomInset, Platform.OS === 'android' ? 6 : 2) + floatGap;
-}
-
-/** Небольшая шапка без короны — контент не прилипает к верху. */
-function estimateProfileHeaderHeight(isTablet: boolean, isLandscape: boolean) {
-  if (isLandscape && !isTablet) return 4;
-  if (isTablet) return isLandscape ? 8 : 12;
-  return Platform.OS === 'ios' ? 10 : 12;
-}
-
-/**
- * Высота панели для ПЕРВОГО кадра, пока не пришёл onLayout. Без неё первый рендер
- * считался по «места сколько угодно» и строки на следующем кадре схлопывались —
- * при первом заходе в профиль было видно, как контент ужимается.
- */
-function estimateHubPaneHeight(
-  windowHeight: number,
-  topInset: number,
-  bottomInset: number,
-  isTablet: boolean,
-  isLandscape: boolean,
-): number {
-  return Math.max(
-    0,
-    windowHeight -
-      topInset -
-      estimateProfileHeaderHeight(isTablet, isLandscape) -
-      estimateTabBarHeight(bottomInset, isTablet, isLandscape),
-  );
-}
-
 function normalizeLangCode(code?: string): string {
   if (!code) return '';
   const c = code.toLowerCase();
@@ -317,6 +281,8 @@ function ReliabilitySwitch({ value }: { value: boolean }) {
 type ProfileScreen = 'hub' | 'about' | 'language' | 'help' | 'callReliability' | 'purchases';
 
 type HomeWelcomeProfileViewProps = {
+  /** Exact Home viewport after the same top/dock padding used by the pane. */
+  paneHeight: number;
   lang: Lang;
   isDark: boolean;
   styles: HomeStyles;
@@ -351,6 +317,7 @@ type HomeWelcomeProfileViewProps = {
 
 function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   const {
+    paneHeight: hubPaneHeight,
     lang,
     styles: homeStyles,
     menuChromeBg,
@@ -404,35 +371,8 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
     }
   }, [nicknameDeleting, active, screen]);
   const [copiedEmail, setCopiedEmail] = useState<string | null>(null);
-  const hubOrientationKey = isLandscape ? 'landscape' : 'portrait';
-  // Замер панели — отдельно на портрет/landscape: иначе после поворота ещё
-  // кадр живёт высота прошлой ориентации, блоки прыгают, а огненная рамка
-  // пересоздаётся и появляется позже аватара.
-  const [hubViewportByOrientation, setHubViewportByOrientation] = useState<{
-    portrait?: number;
-    landscape?: number;
-  }>({});
-
   /** В landscape одна колонка секций не помещается по высоте — раскладываем в две. */
   const twoColumnList = isLandscape;
-
-  /**
-   * Высоту берём из onLayout самой панели: она уже учитывает шапку, таб-бар и
-   * системные insets, поэтому отступы не зависят от оценок.
-   */
-  const expectedHubPaneHeight = estimateHubPaneHeight(
-    windowHeight,
-    insets.top,
-    insets.bottom,
-    isTablet,
-    isLandscape,
-  );
-  const measuredHubPaneHeight = hubViewportByOrientation[hubOrientationKey] ?? 0;
-  /** Промежуточный замер при повороте/пробуждении отбрасываем — иначе он застревает. */
-  const hubPaneHeight =
-    measuredHubPaneHeight > expectedHubPaneHeight * 0.6
-      ? measuredHubPaneHeight
-      : expectedHubPaneHeight;
 
   const myUserId = getCurrentUserId();
   const activeFrameId = useUserActiveFrame(myUserId);
@@ -453,18 +393,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   /** Общий savedToast включается и после автосохранения аватара — это не редактирование ника. */
   const nicknameActionsVisible = accountOpen || nick !== savedNick;
   const needsHubScroll = accountOpen || hubMetrics.scroll;
-  const handleHubPaneLayout = useCallback(
-    (event: LayoutChangeEvent) => {
-      const nextHeight = event.nativeEvent.layout.height;
-      if (!(nextHeight > 0)) return;
-      setHubViewportByOrientation((prev) => {
-        const current = prev[hubOrientationKey];
-        if (current != null && Math.abs(current - nextHeight) < 1) return prev;
-        return { ...prev, [hubOrientationKey]: nextHeight };
-      });
-    },
-    [hubOrientationKey],
-  );
 
   const letter = displayAvatarLetter(savedNick || nick);
   const busy = !!saving || !!wiping || nicknameDeleting;
@@ -980,7 +908,7 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
   // аватар монтировался заново и мигал, пока картинка не загрузится снова.
   const hubBalanced = !needsHubScroll;
   const hubScrollBody = (
-    <View style={hubBalanced ? [styles.hubMainBalance, !isTablet && styles.hubMainBalancePhone] : null}>
+    <View style={hubBalanced ? styles.hubMainBalance : null}>
       <View style={hubBalanced ? styles.hubMainTop : null}>{hubAvatarSection}</View>
       {hubBalanced && isTablet ? <View style={styles.hubMainSpacer} /> : null}
       {hubListStack}
@@ -1216,7 +1144,6 @@ function HomeWelcomeProfileViewInner(props: HomeWelcomeProfileViewProps) {
               // и на хабе, и при скролле, и при редактировании ника.
               isLandscape && styles.hubPaneOverflowVisible,
             ]}
-            onLayout={handleHubPaneLayout}
           >
             <ScrollView
               style={styles.hubMainDock}
@@ -1362,11 +1289,6 @@ const styles = StyleSheet.create({
     // Низ прижат: зазор «Удалить профиль» → навбар всегда равен listGap,
     // излишек высоты уходит в hubMainSpacer под аватаром.
     justifyContent: 'flex-end',
-  },
-  hubMainBalancePhone: {
-    // Центрируем профиль целиком: свободное место больше не превращается
-    // в один большой зазор между фото и первой карточкой.
-    justifyContent: 'center',
   },
   hubMainTop: {
     flexShrink: 0,

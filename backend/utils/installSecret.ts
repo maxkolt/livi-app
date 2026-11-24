@@ -22,7 +22,7 @@ function sameHash(a: string, b: string): boolean {
   return crypto.timingSafeEqual(Buffer.from(a, 'hex'), Buffer.from(b, 'hex'));
 }
 
-/** Temporary opt-in compatibility while old owners migrate with cryptographic proof. */
+/** Existing opt-in legacy access policy. It never enrolls or rewrites an old record. */
 export function allowLegacyInstallAuth(): boolean { return process.env.INSTALL_AUTH_MODE === 'legacy-migration'; }
 export const LEGACY_INSTALL_SEAL = 'legacy-migration';
 
@@ -30,15 +30,14 @@ export const LEGACY_INSTALL_SEAL = 'legacy-migration';
 export function hashInstallSecret(secret: string): string {
   assertInstallSecretConfiguration();
   // Development without a production pepper writes the explicit legacy format,
-  // so a dev-created account remains verifiable during staged production migration.
+  // so previously created accounts remain verifiable without rewriting their records.
   return PEPPER ? 'v1:' + digest(String(secret), PEPPER) : digest(String(secret), DEV_FALLBACK_PEPPER);
 }
-export function needsInstallSecretRehash(hash: string): boolean { return !!PEPPER && !hash.startsWith('v1:'); }
 export function verifyInstallSecret(secret: string | undefined | null, storedHash: string | undefined | null): boolean {
   if (!isPlausibleInstallSecret(secret) || typeof storedHash !== 'string') return false;
   if (storedHash.startsWith('v1:')) return sameHash(digest(secret, PEPPER || DEV_FALLBACK_PEPPER), storedHash.slice(3));
   // Transition only for previously stored, unversioned hashes. The high-entropy
-  // original secret is still mandatory; successful auth upgrades the hash.
+  // original secret is still mandatory; authentication leaves the stored hash intact.
   return sameHash(digest(secret, PEPPER || DEV_FALLBACK_PEPPER), storedHash) ||
     sameHash(digest(secret, DEV_FALLBACK_PEPPER), storedHash);
 }

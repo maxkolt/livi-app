@@ -1,3 +1,4 @@
+import { CallContentView } from './shared/CallContentView';
 import { useBottomControlsInsets } from '../../utils/useBottomControlsInsets';
 import { notifyIncomingAnswerUiReady } from '../../utils/incomingAnswerUiReady';
 import { isPipInSystemMode, isPipVisible, setVideoCallActive, isVideoCallActiveExplicitlyFalse, isEndingCallInProgress, setEndingCallInProgress, isCallEndedFromPiPNoOpen } from '../../utils/callRuntime';
@@ -7662,7 +7663,9 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
   const mainIsLocal = canSwapVideoFeeds && localIsMain;
 
   return (
-    <View
+    <CallContentView
+      callId={route?.params?.callId || callId}
+      nativeID={`incoming-answer-call-content-${String(route?.params?.callId || callId || '').trim()}`}
       style={[
         styles.container,
         // Сплошной фон, как на «Поиске», — и в аудио, и с камерой.
@@ -7910,7 +7913,7 @@ const VideoCall: React.FC<Props> = ({ route, screenNavigation }) => {
           ) : null}
         </View>
       </SafeAreaView>
-    </View>
+    </CallContentView>
   );
 
 };

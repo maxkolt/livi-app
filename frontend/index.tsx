@@ -12,8 +12,10 @@ import { installCallRuntimeBridges } from './utils/callRuntime';
 import { installCallOutcomeTelemetry } from './utils/callLifecycleTelemetry';
 import { trackReleaseError } from './utils/telemetry';
 import { installReleaseDiagnostics } from './utils/releaseDiagnostics';
+import { installMemoryPressure } from './utils/memoryPressure';
 
 installReleaseDiagnostics();
+installMemoryPressure();
 
 // Пункт 6: lifecycle/policy флаги звонка — callRuntime; global.__*Ref только bridge.
 installCallRuntimeBridges();

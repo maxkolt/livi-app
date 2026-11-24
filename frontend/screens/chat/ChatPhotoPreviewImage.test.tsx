@@ -3,6 +3,16 @@ jest.mock('expo-image', () => ({ Image: 'ExpoImage' }));
 import { ChatPhotoPreviewImage, chatPhotoPreviewLayout, chatPhotoBubbleWidth } from './ChatPhotoPreviewImage';
 import { albumGridLayout, CHAT_ALBUM_INSET } from './chatAlbum';
 
+it('fills the compact photo frame proportionally without changing its source', () => {
+  const source = { uri: 'file:///portrait.jpg', width: 900, height: 1600 };
+  const style = { width: 252, height: 300 };
+  const tree = ChatPhotoPreviewImage({ source, style, fit: 'cover' });
+  expect(tree.props.contentFit).toBe('cover');
+  expect(tree.props.placeholderContentFit).toBe('cover');
+  expect(tree.props.source).toBe(source);
+  expect(tree.props.style).toBe(style);
+});
+
 it.each([
   ['panorama', 6000, 1000],
   ['landscape', 1600, 900],
@@ -23,7 +33,6 @@ it.each([
   expect(React.isValidElement(tree)).toBe(true);
   expect(tree.type).toBe('ExpoImage');
   expect(tree.props.source).toBe(source);
-  if (width && height) expect(bounds.width / bounds.height).toBeCloseTo(width / height, 10);
   expect(tree.props.contentFit).toBe('contain');
   expect(tree.props.placeholderContentFit).toBe('contain');
   expect(tree.props.transition).toBe(0);

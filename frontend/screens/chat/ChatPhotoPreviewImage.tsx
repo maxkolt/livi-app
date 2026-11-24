@@ -27,15 +27,16 @@ export function useChatPhotoPreviewLayout(uri: string, width: unknown, height: u
   return chatPhotoPreviewLayout(layoutWidth, dimensions, viewportHeight);
 }
 
-type Props = Omit<ImageProps, 'contentFit' | 'placeholderContentFit' | 'transition'>;
+type PreviewImageProps = Omit<ImageProps, 'contentFit' | 'placeholderContentFit' | 'transition'>;
+type Props = PreviewImageProps & { fit?: 'contain' | 'cover' };
 
-/** Complete photo content remains visible while dimensions are discovered or a legacy message loads. */
-export function ChatPhotoPreviewImage(props: Props) {
+/** Albums contain the whole image; compact single-photo frames can fill proportionally. */
+export function ChatPhotoPreviewImage({ fit = 'contain', ...props }: Props) {
   const source = props.source;
   const rawUri = source && typeof source === 'object' && !Array.isArray(source) && 'uri' in source ? String(source.uri || '') : '';
-  return rawUri.includes('/uploads/media/') ? <ProtectedPhotoImage {...props} rawUri={rawUri} /> : <ExpoImage {...props} contentFit="contain" placeholderContentFit="contain" transition={0} />;
+  return rawUri.includes('/uploads/media/') ? <ProtectedPhotoImage {...props} rawUri={rawUri} fit={fit} /> : <ExpoImage {...props} contentFit={fit} placeholderContentFit={fit} transition={0} />;
 }
-function ProtectedPhotoImage({ rawUri, ...props }: Props & { rawUri: string }) {
+function ProtectedPhotoImage({ rawUri, fit, ...props }: PreviewImageProps & { rawUri: string; fit: 'contain' | 'cover' }) {
   const uri = useProtectedMediaUri(rawUri);
-  return <ExpoImage {...props} source={uri ? { uri } : undefined} contentFit="contain" placeholderContentFit="contain" transition={0} />;
+  return <ExpoImage {...props} source={uri ? { uri } : undefined} contentFit={fit} placeholderContentFit={fit} transition={0} />;
 }

@@ -615,19 +615,19 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
     }
   }
 
-  /** Снять нативную крышку accept, когда «Соединение…» нарисовано (без ожидания JS). */
+  /** Reveal the real call UI after native paint, without waiting for connection. */
   @ReactMethod
-  fun clearIncomingAnswerNativeCoverWhenContentDrawn() {
+  fun clearIncomingAnswerNativeCoverWhenContentDrawn(callId: String?) {
     Handler(Looper.getMainLooper()).post {
-      MainActivity.hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible()
+      MainActivity.hideIncomingAnswerCoverWhenContentDrawnOnMainIfPossible(callId)
     }
   }
 
   /** Показать нативную крышку accept (#0A0C14) без подъёма Main (in-app / уже foreground). */
   @ReactMethod
-  fun showIncomingAnswerNativeCover() {
+  fun showIncomingAnswerNativeCover(callId: String?) {
     Handler(Looper.getMainLooper()).post {
-      MainActivity.showIncomingAnswerCoverOnMainIfPossible()
+      MainActivity.showIncomingAnswerCoverOnMainIfPossible(callId)
     }
   }
 
@@ -715,7 +715,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         hasVideo,
         returnMainOnDismiss = MainActivity.isInForeground,
       )
-      ctx.startActivity(intent)
+      ctx.startActivity(intent, incomingAnswerLaunchOptions())
       Log.d(NAME, "launchIncomingCallActivity: launched after old incoming close callId=$callId")
     }, if (IncomingCallActivity.isAlive) INCOMING_RELAUNCH_DELAY_MS else 0L)
   }
@@ -826,7 +826,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
           hasVideo,
           returnMainOnDismiss = MainActivity.isInForeground,
         )
-        ctx.startActivity(launchIntent)
+        ctx.startActivity(launchIntent, incomingAnswerLaunchOptions())
         Log.d(NAME, "showIncomingCallSystemUI: immediate startActivity OK")
       } catch (e: Exception) {
         Log.w(NAME, "showIncomingCallSystemUI: immediate startActivity failed, relying on FGS", e)
@@ -4052,34 +4052,41 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
 
     /**
      * Сразу вывести задачу MainActivity на передний план (accept входящего).
-     * Без OutgoingCall(close) и без debounce-skip по isInForeground — Incoming в отдельной задаче.
+     * Incoming в отдельной задаче; уже показанный Main повторно не запускаем.
      * [withAnswerCover]: true только до первого кадра VideoCall; false при reinforce после navigate.
      */
     @JvmStatic
     @JvmOverloads
     fun bringMainToFrontImmediate(ctx: Context, withAnswerCover: Boolean = true) {
-      synchronized(LiviAppModule::class.java) {
-        lastBringMainToFrontAtMs = System.currentTimeMillis()
-      }
-      if (withAnswerCover) {
-        MainActivity.showIncomingAnswerCoverOnMainIfPossible()
-      }
       val appCtx = ctx.applicationContext
-      val mainIntent = Intent(appCtx, MainActivity::class.java).apply {
-        addFlags(
-          Intent.FLAG_ACTIVITY_NEW_TASK
-            or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
-            or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            // Incoming = singleInstance: без NO_ANIMATION OEM рисует task-switch / splash → мерцание.
-            or Intent.FLAG_ACTIVITY_NO_ANIMATION,
-        )
-        if (withAnswerCover) {
-          putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
-          putExtra(MainActivity.EXTRA_ANSWER_LAUNCHED_AT, SystemClock.elapsedRealtime())
-        }
-      }
       Handler(Looper.getMainLooper()).post {
+        // Native Accept can bring Main forward before JS finishes accepting.
+        // Check on the UI thread before rearming the cover or creating an intent.
+        val mainInPiP = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+          MainActivity.lastResumedInstance?.isInPictureInPictureMode == true
+        if (MainActivity.isInForeground && !mainInPiP) {
+          Log.d(NAME, "bringMainToFrontImmediate: Main already foreground, skip duplicate answer handoff")
+          return@post
+        }
+        synchronized(LiviAppModule::class.java) {
+          lastBringMainToFrontAtMs = System.currentTimeMillis()
+        }
+        if (withAnswerCover) {
+          MainActivity.showIncomingAnswerCoverOnMainIfPossible()
+        }
+        val mainIntent = Intent(appCtx, MainActivity::class.java).apply {
+          addFlags(
+            Intent.FLAG_ACTIVITY_NEW_TASK
+              or Intent.FLAG_ACTIVITY_CLEAR_TOP
+              or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT
+              or Intent.FLAG_ACTIVITY_SINGLE_TOP
+              or Intent.FLAG_ACTIVITY_NO_ANIMATION,
+          )
+          if (withAnswerCover) {
+            putExtra(MainActivity.EXTRA_INCOMING_ANSWER_COVER, true)
+            putExtra(MainActivity.EXTRA_ANSWER_LAUNCHED_AT, SystemClock.elapsedRealtime())
+          }
+        }
         try {
           appCtx.startActivity(mainIntent, if (withAnswerCover) incomingAnswerLaunchOptions() else null)
           try {
@@ -4446,6 +4453,10 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
         params.putString("route", route)
         ctx.emitDeviceEvent("LiviNetRouteChanged", params)
       }
+    }
+
+    fun emitMemoryPressure() {
+      runOnReactUiQueueIfAlive { it.emitDeviceEvent("LiviMemoryPressure", null) }
     }
 
     /** FCM endedFromActive while peer is in system PiP — local teardown without waiting for socket call:ended. */
@@ -5739,7 +5750,7 @@ class LiviAppModule(reactContext: ReactApplicationContext) : ReactContextBaseJav
       pendingAnswerFromNick = fromNick
       // Сразу arm native stage-cover: иначе bringMain показывает Home до JS paint.
       MainActivity.armIncomingAnswerCover = true
-      MainActivity.showIncomingAnswerCoverOnMainIfPossible()
+      MainActivity.showIncomingAnswerCoverOnMainIfPossible(callId)
     }
 
     @JvmStatic

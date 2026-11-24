@@ -56,8 +56,8 @@ available only with the explicit `CAPACITY_METRICS_ENABLED` diagnostic switch, l
 capacity endpoints.
 
 Matchmaking presence reads share batches of at most 128 users with four concurrent queries and a
-2 ms collection window. Completed results are not cached. Friendship edges are repaired only when
-one direction is missing, and concurrent legacy migrations share only their pending operation.
+2 ms collection window. Completed results are not cached. Friendship reads combine current edges and historical arrays
+without migration or repair writes. Existing records remain in their stored format.
 
 `all`/`chat` sends one message per user, retries its ID through socket/HTTP, fetches capped history,
 tests a disconnected recipient and drains 1000 persisted offline records with acknowledgements.

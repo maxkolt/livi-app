@@ -181,6 +181,7 @@ import {
   APP_TOP_CONTENT_GAP,
 } from './home/constants';
 import { emitRequestDirectCall } from '../utils/globalEvents';
+import { isCallStartBlocked } from '../utils/callStartAvailability';
 import { useCosmetics } from '../utils/cosmetics';
 import { markChatCallBubbleEligible } from './chat/chatCallEvents';
 import {
@@ -2085,6 +2086,7 @@ export default function ChatScreen({ route, navigation }: Props) {
   const lastChatCallTapAtRef = useRef(0);
 
   const handleHeaderCall = React.useCallback(() => {
+    if (isCallStartBlocked()) return;
     const id = String(peerId || '').trim();
     if (!id) return;
     const now = Date.now();
@@ -2121,6 +2123,7 @@ export default function ChatScreen({ route, navigation }: Props) {
 
   /** Тап по облаку звонка — перезвонить; облако легко задеть случайно, поэтому сначала спросить. */
   const handleCallBubblePress = React.useCallback(() => {
+    if (isCallStartBlocked()) return;
     openConfirm({
       title: t('chatCallBackTitle', lang).replace('{name}', peerNameState || peerNameParam || ''),
       message: t('audioCallStatus', lang),

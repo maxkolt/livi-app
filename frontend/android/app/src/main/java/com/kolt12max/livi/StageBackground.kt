@@ -91,7 +91,7 @@ object StageBackground {
   @Volatile private var thresholds: FloatArray? = null
 
   /** Портрет и ландшафт обеих палитр плюс окно модалки; всё остальное — редкость. */
-  private val cache = RenderCache(TAG, capacity = 5)
+  private val cache = RenderCache(TAG, capacity = 5, maxBytes = 24L * 1024 * 1024)
 
   /** Опорные точки запасного градиента: по 16 на половину экрана, как HOME_STAGE_FADE_STEPS. */
   private val fallbackPositions = FloatArray(33) { it / 32f }
@@ -250,18 +250,34 @@ object StageBackground {
 }
 
 /** LRU bitmap'ов, которые считаются в фоновом потоке; onReady — на главном. */
-internal class RenderCache(private val tag: String, private val capacity: Int) {
-  private val ready = LinkedHashMap<String, Bitmap>(capacity, 0.75f, true)
+internal class RenderCache(private val tag: String, capacity: Int, private val maxBytes: Long) {
+  private val ready = ByteBudgetLru<String, Bitmap>(capacity, maxBytes) { it.allocationByteCount.toLong() }
+  // Eviction must not decode a duplicate while another live View still owns the
+  // same image. Weak entries share that image without retaining its pixel data.
+  private val live = HashMap<String, java.lang.ref.WeakReference<Bitmap>>()
   private val waiting = HashMap<String, MutableList<(Bitmap) -> Unit>>()
+  private var generation = 0
+
+  init { synchronized(instances) { instances[this] = true } }
+
+  private fun trim() = synchronized(this) {
+    generation++
+    ready.clear()
+  }
 
   fun get(key: String, render: () -> Bitmap, onReady: (Bitmap) -> Unit): Bitmap? {
-    synchronized(this) {
+    val requestGeneration = synchronized(this) {
       ready[key]?.let { return it }
+      live[key]?.get()?.takeUnless { it.isRecycled }?.let {
+        ready.put(key, it)
+        return it
+      }
       waiting[key]?.let {
         it.add(onReady)
         return null
       }
       waiting[key] = mutableListOf(onReady)
+      generation
     }
     worker.execute {
       val bitmap =
@@ -274,18 +290,28 @@ internal class RenderCache(private val tag: String, private val capacity: Int) {
       val callbacks =
         synchronized(this) {
           if (bitmap != null) {
-            ready[key] = bitmap
+            live.entries.removeAll { it.value.get() == null }
+            live[key] = java.lang.ref.WeakReference(bitmap)
+            if (generation == requestGeneration) ready.put(key, bitmap)
             // Без recycle: вытесненный bitmap может ещё рисоваться в живом View.
-            while (ready.size > capacity) ready.remove(ready.keys.first())
           }
           waiting.remove(key).orEmpty()
         }
-      if (bitmap != null) main.post { callbacks.forEach { it(bitmap) } }
+      if (bitmap != null) main.post {
+        // Existing Views must still receive their pending image after a trim;
+        // only cache ownership is discarded, not their live content.
+        callbacks.forEach { it(bitmap) }
+      }
     }
     return null
   }
 
-  private companion object {
+  companion object {
+    private val instances = java.util.WeakHashMap<RenderCache, Boolean>()
+    fun trimAll() {
+      val caches = synchronized(instances) { instances.keys.toList() }
+      caches.forEach { it.trim() }
+    }
     /** Один поток на фон и тени: считаются по очереди, UI их не ждёт. */
     val worker: ExecutorService =
       Executors.newSingleThreadExecutor { task -> Thread(task, "LiviStageRender").apply { isDaemon = true } }

@@ -26,7 +26,6 @@ import avatarRouter from './routes/avatar';
 import messagesRouter from './routes/messages';
 import moderationRouter from './routes/moderation';
 import cosmeticsRouter from './routes/cosmetics';
-import installMigrationRouter from './routes/installMigration';
 import fliqRouter from './routes/fliq';
 import integrityRouter from './routes/integrity';
 import releaseDiagnosticsRouter from './routes/release-diagnostics';
@@ -136,7 +135,7 @@ type LeanUser = {
 
 type ProfileFields = Pick<UserRecord, 'nick' | 'avatar' | 'avatarVer' | 'avatarB64' | 'avatarThumbB64'>;
 type ProfileAck = (result: { ok: boolean; profile?: Partial<ProfileFields>; error?: string }) => void;
-type ReauthAck = (result: { ok: boolean; userId?: string; missed?: MissedCallDelivery[]; legacyMigrationRequired?: boolean; error?: string }) => void;
+type ReauthAck = (result: { ok: boolean; userId?: string; missed?: MissedCallDelivery[]; error?: string }) => void;
 type SocketPresenceData = Pick<AuthedSocket['data'], 'inCall' | 'busy' | 'roomId' | 'partnerSid' | 'randomChatBusy'>;
 
 /* ========= ENV ========= */
@@ -536,7 +535,6 @@ app.use('/api', moderationRouter);
 // Роутам нужен io, чтобы разослать друзьям смену косметики без перезапуска приложения.
 app.set('io', io);
 app.use('/api', cosmeticsRouter);
-app.use('/api', installMigrationRouter);
 app.use('/api', fliqRouter);
 app.use('/api', integrityRouter);
 app.use('/api', releaseDiagnosticsRouter);
@@ -3360,7 +3358,7 @@ io.on('connection', async (sock: AuthedSocket) => {
       } catch (e: unknown) {
         logger.warn('[reauth] fetch missed failed', { error: (e as ErrorDetails)?.message });
       }
-      ack?.({ ok: true, userId: mappedUserId, missed, legacyMigrationRequired: !inst?.installSecretHash });
+      ack?.({ ok: true, userId: mappedUserId, missed });
     } catch (e) {
       logger.error('Reauth error', { error: (e as ErrorDetails)?.message || String(e) });
       ack?.({ ok: false, error: 'server_error' });

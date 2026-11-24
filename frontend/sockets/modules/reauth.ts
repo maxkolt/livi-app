@@ -31,7 +31,6 @@ export async function emitReauthDeduped(
         shared.lastSuccessfulReauthAt = Date.now();
         shared.lastSuccessfulReauthSocketId = socketId;
         shared.lastSuccessfulReauthUserId = uid;
-        if (res.legacyMigrationRequired) void import('../../utils/migrateLegacyInstall').then(m => m.migrateLegacyInstall(uid)).catch(() => {});
         // Also drain native history after identity becomes available, even without server backlog.
         applyMissedFromReauth(res).catch(() => {});
       } else {
@@ -82,16 +81,26 @@ export async function recoverFromReauthFailure(error?: string): Promise<void> {
   await identity.createUser();
 }
 
+/** Server ownership binding lives until this socket connection/user changes. */
+export function hasPrivilegedSocketOwnershipProof(): boolean {
+  const uid = String(shared.currentUserId || "").trim();
+  return !!uid && socket.connected && !!socket.id && shared.lastSuccessfulReauthAt > 0 &&
+    shared.lastSuccessfulReauthSocketId === socket.id && shared.lastSuccessfulReauthUserId === uid;
+}
+
+/** Other privileged operations keep their existing short-lived freshness policy. */
+export function hasFreshPrivilegedSocketProof(): boolean {
+  const age = Date.now() - shared.lastSuccessfulReauthAt;
+  return hasPrivilegedSocketOwnershipProof() && age >= 0 && age < REAUTH_FRESH_MS;
+}
+
 // После разрыва Manager шлёт `reconnect`, а namespace socket всегда шлёт `connect` — reauth делаем только в обработчике `connect` (через emitReauthDeduped), иначе двойной emit.
 export async function ensureReauthBeforePrivilegedSocketOp(force = false): Promise<boolean> {
   const uid = String(shared.currentUserId || "").trim();
   if (!uid) return false;
   if (!socket.connected) await ensureSocketConnected();
   if (!socket.connected) return false;
-  const now = Date.now();
-  if (!force && socket.id && shared.lastSuccessfulReauthSocketId === socket.id &&
-      shared.lastSuccessfulReauthUserId === uid &&
-      now - shared.lastSuccessfulReauthAt < REAUTH_FRESH_MS) return true;
+  if (!force && hasFreshPrivilegedSocketProof()) return true;
   const res = await emitReauthDeduped(uid);
   return !!res.ok && socket.connected && !!socket.id && shared.lastSuccessfulReauthSocketId === socket.id &&
     shared.lastSuccessfulReauthUserId === shared.currentUserId;

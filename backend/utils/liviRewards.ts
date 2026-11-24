@@ -26,7 +26,15 @@ export async function recordInviteAttribution(inviteeId: string, inviterId: stri
   if (!invitee?.createdAt || invitee.referredBy || invitee.createdAt.getTime() < Date.now() - ATTRIBUTION_WINDOW_MS) return;
   // A newer account cannot invite its own inviter: this also prevents referral cycles.
   if (!await User.exists({ _id: inviterId, createdAt: { $lt: invitee.createdAt } })) return;
-  if (await FriendshipEdge.exists({ userId: inviteeId, friendId: inviterId })) return;
+  if (await FriendshipEdge.exists({ $or: [
+    { userId: inviteeId, friendId: inviterId },
+    { userId: inviterId, friendId: inviteeId },
+  ] })) return;
+  // Existing arrays remain authoritative without being copied into new edges.
+  if (await User.exists({ $or: [
+    { _id: inviteeId, friends: inviterId },
+    { _id: inviterId, friends: inviteeId },
+  ] })) return;
   await User.updateOne({
     _id: inviteeId,
     referredBy: { $exists: false },
@@ -57,8 +65,11 @@ export async function reconcileInviteRewards(inviterId: string): Promise<void> {
   if (!referrals.length) return;
   // Heal a crash between creating the friendship and marking acceptance.
   const pending = referrals.filter(user => !user.referralAccepted).map(user => user._id);
-  const edges = pending.length ? await FriendshipEdge.find({ userId: inviterId, friendId: { $in: pending } }).select('friendId').lean() : [];
-  const connected = new Set(edges.map(edge => String(edge.friendId)));
+  const edges = pending.length ? await FriendshipEdge.find({ $or: [
+    { userId: inviterId, friendId: { $in: pending } },
+    { friendId: inviterId, userId: { $in: pending } },
+  ] }).select('userId friendId').lean() : [];
+  const connected = new Set(edges.map(edge => String(edge.userId) === inviterId ? String(edge.friendId) : String(edge.userId)));
   const ids = referrals.filter(user => user.referralAccepted || connected.has(String(user._id))).map(user => String(user._id));
   if (!ids.length) return;
   await User.updateMany({ _id: { $in: ids }, referredBy: inviterId }, { $set: { referralAccepted: true } });

@@ -17,6 +17,9 @@ export function usePaneVisibleValue(): SharedValue<boolean> | null {
  * вкладки (список). Вне keep-alive вкладки — true.
  */
 export const PaneLiveContext = createContext(true);
+/** Heavy surfaces may sleep while data and list position stay mounted. */
+export const PaneResourcesContext = createContext(true);
+export const usePaneResources = () => useContext(PaneResourcesContext);
 
 // Android's native clipping detaches list rows independently of virtualization.
 // Keep-alive panes move offscreen, so detaching their rows can discard an already

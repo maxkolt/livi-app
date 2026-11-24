@@ -98,7 +98,7 @@ import {
   type WelcomeTabPressMeta,
   type WelcomeTabId,
 } from './home/HomeWelcomeTabBar';
-import { welcomeTabBarMetrics } from './home/welcomeTabBarLayout';
+import { welcomeTabBarMetrics, welcomeTabBarDockGap } from './home/welcomeTabBarLayout';
 import { FramesStoreHost } from './home/WelcomeCrownButton';
 import { WelcomeKeepAlivePane } from './home/WelcomeKeepAlivePane';
 import { SpatialStageBackground } from './home/SpatialDepth';
@@ -487,6 +487,8 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const { bottomGap: tabBarBottomGap, contentHeight: tabBarContentHeight } =
     welcomeTabBarMetrics(layoutWidth, layoutHeight, homeInsets.bottom);
   const tabBarH = tabBarContentHeight + tabBarBottomGap;
+  const dockBottomGap = welcomeTabBarDockGap(homeInsets.bottom, tabBarBottomGap);
+  const dockH = tabBarContentHeight + dockBottomGap;
   const [searchTopBlockBottom, setSearchTopBlockBottom] = useState<number | null>(null);
   const onSearchTopBlockBottom = useCallback((bottom: number | null) => {
     setSearchTopBlockBottom((prev) =>
@@ -496,6 +498,10 @@ export default function HomeScreen({ navigation, route }: Props & { route?: { pa
   const homePanePad = useMemo(
     () => ({ paddingTop: homeInsets.top, paddingBottom: tabBarH }),
     [homeInsets.top, tabBarH],
+  );
+  const profilePanePad = useMemo(
+    () => ({ paddingTop: homeInsets.top, paddingBottom: dockH }),
+    [homeInsets.top, dockH],
   );
   const notificationHomeRequest = getNotificationHomeRequest();
   const [, renderNotificationState] = useState(0);
@@ -5797,7 +5803,7 @@ const handleClearNick = useCallback(async () => {
       <BlurSourceFill sourceId={HOME_BLUR_BG_SOURCE}>
         <SpatialStageBackground
           enabled={!showFliqTab}
-          clearBottomHeight={tabBarH + GLASS_DOCK_TOP_PAD}
+          clearBottomHeight={dockH + GLASS_DOCK_TOP_PAD}
         />
       </BlurSourceFill>
       <HomeLayoutProvider size={homeLayoutSize}>
@@ -5909,7 +5915,7 @@ const handleClearNick = useCallback(async () => {
             onPrewarmSettled={handleFliqPrewarmSettled}
             lang={lang}
             bottomInset={tabBarH + GLASS_DOCK_TOP_PAD}
-            navMidFromBottom={(tabBarH + tabBarBottomGap) / 2}
+            navMidFromBottom={(dockH + dockBottomGap) / 2}
             topInset={homeInsets.top + APP_TOP_CONTENT_GAP}
           />
         </WelcomeKeepAlivePane>
@@ -5942,10 +5948,11 @@ const handleClearNick = useCallback(async () => {
         {/* keep-alive за экраном, а не display:none: иначе вся панель профиля
             раскладывается в момент тапа и первый переход роняет кадры. */}
         {mountedWelcomeTabs.has('profile') ? (
-        <WelcomeKeepAlivePane tabId="profile" visible={showProfileTab} mode="offscreen" style={homePanePad}>
+        <WelcomeKeepAlivePane tabId="profile" visible={showProfileTab} mode="offscreen" style={profilePanePad}>
           {/* Источник нижнего стекла: что подъезжает к навбару, видно под стеклом размытым. */}
           <BlurListSource sourceId={HOME_BLUR_LIST_SOURCE.profile} style={{ flex: 1, minHeight: 0 }}>
           <HomeWelcomeProfileView
+            paneHeight={Math.max(0, layoutHeight - homeInsets.top - dockH)}
             openAppUpdatesRequest={appUpdatesRequest}
             lang={lang}
             isDark={isDark}
@@ -5987,7 +5994,7 @@ const handleClearNick = useCallback(async () => {
       </View>
 
       {/* Стекло от верха навбара до низа экрана; содержимое вкладки размыто под ним. */}
-      <NotificationGlassDock listSourceId={tabBarListSource} height={tabBarH} />
+      <NotificationGlassDock listSourceId={tabBarListSource} height={dockH} />
       {/* Навбар поверх вкладок — непрозрачный блок на стекле. */}
       <View
         pointerEvents="box-none"

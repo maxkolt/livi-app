@@ -59,7 +59,6 @@ it('keeps dev-created hashes verifiable in production without copying its pepper
     jest.isolateModules(() => {
       const prod = require('./installSecret');
       expect(prod.verifyInstallSecret(SECRET, devHash)).toBe(true);
-      expect(prod.needsInstallSecretRehash(devHash)).toBe(true);
       expect(prod.hashInstallSecret(SECRET)).toMatch(/^v1:/);
       expect(prod.verifyInstallSecret(SECRET, 'v1:' + devHash)).toBe(false);
     });

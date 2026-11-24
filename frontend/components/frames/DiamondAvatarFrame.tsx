@@ -7,7 +7,7 @@ import {
   useReducedMotion,
   useSharedValue,
 } from 'react-native-reanimated';
-import { usePaneVisibleValue } from '../../utils/paneVisibility';
+import { usePaneResources, usePaneVisibleValue } from '../../utils/paneVisibility';
 import { useSkiaFirstPaint } from '../../utils/skiaFirstPaint';
 import { useBakedRing, type BakedRingSources } from './bakedRing';
 
@@ -175,7 +175,8 @@ function DiamondAvatarFrameInner({
   const [appActive, setAppActive] = useState(AppState.currentState === 'active');
   const elapsed = useSharedValue(0);
   const paneVisible = usePaneVisibleValue();
-  const running = active && appActive && !reduceMotion;
+  const resources = usePaneResources();
+  const running = resources && active && appActive && !reduceMotion;
   const { canvasRef, paintViewRef, requestPaintSignal } = useSkiaFirstPaint(onReady);
   const wantsReady = !!onReady;
 
@@ -200,6 +201,7 @@ function DiamondAvatarFrameInner({
 
   useEffect(() => {
     frame.setActive(running);
+    return () => frame.setActive(false);
   }, [frame, running]);
 
   const uniforms = useDerivedValue(() => ({
@@ -226,7 +228,7 @@ function DiamondAvatarFrameInner({
       >
         {children}
       </View>
-      {effect ? (
+      {effect && resources ? (
         <View
           ref={paintViewRef}
           collapsable={false}

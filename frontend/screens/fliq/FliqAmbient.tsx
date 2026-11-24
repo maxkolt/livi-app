@@ -6,6 +6,8 @@
 // - тон фона — на весь экран, слабый: общий фон вкладки окрашивается настроением ролика.
 // Размытие с режимом decal гаснет к прозрачному само, без градиентов, поэтому свет переходит
 // в фон приложения мягко. При смене ролика свет перетекает к новому (крест-растворение).
+import { subscribeMemoryPressure } from '../../utils/memoryPressure';
+import { usePaneResources } from '../../utils/paneVisibility';
 import React, { memo, useEffect, useRef, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import {
@@ -39,8 +41,10 @@ const WASH_MATRIX = saturate(1.3, 0.8);
 const FADE_MS = 300;
 
 /** Декодированные превью: один и тот же ролик листают туда-обратно. */
+let cacheGeneration = 0;
 const imageCache = new Map<string, SkImage>();
-const IMAGE_CACHE_MAX = 12;
+const IMAGE_CACHE_MAX = 6;
+subscribeMemoryPressure(() => { cacheGeneration++; imageCache.clear(); });
 /** Загрузки в пути: подгрузка соседей и показ одного превью не качают его дважды. */
 const pending = new Map<string, Promise<SkImage | null>>();
 
@@ -49,12 +53,13 @@ function loadImage(url: string): Promise<SkImage | null> {
   if (hit) return Promise.resolve(hit);
   const inFlight = pending.get(url);
   if (inFlight) return inFlight;
+  const generation = cacheGeneration;
   const load = (async () => {
     try {
       const data = await Skia.Data.fromURI(url);
       const img = Skia.Image.MakeImageFromEncoded(data);
       if (!img) return null;
-      imageCache.set(url, img);
+      if (generation === cacheGeneration) imageCache.set(url, img);
       if (imageCache.size > IMAGE_CACHE_MAX) {
         const oldest = imageCache.keys().next().value;
         if (oldest) imageCache.delete(oldest);
@@ -87,6 +92,7 @@ type Props = {
 };
 
 export const FliqAmbient = memo(function FliqAmbient({ url, card, width, height }: Props) {
+  const resources = usePaneResources();
   const [front, setFront] = useState<SkImage | null>(null);
   const [back, setBack] = useState<SkImage | null>(null);
   const frontRef = useRef<SkImage | null>(null);
@@ -110,7 +116,7 @@ export const FliqAmbient = memo(function FliqAmbient({ url, card, width, height 
     };
   }, [url, progress]);
 
-  if (width <= 0 || height <= 0 || (!front && !back)) return null;
+  if (!resources || width <= 0 || height <= 0 || (!front && !back)) return null;
 
   // Ореол чуть шире карточки: у края ролика свет ~на половине, дальше гаснет.
   const halo = { x: card.x - 14, y: card.y - 10, width: card.width + 28, height: card.height + 20 };

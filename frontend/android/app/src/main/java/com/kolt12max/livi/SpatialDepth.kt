@@ -348,7 +348,7 @@ object SpatialTilt : SensorEventListener, Choreographer.FrameCallback {
 /** Сцена и её слои по глубине (scripts/generate-spatial-depth.js) — один раз на процесс. */
 private object SpatialScene {
   /** Шесть исходных картинок и пересчитанные под экран фон и элементы (портрет и альбом). */
-  private val cache = RenderCache("SpatialScene", capacity = 10)
+  private val cache = RenderCache("SpatialScene", capacity = 10, maxBytes = 48L * 1024 * 1024)
 
   /** Картинка целиком — Android 12 и ниже сдвигает её одним планом. */
   fun image(context: Context, onReady: (Bitmap) -> Unit): Bitmap? =

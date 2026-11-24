@@ -5,7 +5,11 @@ import android.os.Build
 import android.os.Bundle
 import android.window.SplashScreen
 
-/** Answer handoff uses the call background; the ordinary launcher keeps its branded splash. */
+/**
+ * Incoming and answer launches use a solid starting window. Android can inherit
+ * the incoming activity's splash style when restoring the existing Main task,
+ * even after consuming the answer launch options.
+ */
 internal fun incomingAnswerLaunchOptions(): Bundle? {
   if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return null
   return ActivityOptions.makeBasic()

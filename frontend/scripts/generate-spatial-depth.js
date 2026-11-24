@@ -82,6 +82,7 @@ const SEEDS = [
   { name: 'mic', at: [1264, 954], plane: PLANE.icons },
   // Камера — ниже и наклонена к кубу (build-spatial-stage-hq.js): точка внутри её корпуса.
   { name: 'camera', at: [176, 1398], plane: PLANE.icons },
+  { name: 'cube-bottom-small', at: [325, 2418], plane: PLANE.icons },
   {
     name: 'cube-bottom',
     at: [LOWER_CUBE.cx, LOWER_CUBE.cy].map(v => Math.round(v * 1440 / SOURCE_WIDTH)),
@@ -105,8 +106,8 @@ const GROUPS = [
   { name: 'map', rect: [270, 730, 1170, 1300], plane: PLANE.map, close: 64 },
 ];
 
-/** Убранные графики и точка справа от верхнего куба заменяются ровной подложкой. */
-const REMOVED_GROUPS = new Set(['chart-left', 'chart-right', 'dot-cube-top-right']);
+/** Убранные графики, верхняя точка и маленький куб под навигацией заменяются подложкой. */
+const REMOVED_GROUPS = new Set(['chart-left', 'chart-right', 'dot-cube-top-right', 'cube-bottom-small']);
 /** Детали общего компонента списка слева: две точки и две строки после пробела. */
 const REMOVED_DETAIL_RECTS = [
   [184, 1052, 209, 1076],

@@ -5,17 +5,10 @@ import FriendshipEdge from '../models/FriendshipEdge';
 import { settleInviteRewards } from './liviRewards';
 
 export type FriendListProfile = Pick<LeanUser, '_id' | 'nick' | 'avatar' | 'avatarVer' | 'avatarThumbB64'>;
-type BulkWriteFailure = {
-  code?: unknown;
-  writeErrors?: Array<{ code?: unknown } | null>;
-};
-
 const TTL_MS = 5 * 60_000; // reduce repeated DB checks on hot realtime paths like typing
 
 type CacheEntry<T> = { v: T; exp: number };
 const friendsCache = new Map<string, CacheEntry<boolean>>();
-const legacyEdgeMigrationAttempts = new Set<string>();
-const legacyEdgeMigrations = new Map<string, Promise<void>>();
 
 /** Кэш документов дружбы (getOrCreateFriendship). Ключ: `${user1}_${user2}` (id отсортированы). */
 const friendshipDocCache = new Map<string, IFriendshipMessages>();
@@ -80,10 +73,6 @@ export function clearFriendshipCache(userId?: string) {
 
 export async function ensureFriendshipEdges(a: string, b: string): Promise<void> {
   if (!isOid(a) || !isOid(b) || String(a) === String(b)) return;
-  await Promise.all([
-    migrateLegacyFriendEdgesForUser(a),
-    migrateLegacyFriendEdgesForUser(b),
-  ]);
   const now = new Date();
   await FriendshipEdge.bulkWrite(
     [
@@ -140,94 +129,8 @@ function addUniqueFriend(list: string[], seen: Set<string>, userId: string, frie
   list.push(friendId);
 }
 
-async function upsertBidirectionalFriendshipEdges(userId: string, friendIds: string[]): Promise<void> {
-  if (!isOid(userId)) return;
-  const ids = Array.from(new Set(friendIds.filter((friendId) => isOid(friendId) && friendId !== userId)));
-  if (ids.length === 0) return;
-
-  const userOid = new mongoose.Types.ObjectId(userId);
-  const now = new Date();
-  const ops = ids.flatMap((friendId) => {
-    const friendOid = new mongoose.Types.ObjectId(friendId);
-    return [
-      {
-        updateOne: {
-          filter: { userId: userOid, friendId: friendOid },
-          update: { $setOnInsert: { userId: userOid, friendId: friendOid, createdAt: now } },
-          upsert: true,
-        },
-      },
-      {
-        updateOne: {
-          filter: { userId: friendOid, friendId: userOid },
-          update: { $setOnInsert: { userId: friendOid, friendId: userOid, createdAt: now } },
-          upsert: true,
-        },
-      },
-    ];
-  });
-
-  try {
-    for (let i = 0; i < ops.length; i += 500) {
-      await FriendshipEdge.bulkWrite(ops.slice(i, i + 500), { ordered: false });
-    }
-  } catch (error) {
-    const writeErrors = Array.isArray((error as BulkWriteFailure | null)?.writeErrors) ? (error as BulkWriteFailure).writeErrors! : [];
-    const onlyDuplicateKeys = (error as BulkWriteFailure | null)?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err) => err?.code === 11000));
-    if (!onlyDuplicateKeys) throw error;
-  }
-
-  clearFriendshipCache(userId);
-  for (const friendId of ids) clearFriendshipCache(friendId);
-}
-
-async function migrateLegacyFriendEdgesForUser(userId: string): Promise<void> {
-  if (!isOid(userId)) return;
-  if (legacyEdgeMigrationAttempts.has(userId)) return;
-  const existing = legacyEdgeMigrations.get(userId);
-  if (existing) return existing;
-  const migration = migrateLegacyFriendEdges(userId).finally(() => {
-    if (legacyEdgeMigrations.get(userId) === migration) legacyEdgeMigrations.delete(userId);
-  });
-  legacyEdgeMigrations.set(userId, migration);
-  return migration;
-}
-
-async function migrateLegacyFriendEdges(userId: string): Promise<void> {
-
-  const legacyIds = Array.from(new Set(
-    (await getLegacyFriendIds(userId)).filter((friendId) => isOid(friendId) && friendId !== userId)
-  ));
-  if (legacyIds.length === 0) {
-    legacyEdgeMigrationAttempts.add(userId);
-    return;
-  }
-
-  const userOid = new mongoose.Types.ObjectId(userId);
-  const now = new Date();
-  const ops = legacyIds.map((friendId) => ({
-    updateOne: {
-      filter: { userId: userOid, friendId: new mongoose.Types.ObjectId(friendId) },
-      update: { $setOnInsert: { userId: userOid, friendId: new mongoose.Types.ObjectId(friendId), createdAt: now } },
-      upsert: true,
-    },
-  }));
-
-  try {
-    for (let i = 0; i < ops.length; i += 500) {
-      await FriendshipEdge.bulkWrite(ops.slice(i, i + 500), { ordered: false });
-    }
-  } catch (error) {
-    const writeErrors = Array.isArray((error as BulkWriteFailure | null)?.writeErrors) ? (error as BulkWriteFailure).writeErrors! : [];
-    const onlyDuplicateKeys = (error as BulkWriteFailure | null)?.code === 11000 || (writeErrors.length > 0 && writeErrors.every((err) => err?.code === 11000));
-    if (!onlyDuplicateKeys) throw error;
-  }
-  legacyEdgeMigrationAttempts.add(userId);
-}
-
 export async function getFriendIds(userId: string): Promise<string[]> {
   if (!isOid(userId)) return [];
-  await migrateLegacyFriendEdgesForUser(userId);
   const userOid = new mongoose.Types.ObjectId(userId);
   const [edges, ownLegacyIds, reverseLegacyIds] = await Promise.all([
     FriendshipEdge.find({
@@ -245,17 +148,13 @@ export async function getFriendIds(userId: string): Promise<string[]> {
 
   const friendIds: string[] = [];
   const seen = new Set<string>();
-  const outgoing = new Set<string>();
-  const incoming = new Set<string>();
   for (const edge of edges) {
     const edgeUserId = String(edge.userId);
     const edgeFriendId = String(edge.friendId);
     if (edgeUserId === userId) {
-      outgoing.add(edgeFriendId);
       addUniqueFriend(friendIds, seen, userId, edgeFriendId);
     }
     if (edgeFriendId === userId) {
-      incoming.add(edgeUserId);
       addUniqueFriend(friendIds, seen, userId, edgeUserId);
     }
   }
@@ -266,11 +165,8 @@ export async function getFriendIds(userId: string): Promise<string[]> {
     addUniqueFriend(friendIds, seen, userId, friendId);
   }
 
-  // A legacy array is still a valid source of truth. Its presence does not mean
-  // the already-complete edge pair needs rewriting on every status update.
-  const repairIds = friendIds.filter((friendId) => !outgoing.has(friendId) || !incoming.has(friendId));
-  if (repairIds.length > 0) await upsertBidirectionalFriendshipEdges(userId, repairIds);
-
+  // Both historical arrays and current edges are readable sources. A read never
+  // converts, repairs or duplicates an existing relationship in the database.
   return friendIds;
 }
 
@@ -279,7 +175,6 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
   const byUser = new Map<string, string[]>();
   if (uniqueIds.length === 0) return byUser;
 
-  await Promise.all(uniqueIds.map((id) => migrateLegacyFriendEdgesForUser(id)));
 
   const oidByString = new Map(uniqueIds.map((id) => [id, new mongoose.Types.ObjectId(id)]));
   const uniqueIdSet = new Set(uniqueIds);
@@ -302,7 +197,6 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
   ]);
 
   const seenByUser = new Map<string, Set<string>>();
-  const directedEdges = new Set<string>();
   const addForUser = (uid: string, friendId: string) => {
     if (!uniqueIdSet.has(uid)) return;
     const list = byUser.get(uid) || [];
@@ -315,7 +209,6 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
   for (const edge of edges) {
     const uid = String(edge.userId);
     const fid = String(edge.friendId);
-    directedEdges.add(`${uid}_${fid}`);
     addForUser(uid, fid);
     addForUser(fid, uid);
   }
@@ -332,19 +225,6 @@ export async function getFriendIdsForUsers(userIds: string[]): Promise<Map<strin
     if (!byUser.has(id)) byUser.set(id, []);
   }
 
-  const repairingPairs = new Set<string>();
-  const repairs = uniqueIds.map((id) => {
-    const missing = (byUser.get(id) || []).filter((friendId) => {
-      if (directedEdges.has(`${id}_${friendId}`) && directedEdges.has(`${friendId}_${id}`)) return false;
-      const pairKey = key(id, friendId);
-      if (repairingPairs.has(pairKey)) return false;
-      repairingPairs.add(pairKey);
-      return true;
-    });
-    return missing.length ? upsertBidirectionalFriendshipEdges(id, missing) : Promise.resolve();
-  });
-  await Promise.all(repairs);
-
   return byUser;
 }
 
@@ -355,10 +235,6 @@ export async function areFriendsCached(a: string, b: string): Promise<boolean> {
   const hit = friendsCache.get(k);
   if (hit && hit.exp > now) return hit.v;
 
-  await Promise.all([
-    migrateLegacyFriendEdgesForUser(a),
-    migrateLegacyFriendEdgesForUser(b),
-  ]);
 
   const aOid = new mongoose.Types.ObjectId(a);
   const bOid = new mongoose.Types.ObjectId(b);
@@ -377,12 +253,6 @@ export async function areFriendsCached(a: string, b: string): Promise<boolean> {
       ],
     }).select('_id').lean();
     ok = !!doc;
-  }
-
-  if (ok) {
-    const hasForward = (edges).some((edge) => String(edge.userId) === a && String(edge.friendId) === b);
-    const hasReverse = (edges).some((edge) => String(edge.userId) === b && String(edge.friendId) === a);
-    if (!hasForward || !hasReverse) await upsertBidirectionalFriendshipEdges(a, [b]);
   }
 
   friendsCache.set(k, { v: ok, exp: now + TTL_MS });

@@ -19,6 +19,7 @@ export function chatRoundButtonColors(isDark: boolean) {
 
 export function ChatRoundButton({
   onPress,
+  disabled = false,
   hitSlop,
   accessibilityLabel,
   testID,
@@ -28,6 +29,7 @@ export function ChatRoundButton({
   children,
 }: {
   onPress: () => void;
+  disabled?: boolean;
   hitSlop?: number | Insets;
   accessibilityLabel: string;
   testID?: string;
@@ -39,6 +41,9 @@ export function ChatRoundButton({
   // 0 — покой, 1 — нажата. Сжатие и плотный оттенок идут нативным драйвером:
   // кнопка отпускается сразу, даже пока JS собирает открываемую панель.
   const press = React.useRef(new Animated.Value(0)).current;
+  const frameIdRef = React.useRef<number | null>(null);
+  const disabledRef = React.useRef(disabled);
+  disabledRef.current = disabled;
   const animatePress = React.useCallback(
     (toValue: number) => {
       Animated.spring(press, {
@@ -51,15 +56,33 @@ export function ChatRoundButton({
     [press],
   );
   const handlePress = React.useCallback(() => {
+    if (disabled) return;
     animatePress(0);
     // Тяжёлый ре-рендер — со следующего кадра, когда отпускание уже ушло в нативный поток.
-    requestAnimationFrame(() => onPress());
-  }, [animatePress, onPress]);
+    if (frameIdRef.current !== null) cancelAnimationFrame(frameIdRef.current);
+    frameIdRef.current = requestAnimationFrame(() => {
+      frameIdRef.current = null;
+      if (!disabledRef.current) onPress();
+    });
+  }, [animatePress, onPress, disabled]);
+  React.useEffect(() => {
+    if (disabled) {
+      press.stopAnimation();
+      press.setValue(0);
+    }
+    return () => {
+      press.stopAnimation();
+      if (frameIdRef.current !== null) cancelAnimationFrame(frameIdRef.current);
+      frameIdRef.current = null;
+    };
+  }, [disabled, press]);
 
   const radius = CHAT_ROUND_BUTTON_SIZE / 2;
   return (
     <Pressable
       onPress={handlePress}
+      disabled={disabled}
+      accessibilityState={{ disabled }}
       onPressIn={() => animatePress(1)}
       onPressOut={() => animatePress(0)}
       hitSlop={hitSlop}
@@ -71,6 +94,7 @@ export function ChatRoundButton({
         height: CHAT_ROUND_BUTTON_SIZE,
         borderRadius: radius,
         marginRight,
+        opacity: disabled ? 0.4 : 1,
       }}
     >
       <Animated.View

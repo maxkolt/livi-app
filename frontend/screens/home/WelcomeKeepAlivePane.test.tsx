@@ -39,7 +39,7 @@ jest.mock('react-native-reanimated', () => ({
 jest.mock('./HomeLayoutContext', () => ({ DeferredHomeLayout: 'DeferredHomeLayout' }));
 
 import { WelcomeKeepAlivePane } from './WelcomeKeepAlivePane';
-import { PaneLiveContext, PaneVisibleContext } from '../../utils/paneVisibility';
+import { PaneLiveContext, PaneVisibleContext, PaneResourcesContext } from '../../utils/paneVisibility';
 import { completeNotificationHome, getNotificationHomeRequest, prepareNotificationHome } from '../../utils/notificationHome';
 
 type PaneProps = React.ComponentProps<typeof WelcomeKeepAlivePane>;
@@ -75,6 +75,7 @@ const constraints = (tree: React.ReactElement<ElementProps>) => {
 const live = (tree: React.ReactElement<ElementProps>) => find(tree, PaneLiveContext.Provider)?.props.value;
 
 beforeEach(() => {
+  jest.useFakeTimers();
   const pending = getNotificationHomeRequest();
   if (pending) completeNotificationHome(pending.id);
   mockSlots.length = 0;
@@ -85,6 +86,21 @@ afterEach(() => {
   mockSlots.forEach(slot => (slot as { cleanup?: () => void } | undefined)?.cleanup?.());
   const pending = getNotificationHomeRequest();
   if (pending) completeNotificationHome(pending.id);
+  jest.useRealTimers();
+});
+
+it('releases hidden surfaces and shrinks the list after grace, restoring both on the first visible render', () => {
+  RenderPane({ visible: true, mode: 'list' });
+  flushEffects();
+  RenderPane({ visible: false, mode: 'list' });
+  flushEffects();
+  jest.advanceTimersByTime(5000);
+  const asleep = RenderPane({ visible: false, mode: 'list' });
+  expect(live(asleep)).toBe(false);
+  expect(find(asleep, PaneResourcesContext.Provider)?.props.value).toBe(false);
+  const shown = RenderPane({ visible: true, mode: 'list' });
+  expect(live(shown)).toBe(true);
+  expect(find(shown, PaneResourcesContext.Provider)?.props.value).toBe(true);
 });
 
 it.each(['offscreen', 'list'] as const)('keeps the same filled layout while showing and hiding a warmed %s pane', mode => {

@@ -11,6 +11,7 @@ import { WELCOME_CHROME_EDGE_RADIUS, WELCOME_NAV_ACTIVE_ACCENT } from "../home/c
 import { StageGradient } from "../home/WelcomeStageBackground";
 import type { BackdropSources } from "../../components/BackdropBlur";
 import { CHAT_ROUND_BUTTON_SIZE, ChatRoundButton, chatRoundButtonColors } from "./ChatRoundButton";
+import { useCallStartBlocked } from '../../utils/callStartAvailability';
 
 type LiviColors = {
   readonly bg: string;
@@ -82,6 +83,7 @@ export function useChatHeader({
   confirmDeleteSelected,
   backdrop,
 }: Options): { headerEl: React.ReactElement } {
+  const callDisabled = useCallStartBlocked();
   // КРИТИЧНО: Header нельзя объявлять как "компонент-функцию" (const Header = () => ...)
   // и потом рендерить как <Header />, иначе при изменении зависимостей React будет считать,
   // что "тип компонента" поменялся → размонтирует/смонтирует заново (и аватар начнёт мерцать).
@@ -306,6 +308,7 @@ export function useChatHeader({
             <View style={{ flexDirection: "row", alignItems: "center", gap: 16 }}>
               <ChatRoundButton
                 testID="chat-header-call"
+                disabled={callDisabled}
                 onPress={() => onPressCall?.()}
                 backgroundColor={chromeBtnColors.idle}
                 pressedBackgroundColor={chromeBtnColors.pressed}
@@ -347,6 +350,7 @@ export function useChatHeader({
     headerInitial,
     openAvatarModal,
     onPressCall,
+    callDisabled,
     onPressMore,
     encrypted,
     selectionMode,

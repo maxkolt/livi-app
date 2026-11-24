@@ -170,6 +170,14 @@ class BlurSourceView(context: Context) : ReactViewGroup(context) {
 
   override fun onDetachedFromWindow() {
     sourceId?.let { BackdropBlur.unregister(it, this) }
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+      (nodes as? Nodes)?.let { n ->
+        n.content.discardDisplayList()
+        n.faded.discardDisplayList()
+        n.shaded.discardDisplayList()
+      }
+    }
+    nodes = null
     super.onDetachedFromWindow()
   }
 
@@ -509,6 +517,11 @@ class BlurBackdropView(context: Context) : View(context) {
 
   override fun onDetachedFromWindow() {
     viewTreeObserver.removeOnPreDrawListener(preDraw)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) (node as? RenderNode)?.discardDisplayList()
+    node = null
+    nodeRadius = -1f
+    drawnState = 0L
+    blurOffsets.clear()
     super.onDetachedFromWindow()
   }
 

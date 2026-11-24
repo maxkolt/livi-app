@@ -255,7 +255,7 @@ class IncomingCallForegroundService : Service() {
                         return@Runnable
                     }
                     try {
-                        startActivity(launchIntent)
+                        startActivity(launchIntent, incomingAnswerLaunchOptions())
                         vl("[INCOMING_FGS] startActivity attempt $attemptIndex OK")
                     } catch (e: Exception) {
                         Log.w(TAG, "[INCOMING_FGS] startActivity attempt $attemptIndex FAILED callId=$callId", e)

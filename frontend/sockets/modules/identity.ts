@@ -20,24 +20,12 @@ async function identityAttach(payload: {
   profile?: { nick?: string; avatarUrl?: string };
 }) {
 
-  let response = await emitAck<{ ok: boolean; userId?: string; error?: string; legacyMigrationRequired?: boolean }>(
+  const response = await emitAck<{ ok: boolean; userId?: string; error?: string }>(
     "identity:attach",
     payload,
   );
-  if (response?.error === 'account_recovery_required' && shared.currentUserId) {
-    const owner = shared.currentUserId;
-    const { migrateLegacyInstall } = await import('../../utils/migrateLegacyInstall');
-    if (await migrateLegacyInstall(owner, { enrollOnly: true })) {
-      await new Promise(resolve => setTimeout(resolve, 1100));
-      response = await emitAck('identity:attach', payload);
-    }
-  }
   // Установка привязана (и после переустановки секрет уже перепривязан) — отчёт Play Integrity в фоне.
   if (response?.ok) {
-    if (response.legacyMigrationRequired && response.userId) {
-      const migrationUserId = response.userId;
-      setTimeout(() => { void import('../../utils/migrateLegacyInstall').then(m => m.migrateLegacyInstall(migrationUserId)).catch(() => {}); }, 0);
-    }
     void import("../../utils/playIntegrity").then((m) => m.reportInstallIntegrityIfDue()).catch(() => {});
   }
   return response;

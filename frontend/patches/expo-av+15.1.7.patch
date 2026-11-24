@@ -44,3 +44,25 @@ index 0000000..1111111 100644
      mAudioManager.setSpeakerphoneOn(!playThroughEarpiece);
    }
  
+--- a/android/src/main/java/expo/modules/av/AVManager.java
++++ b/android/src/main/java/expo/modules/av/AVManager.java
+@@ -679,7 +679,7 @@
+   private void removeAudioRecorder() {
+     if (mAudioRecorder != null) {
+       try {
+-        mAudioRecorder.stop();
++        if (mAudioRecorderIsRecording || mAudioRecorderIsPaused) mAudioRecorder.stop();
+       } catch (final RuntimeException e) {
+         // Do nothing-- this just means that the recorder is already stopped,
+         // or was stopped immediately after starting.
+@@ -935,6 +935,10 @@
+   @Override
+   public void stopAudioRecording(final Promise promise) {
+     if (checkAudioRecorderExistsOrReject(promise)) {
++      if (!mAudioRecorderIsRecording && !mAudioRecorderIsPaused) {
++        promise.resolve(getAudioRecorderStatus());
++        return;
++      }
+       try {
+         mAudioRecorder.stop();
+       } catch (final RuntimeException e) {

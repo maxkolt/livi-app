@@ -55,7 +55,7 @@ object FloatShadow {
   private const val NOISE_OFFSET_Y = 41
 
   /** Блоки одного размера (сегменты вкладок, круглые кнопки) делят один bitmap. */
-  private val cache = RenderCache(TAG, capacity = 16)
+  private val cache = RenderCache(TAG, capacity = 16, maxBytes = 12L * 1024 * 1024)
 
   /**
    * Геометрия тени в px. View — это блок со скруглением radius, расширенный на spread со

@@ -24,6 +24,7 @@ import {
 } from "./chatVoiceRecord";
 import { VIDEO_NOTE_MAX_MS, VIDEO_NOTE_MIN_MS } from "./videoNoteFiles";
 import type { VideoNoteRecorderHandle } from "./VideoNoteRecorder";
+import { stopRecordingOnce } from './stopRecordingOnce';
 
 type RecordingOptions = NonNullable<Parameters<Audio.Recording['prepareToRecordAsync']>[0]>;
 type NativeRecordingOptions = Omit<RecordingOptions, 'web'> & Partial<Pick<RecordingOptions, 'web'>>;
@@ -243,7 +244,7 @@ export function useChatVoiceRecord({
       voiceRecordTimerRef.current = null;
 
       try {
-        await rec.stopAndUnloadAsync();
+        await stopRecordingOnce(rec);
         const uri = rec.getURI() || "";
         const st = await rec.getStatusAsync().catch(() => null);
         const durationMs = Math.min(
@@ -272,7 +273,7 @@ export function useChatVoiceRecord({
           return;
         }
 
-        if (cancelled || voiceCancelTriggeredRef.current) {
+        if (!mountedRef.current || cancelled || voiceCancelTriggeredRef.current) {
           try {
             void FileSystem.deleteAsync(uri, { idempotent: true });
           } catch {}
@@ -568,7 +569,7 @@ export function useChatVoiceRecord({
       if (startAbandoned()) {
         // Отпустили, пока рекордер готовился: записи ещё нет — выбрасываем.
         const uri = recording.getURI();
-        await recording.stopAndUnloadAsync().catch(() => {});
+        await stopRecordingOnce(recording).catch(() => {});
         if (uri) void FileSystem.deleteAsync(uri, { idempotent: true }).catch(() => {});
         abandonStart();
         return;
@@ -595,6 +596,7 @@ export function useChatVoiceRecord({
           recorderMs = Number(st?.durationMillis || 0);
         } catch {}
 
+        if (!mountedRef.current || voiceRecordingRef.current !== rec) return;
         const ms = Math.min(VOICE_MAX_MS, Math.max(wallClockMs, recorderMs));
         setVoiceRecordMs(ms);
         if (ms >= VOICE_MAX_MS) {
@@ -605,7 +607,7 @@ export function useChatVoiceRecord({
       logger.warn("[voice] start failed", { error: String((e as Error)?.message ?? e) });
       // Выгружаем именно свой рекордер: иначе он остаётся «сиротой» и держит микрофон.
       if (recording && voiceRecordingRef.current !== recording) {
-        await recording.stopAndUnloadAsync().catch(() => {});
+        await stopRecordingOnce(recording).catch(() => {});
       }
       abandonStart();
     } finally {
@@ -879,7 +881,7 @@ export function useChatVoiceRecord({
       voiceRecordStartedAtRef.current = 0;
       try {
         if (voiceRecordingRef.current) {
-          voiceRecordingRef.current.stopAndUnloadAsync().catch(() => {});
+          void stopRecordingOnce(voiceRecordingRef.current).catch(() => {});
           voiceRecordingRef.current = null;
         }
       } catch {}

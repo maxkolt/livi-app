@@ -52,7 +52,7 @@ export function chatPhotoBubbleWidth(imageWidth: number, highlightInset = 0): nu
   return Math.max(120, imageWidth) + CHAT_ALBUM_INSET * 2 + highlightInset * 2;
 }
 
-/** Known images retain their ratio; only legacy images reserve a temporary 4:3 box. */
+/** Keep the established single-photo frame width while limiting its height. */
 export function chatPhotoPreviewLayout(
   layoutWidth: number,
   dimensions?: ChatPhotoDimensions | null,
@@ -63,9 +63,10 @@ export function chatPhotoPreviewLayout(
   const valid = dimensions && validChatPhotoDimensions(dimensions.width, dimensions.height);
   if (!valid) return { width: maxWidth, height: Math.round(maxWidth * 3 / 4), bubbleW: chatPhotoBubbleWidth(maxWidth) };
   const safeHeight = Number.isFinite(viewportHeight) && viewportHeight > 0 ? viewportHeight : 780;
-  const maxHeight = Math.max(120, Math.min(480, safeHeight * 0.6));
-  const scale = Math.min(maxWidth / valid.width, maxHeight / valid.height);
+  const establishedHeightLimit = Math.max(120, Math.min(480, safeHeight * 0.6));
+  const scale = Math.min(maxWidth / valid.width, establishedHeightLimit / valid.height);
   const width = Math.max(1, Math.min(maxWidth, valid.width * scale));
+  const maxHeight = Math.max(120, Math.min(300, safeHeight * 0.4));
   const height = Math.max(1, Math.min(maxHeight, valid.height * scale));
   return { width, height, bubbleW: chatPhotoBubbleWidth(width) };
 }

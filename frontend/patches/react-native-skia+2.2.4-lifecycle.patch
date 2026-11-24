@@ -1,0 +1,52 @@
+--- a/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
++++ b/android/cpp/rnskia-android/RNSkOpenGLCanvasProvider.cpp
+@@ -53,12 +53,3 @@
+-    if (_jSurfaceTexture) {
+-      JNIEnv *env = facebook::jni::Environment::current();
+-      env->CallVoidMethod(_jSurfaceTexture, _updateTexImageMethod);
+-
+-      // Check for exceptions
+-      if (env->ExceptionCheck()) {
+-        RNSkLogger::logToConsole(
+-            "updateAndRelease() failed. The exception above "
+-            "can safely be ignored");
+-        env->ExceptionClear();
+-      }
+-    }
++    // TextureView owns the consumer and its GL attachment on Android's render
++    // thread. Skia is only the producer: calling updateTexImage here consumes
++    // that texture from the wrong context on every frame.
+@@ -83 +74 @@
+-  _surfaceHolder = nullptr;
++  surfaceDestroyed();
+--- a/android/src/main/java/com/shopify/reactnative/skia/ViewScreenshotService.java
++++ b/android/src/main/java/com/shopify/reactnative/skia/ViewScreenshotService.java
+@@ -24 +24 @@
+-import java.lang.reflect.Method;
++import com.facebook.react.uimanager.BackgroundStyleApplicator;
+@@ -107,11 +107,6 @@
+-        // Handle clipping for ReactViewGroup
+-        if (group instanceof ReactViewGroup) {
+-            try {
+-                Class[] cArg = new Class[1];
+-                cArg[0] = Canvas.class;
+-                Method method = ReactViewGroup.class.getDeclaredMethod("dispatchOverflowDraw", cArg);
+-                method.setAccessible(true);
+-                method.invoke(group, canvas);
+-            } catch (Exception e) {
+-                Log.e(TAG, "couldn't invoke dispatchOverflowDraw() on ReactViewGroup", e);
+-            }
++        // RN 0.79 replaced dispatchOverflowDraw with BackgroundStyleApplicator.
++        // Match ReactViewGroup.dispatchDraw without reflecting a removed method.
++        if (group instanceof ReactViewGroup &&
++                (!"visible".equals(((ReactViewGroup) group).getOverflow()) ||
++                 group.getTag(com.facebook.react.R.id.filter) != null)) {
++            BackgroundStyleApplicator.clipToPaddingBox(group, canvas);
+--- a/android/cpp/rnskia-android/OpenGLWindowContext.cpp
++++ b/android/cpp/rnskia-android/OpenGLWindowContext.cpp
+@@ -17,0 +18,3 @@
++  // Multiple Canvas views share the context. Bind this producer on every draw,
++  // not only when its SkSurface is first created.
++  _glContext->makeCurrent(_glSurface.get());
+@@ -19 +21,0 @@
+-    _glContext->makeCurrent(_glSurface.get());

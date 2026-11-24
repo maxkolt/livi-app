@@ -8,7 +8,7 @@ jest.mock('react-native', () => ({
   StyleSheet: { hairlineWidth: 0.5 },
 }));
 jest.mock('expo-device', () => mockDevice);
-import { welcomeTabBarBottomGap, welcomeTabBarContentHeight, welcomeTabBarMetrics } from './welcomeTabBarLayout';
+import { welcomeTabBarBottomGap, welcomeTabBarContentHeight, welcomeTabBarMetrics, welcomeTabBarDockGap } from './welcomeTabBarLayout';
 
 beforeEach(() => {
   mockPlatform.OS = 'android';
@@ -17,9 +17,11 @@ beforeEach(() => {
 });
 it.each([0, 8, 16, 24])('matches the button-navigation clearance for gesture inset %s', inset => {
   expect(welcomeTabBarBottomGap(inset, false, false)).toBe(56);
+  expect(welcomeTabBarDockGap(inset, 56)).toBe(inset + 28);
 });
 it('preserves the established gap above a full Android button bar', () => {
   expect(welcomeTabBarBottomGap(48, false, false)).toBe(56);
+  expect(welcomeTabBarDockGap(48, 56)).toBe(48);
 });
 it('leaves the compact landscape dock at its established height', () => {
   expect(welcomeTabBarBottomGap(0, false, true)).toBe(10);
@@ -30,6 +32,7 @@ it('adds the same gesture clearance on tablets', () => {
 it('preserves the iOS home-indicator spacing', () => {
   mockPlatform.OS = 'ios';
   expect(welcomeTabBarBottomGap(34, false, false)).toBe(42);
+  expect(welcomeTabBarDockGap(34, 42)).toBe(42);
   expect(welcomeTabBarBottomGap(0, false, false)).toBe(10);
 });
 it('keeps the dock content height independent of navigation mode', () => {

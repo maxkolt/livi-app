@@ -53,7 +53,8 @@ it('probes an old image once then uses its cached natural bounds when reopening 
   finish(900, 1600);
   await flush();
   const natural = RenderPhotoLayout(uri);
-  expect(natural.width / natural.height).toBeCloseTo(900 / 1600, 10);
+  expect(natural.width).toBe(252);
+  expect(natural.height).toBe(300);
   mockSlots.length = 0;
   expect(RenderPhotoLayout(uri)).toEqual(natural);
   expect(mockGetSize).toHaveBeenCalledTimes(1);

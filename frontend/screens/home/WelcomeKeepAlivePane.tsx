@@ -3,7 +3,8 @@ import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { getNotificationHomeTabSnapshot, subscribeNotificationHomeRequest } from '../../utils/notificationHome';
 import type { WelcomeTabId } from './HomeWelcomeTabBar';
 import { useSharedValue } from 'react-native-reanimated';
-import { PaneLiveContext, PaneVisibleContext } from '../../utils/paneVisibility';
+import { PaneLiveContext, PaneVisibleContext, PaneResourcesContext } from '../../utils/paneVisibility';
+import { useMemoryPressureRevision } from '../../utils/memoryPressure';
 import { DeferredHomeLayout } from './HomeLayoutContext';
 
 /**
@@ -84,6 +85,8 @@ export const WelcomeKeepAlivePane = memo(
     // Once a pane has expanded its list window, keep it warm. Flipping this context back
     // to false while hiding used to rerender the old list in the very same tab-switch commit.
     const [live, setLive] = useState(visible);
+    const pressure = useMemoryPressureRevision();
+    const [sleeping, setSleeping] = useState(false);
     // A pane that has just become visible must receive the complete first list window in
     // this render. Delaying `live` used to show an empty/partially revealed list for 80 ms,
     // which looked like a content flash even though the pane itself was already mounted.
@@ -92,9 +95,16 @@ export const WelcomeKeepAlivePane = memo(
       visibleValue.value = visible;
     }, [visible, visibleValue]);
     useEffect(() => {
-      if (!visible || live) return;
-      setLive(true);
-    }, [live, visible]);
+      if (visible) {
+        setLive(true);
+        setSleeping(false);
+        return;
+      }
+      // Keep the first transition smooth, then reduce the native list window and
+      // release hidden Skia surfaces. No data, scroll position or drafts are lost.
+      const timer = setTimeout(() => { setLive(false); setSleeping(true); }, pressure ? 0 : 5000);
+      return () => clearTimeout(timer);
+    }, [pressure, visible]);
     return (
       <View
         style={style ? [base, style] : base}
@@ -104,7 +114,9 @@ export const WelcomeKeepAlivePane = memo(
       >
         <PaneVisibleContext.Provider value={visibleValue}>
           <PaneLiveContext.Provider value={effectiveLive}>
+            <PaneResourcesContext.Provider value={visible || !sleeping}>
             <DeferredHomeLayout live={effectiveLive}>{children}</DeferredHomeLayout>
+            </PaneResourcesContext.Provider>
           </PaneLiveContext.Provider>
         </PaneVisibleContext.Provider>
       </View>

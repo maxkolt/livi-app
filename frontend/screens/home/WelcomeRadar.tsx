@@ -11,7 +11,7 @@ import {
 } from 'react-native-reanimated';
 import { logger } from '../../utils/logger';
 import { useSkiaFirstPaint } from '../../utils/skiaFirstPaint';
-import { usePaneVisibleValue } from '../../utils/paneVisibility';
+import { usePaneResources, usePaneVisibleValue } from '../../utils/paneVisibility';
 import {
   buildRadarScene,
   drawRadarFrame,
@@ -73,7 +73,8 @@ export function WelcomeRadar({ size, avatarSize, balanceRanges = false, active =
   const appActive = useAppActive();
   const reduceMotion = useReducedMotion();
   const paneVisible = usePaneVisibleValue();
-  const running = active && isFocused && appActive && !reduceMotion;
+  const resources = usePaneResources();
+  const running = resources && active && isFocused && appActive && !reduceMotion;
 
   useEffect(() => {
     let payload: RadarPayload | null = null;
@@ -124,14 +125,15 @@ export function WelcomeRadar({ size, avatarSize, balanceRanges = false, active =
 
   useEffect(() => {
     frame.setActive(running);
+    return () => frame.setActive(false);
   }, [frame, running]);
 
   return (
     <View style={[styles.wrap, { width: s, height: s }]}>
       <View ref={paintViewRef} collapsable={false} style={StyleSheet.absoluteFill} pointerEvents="none">
-        <Canvas ref={canvasRef} style={StyleSheet.absoluteFill} colorSpace="srgb" pointerEvents="none">
+        {resources ? <Canvas ref={canvasRef} style={StyleSheet.absoluteFill} colorSpace="srgb" pointerEvents="none">
           <Picture picture={picture} />
-        </Canvas>
+        </Canvas> : null}
       </View>
       <View style={styles.center}>{children}</View>
     </View>

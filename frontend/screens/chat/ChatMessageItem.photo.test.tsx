@@ -64,13 +64,15 @@ it.each([false, true])('places one caption below the photo/grid inside the same 
   expect(flatten(bubble!).filter(node => node.type === ChatMessageText)).toHaveLength(1);
 });
 
-it('uses natural portrait bounds immediately and reserves room outside the photo for highlighting', () => {
+it('keeps the established portrait width in a shorter frame with room for highlighting', () => {
   const nodes = flatten(renderPhoto());
   const container = nodes.find(node => node.type === 'TouchableOpacity' && node.props.children &&
     flatten(node).some(child => child.type === ChatPhotoPreviewImage))!;
   const style = container.props.style as { width: number; height: number };
-  expect(style.width / style.height).toBeCloseTo(900 / 1600, 10);
-  expect(style.height).toBeLessThanOrEqual(780 * 0.6);
+  expect(style.width).toBe(252);
+  expect(style.height).toBe(300);
+  expect(nodes.find(node => node.type === ChatPhotoPreviewImage)!.props.allowDownscaling).toBe(true);
+  expect(nodes.find(node => node.type === ChatPhotoPreviewImage)!.props.fit).toBe('cover');
   const outerBubble = nodes.find(node => {
     const bounds = node.props.style as { width?: number; maxWidth?: number } | undefined;
     return typeof bounds?.width === 'number' && bounds.maxWidth === bounds.width;
